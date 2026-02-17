@@ -1,0 +1,12 @@
+# Local planning and session files
+local/
+
+# Claude working instructions
+CLAUDE.md
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
