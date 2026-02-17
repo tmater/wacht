@@ -1,7 +1,7 @@
 checks:
-  - id: check-homepage
+  - id: check-cloudflare
     type: http
-    target: https://example.com
+    target: https://cloudflare.com
     webhook: ""
 
   - id: check-google

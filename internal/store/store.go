@@ -21,6 +21,9 @@ func New(path string) (*Store, error) {
 		return nil, err
 	}
 
+	// Single connection prevents concurrent write contention in SQLite.
+	db.SetMaxOpenConns(1)
+
 	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return nil, err
 	}

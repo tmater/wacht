@@ -12,6 +12,7 @@ import (
 
 func main() {
 	configPath := flag.String("config", "wacht.yaml", "path to config file")
+	dbPath := flag.String("db", "wacht.db", "path to SQLite database file")
 	flag.Parse()
 
 	log.Println("wacht-server starting")
@@ -21,7 +22,7 @@ func main() {
 		log.Fatalf("failed to load config: %s", err)
 	}
 
-	db, err := store.New("wacht.db")
+	db, err := store.New(*dbPath)
 	if err != nil {
 		log.Fatalf("failed to open database: %s", err)
 	}
