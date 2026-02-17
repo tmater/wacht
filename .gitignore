@@ -6,6 +6,10 @@ CLAUDE.md
 
 # Runtime artifacts
 *.db
+*.db-wal
+*.db-shm
+bin/
+logs/
 
 # OS
 .DS_Store

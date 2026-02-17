@@ -21,6 +21,10 @@ func New(path string) (*Store, error) {
 		return nil, err
 	}
 
+	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return nil, err
+	}
+
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS check_results (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,

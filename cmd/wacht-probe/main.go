@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"log"
 	"net/http"
 	"time"
@@ -11,12 +12,13 @@ import (
 	"github.com/tmater/wacht/internal/proto"
 )
 
-const serverURL = "http://localhost:8080"
-
 func main() {
-	log.Println("wacht-probe starting")
+	probeID := flag.String("probe-id", "probe-local", "unique identifier for this probe")
+	serverURL := flag.String("server", "http://localhost:8080", "wacht server URL")
+	flag.Parse()
 
-	probeID := "probe-local"
+	log.Printf("wacht-probe starting probe-id=%s server=%s", *probeID, *serverURL)
+
 	interval := 30 * time.Second
 
 	checks := []struct {
@@ -29,8 +31,8 @@ func main() {
 
 	for {
 		for _, c := range checks {
-			result := check.HTTP(c.id, probeID, c.target)
-			if err := postResult(result); err != nil {
+			result := check.HTTP(c.id, *probeID, c.target)
+			if err := postResult(*serverURL, result); err != nil {
 				log.Printf("failed to post result: %s", err)
 			}
 		}
@@ -40,7 +42,7 @@ func main() {
 	}
 }
 
-func postResult(result proto.CheckResult) error {
+func postResult(serverURL string, result proto.CheckResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return err
