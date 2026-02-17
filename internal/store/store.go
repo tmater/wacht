@@ -64,6 +64,35 @@ func (s *Store) SaveResult(r proto.CheckResult) error {
 	return err
 }
 
+// RecentResultsPerProbe returns the most recent result for each probe that has
+// reported for the given check_id. This is used for quorum evaluation.
+func (s *Store) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error) {
+	rows, err := s.db.Query(`
+		SELECT probe_id, up
+		FROM check_results
+		WHERE id IN (
+			SELECT MAX(id)
+			FROM check_results
+			WHERE check_id = ?
+			GROUP BY probe_id
+		)
+	`, checkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []proto.CheckResult
+	for rows.Next() {
+		var r proto.CheckResult
+		if err := rows.Scan(&r.ProbeID, &r.Up); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

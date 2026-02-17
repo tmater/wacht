@@ -6,8 +6,11 @@ import (
 	"net/http"
 
 	"github.com/tmater/wacht/internal/proto"
+	"github.com/tmater/wacht/internal/quorum"
 	"github.com/tmater/wacht/internal/store"
 )
+
+const quorumThreshold = 2
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
@@ -43,5 +46,22 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recent, err := h.store.RecentResultsPerProbe(result.CheckID)
+	if err != nil {
+		log.Printf("quorum: failed to query recent results for check_id=%s: %s", result.CheckID, err)
+	} else if quorum.Evaluate(recent, quorumThreshold) {
+		log.Printf("quorum: ALERT check_id=%s down on %d/%d probes", result.CheckID, countDown(recent), len(recent))
+	}
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func countDown(results []proto.CheckResult) int {
+	n := 0
+	for _, r := range results {
+		if !r.Up {
+			n++
+		}
+	}
+	return n
 }
