@@ -4,6 +4,9 @@ local/
 # Claude working instructions
 CLAUDE.md
 
+# Runtime artifacts
+*.db
+
 # OS
 .DS_Store
 
