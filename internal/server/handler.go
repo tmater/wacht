@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/quorum"
 	"github.com/tmater/wacht/internal/store"
@@ -14,12 +15,13 @@ const quorumThreshold = 2
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
-	store *store.Store
+	store  *store.Store
+	config *config.Config
 }
 
 // New creates a new Handler.
-func New(store *store.Store) *Handler {
-	return &Handler{store: store}
+func New(store *store.Store, cfg *config.Config) *Handler {
+	return &Handler{store: store, config: cfg}
 }
 
 // Routes registers all HTTP routes.

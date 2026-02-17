@@ -26,16 +26,16 @@ $GOBIN build -o bin/wacht-server ./cmd/wacht-server/
 $GOBIN build -o bin/wacht-probe ./cmd/wacht-probe/
 
 echo "Starting server... (logs/server.log)"
-bin/wacht-server > logs/server.log 2>&1 &
+bin/wacht-server --config=wacht.yaml > logs/server.log 2>&1 &
 SERVER_PID=$!
 sleep 1
 
 echo "Starting probe-eu-west... (logs/probe-eu-west.log)"
-bin/wacht-probe --probe-id=probe-eu-west > logs/probe-eu-west.log 2>&1 &
+bin/wacht-probe --probe-id=probe-eu-west --config=wacht.yaml > logs/probe-eu-west.log 2>&1 &
 PROBE1_PID=$!
 
 echo "Starting probe-eu-central... (logs/probe-eu-central.log)"
-bin/wacht-probe --probe-id=probe-eu-central > logs/probe-eu-central.log 2>&1 &
+bin/wacht-probe --probe-id=probe-eu-central --config=wacht.yaml > logs/probe-eu-central.log 2>&1 &
 PROBE2_PID=$!
 
 echo ""

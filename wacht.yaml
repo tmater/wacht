@@ -1,0 +1,10 @@
+checks:
+  - id: check-homepage
+    type: http
+    target: https://example.com
+    webhook: ""
+
+  - id: check-google
+    type: http
+    target: https://google.com
+    webhook: ""

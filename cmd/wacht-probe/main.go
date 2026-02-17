@@ -9,29 +9,38 @@ import (
 	"time"
 
 	"github.com/tmater/wacht/internal/check"
+	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/proto"
 )
 
 func main() {
 	probeID := flag.String("probe-id", "probe-local", "unique identifier for this probe")
 	serverURL := flag.String("server", "http://localhost:8080", "wacht server URL")
+	configPath := flag.String("config", "wacht.yaml", "path to config file")
 	flag.Parse()
 
-	log.Printf("wacht-probe starting probe-id=%s server=%s", *probeID, *serverURL)
+	log.Printf("wacht-probe starting probe-id=%s server=%s config=%s", *probeID, *serverURL, *configPath)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %s", err)
+	}
+
+	log.Printf("loaded %d checks", len(cfg.Checks))
 
 	interval := 30 * time.Second
 
-	checks := []struct {
-		id     string
-		target string
-	}{
-		{"check-1", "https://example.com"},
-		{"check-2", "https://google.com"},
-	}
-
 	for {
-		for _, c := range checks {
-			result := check.HTTP(c.id, *probeID, c.target)
+		for _, c := range cfg.Checks {
+			var result proto.CheckResult
+			switch c.Type {
+			case "http", "":
+				result = check.HTTP(c.ID, *probeID, c.Target)
+			default:
+				log.Printf("probe: unknown check type %q for check_id=%s, skipping", c.Type, c.ID)
+				continue
+			}
+
 			if err := postResult(*serverURL, result); err != nil {
 				log.Printf("failed to post result: %s", err)
 			}
