@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/tmater/wacht/internal/alert"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/quorum"
@@ -148,10 +149,38 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		}
 		if allConsecutive {
 			log.Printf("quorum: ALERT check_id=%s down on %d/%d probes (consecutive)", result.CheckID, countDown(recent), len(recent))
+			alreadyOpen, err := h.store.OpenIncident(result.CheckID)
+			if err != nil {
+				log.Printf("alert: failed to open incident check_id=%s: %s", result.CheckID, err)
+			} else if !alreadyOpen {
+				if check := h.checkByID(result.CheckID); check != nil && check.Webhook != "" {
+					payload := alert.AlertPayload{
+						CheckID:     result.CheckID,
+						Target:      check.Target,
+						Status:      "down",
+						ProbesDown:  countDown(recent),
+						ProbesTotal: len(recent),
+					}
+					if err := alert.Fire(check.Webhook, payload); err != nil {
+						log.Printf("alert: webhook failed check_id=%s: %s", result.CheckID, err)
+					} else {
+						log.Printf("alert: webhook fired check_id=%s url=%s", result.CheckID, check.Webhook)
+					}
+				}
+			}
 		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) checkByID(id string) *config.Check {
+	for i := range h.config.Checks {
+		if h.config.Checks[i].ID == id {
+			return &h.config.Checks[i]
+		}
+	}
+	return nil
 }
 
 func countDown(results []proto.CheckResult) int {

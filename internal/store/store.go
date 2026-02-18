@@ -57,6 +57,17 @@ func New(path string) (*Store, error) {
 		return nil, err
 	}
 
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS incidents (
+			check_id        TEXT PRIMARY KEY,
+			started_at      DATETIME NOT NULL,
+			resolved_at     DATETIME
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
 	log.Printf("store: database ready at %s", path)
 	return &Store{db: db}, nil
 }
@@ -181,6 +192,27 @@ func (s *Store) AllProbeStatuses() ([]ProbeStatus, error) {
 		statuses = append(statuses, ps)
 	}
 	return statuses, rows.Err()
+}
+
+// OpenIncident records a new incident for checkID. Returns true if an incident
+// was already open (caller should skip alerting to avoid duplicate notifications).
+func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
+	var count int
+	err = s.db.QueryRow(`SELECT COUNT(1) FROM incidents WHERE check_id=? AND resolved_at IS NULL`, checkID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	if count > 0 {
+		return true, nil
+	}
+	_, err = s.db.Exec(`INSERT INTO incidents (check_id, started_at) VALUES (?, ?)`, checkID, time.Now().UTC())
+	return false, err
+}
+
+// ResolveIncident marks the open incident for checkID as resolved.
+func (s *Store) ResolveIncident(checkID string) error {
+	_, err := s.db.Exec(`UPDATE incidents SET resolved_at=? WHERE check_id=? AND resolved_at IS NULL`, time.Now().UTC(), checkID)
+	return err
 }
 
 // Close closes the database connection.

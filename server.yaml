@@ -3,6 +3,7 @@ checks:
   - id: check-cloudflare
     type: http
     target: https://cloudflare.com
+    webhook: https://hooks.example.com/your-url
   - id: check-google
     type: http
     target: https://google.com
