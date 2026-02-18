@@ -11,8 +11,6 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-const quorumThreshold = 2
-
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
 	store  *store.Store
@@ -129,8 +127,28 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	recent, err := h.store.RecentResultsPerProbe(result.CheckID)
 	if err != nil {
 		log.Printf("quorum: failed to query recent results for check_id=%s: %s", result.CheckID, err)
-	} else if quorum.Evaluate(recent, quorumThreshold) {
-		log.Printf("quorum: ALERT check_id=%s down on %d/%d probes", result.CheckID, countDown(recent), len(recent))
+	} else if quorum.MajorityDown(recent) {
+		// Majority vote passed — verify each down probe has consecutive failures
+		// to filter out transient blips before alerting.
+		allConsecutive := true
+		for _, r := range recent {
+			if r.Up {
+				continue
+			}
+			history, err := h.store.RecentResultsByProbe(result.CheckID, r.ProbeID, 2)
+			if err != nil {
+				log.Printf("quorum: failed to query history probe_id=%s check_id=%s: %s", r.ProbeID, result.CheckID, err)
+				allConsecutive = false
+				break
+			}
+			if !quorum.AllConsecutivelyDown(history) {
+				allConsecutive = false
+				break
+			}
+		}
+		if allConsecutive {
+			log.Printf("quorum: ALERT check_id=%s down on %d/%d probes (consecutive)", result.CheckID, countDown(recent), len(recent))
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

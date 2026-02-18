@@ -79,6 +79,32 @@ func (s *Store) SaveResult(r proto.CheckResult) error {
 	return err
 }
 
+// RecentResultsByProbe returns the last n results for a specific probe+check,
+// ordered newest first. Used for consecutive failure detection.
+func (s *Store) RecentResultsByProbe(checkID, probeID string, n int) ([]proto.CheckResult, error) {
+	rows, err := s.db.Query(`
+		SELECT probe_id, up
+		FROM check_results
+		WHERE check_id = ? AND probe_id = ?
+		ORDER BY id DESC
+		LIMIT ?
+	`, checkID, probeID, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []proto.CheckResult
+	for rows.Next() {
+		var r proto.CheckResult
+		if err := rows.Scan(&r.ProbeID, &r.Up); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 // RecentResultsPerProbe returns the most recent result for each probe that has
 // reported for the given check_id. This is used for quorum evaluation.
 func (s *Store) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error) {
