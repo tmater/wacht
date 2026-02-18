@@ -59,7 +59,8 @@ func New(path string) (*Store, error) {
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS incidents (
-			check_id        TEXT PRIMARY KEY,
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			check_id        TEXT NOT NULL,
 			started_at      DATETIME NOT NULL,
 			resolved_at     DATETIME
 		)
