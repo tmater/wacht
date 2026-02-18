@@ -7,3 +7,9 @@ checks:
   - id: check-google
     type: http
     target: https://google.com
+  - id: check-tcp-example
+    type: tcp
+    target: example.com:443
+  - id: check-dns-example
+    type: dns
+    target: example.com

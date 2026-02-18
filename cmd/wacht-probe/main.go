@@ -50,6 +50,10 @@ func main() {
 			switch c.Type {
 			case "http", "":
 				result = check.HTTP(c.ID, cfg.ProbeID, c.Target)
+			case "tcp":
+				result = check.TCP(c.ID, cfg.ProbeID, c.Target)
+			case "dns":
+				result = check.DNS(c.ID, cfg.ProbeID, c.Target)
 			default:
 				log.Printf("probe: unknown check type %q for check_id=%s, skipping", c.Type, c.ID)
 				continue
