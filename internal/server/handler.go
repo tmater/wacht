@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/tmater/wacht/internal/alert"
 	"github.com/tmater/wacht/internal/config"
@@ -25,12 +26,58 @@ func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 
 // Routes registers all HTTP routes.
 func (h *Handler) Routes() http.Handler {
+	// Public routes — no secret required.
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/probes/register", h.handleRegister)
-	mux.HandleFunc("GET /api/probes/checks", h.handleChecks)
-	mux.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
-	mux.HandleFunc("POST /api/results", h.handleResult)
-	return h.requireSecret(mux)
+	mux.HandleFunc("GET /status", h.handleStatus)
+
+	// Protected routes — all under /api, require X-Wacht-Secret.
+	api := http.NewServeMux()
+	api.HandleFunc("POST /api/probes/register", h.handleRegister)
+	api.HandleFunc("GET /api/probes/checks", h.handleChecks)
+	api.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
+	api.HandleFunc("POST /api/results", h.handleResult)
+	mux.Handle("/api/", h.requireSecret(api))
+
+	return mux
+}
+
+// handleStatus serves the public status page as JSON.
+func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
+	statuses, err := h.store.CheckStatuses()
+	if err != nil {
+		log.Printf("status: failed to query check statuses: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	type checkJSON struct {
+		CheckID       string  `json:"check_id"`
+		Target        string  `json:"target"`
+		Status        string  `json:"status"`
+		IncidentSince *string `json:"incident_since,omitempty"`
+	}
+
+	checks := make([]checkJSON, 0, len(statuses))
+	for _, cs := range statuses {
+		cj := checkJSON{
+			CheckID: cs.CheckID,
+			Target:  cs.Target,
+			Status:  "✅ up",
+		}
+		if !cs.Up || cs.IncidentSince != nil {
+			cj.Status = "🔴 down"
+		}
+		if cs.IncidentSince != nil {
+			s := cs.IncidentSince.UTC().Format(time.RFC3339)
+			cj.IncidentSince = &s
+		}
+		checks = append(checks, cj)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks}); err != nil {
+		log.Printf("status: failed to encode response: %s", err)
+	}
 }
 
 // requireSecret is middleware that rejects requests missing the correct X-Wacht-Secret header.

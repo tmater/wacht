@@ -194,6 +194,46 @@ func (s *Store) AllProbeStatuses() ([]ProbeStatus, error) {
 	return statuses, rows.Err()
 }
 
+// CheckStatus holds the current state of a check for the status page.
+type CheckStatus struct {
+	CheckID       string
+	Target        string
+	Up            bool
+	IncidentSince *time.Time // non-nil when an incident is open
+}
+
+// CheckStatuses returns the current status for each check that has received
+// at least one result, joined with any open incident.
+func (s *Store) CheckStatuses() ([]CheckStatus, error) {
+	rows, err := s.db.Query(`
+		SELECT cr.check_id, cr.target, cr.up, i.started_at
+		FROM check_results cr
+		INNER JOIN (
+			SELECT check_id, MAX(id) AS max_id
+			FROM check_results
+			GROUP BY check_id
+		) latest ON cr.id = latest.max_id
+		LEFT JOIN incidents i ON cr.check_id = i.check_id AND i.resolved_at IS NULL
+		ORDER BY cr.check_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var statuses []CheckStatus
+	for rows.Next() {
+		var cs CheckStatus
+		var startedAt *time.Time
+		if err := rows.Scan(&cs.CheckID, &cs.Target, &cs.Up, &startedAt); err != nil {
+			return nil, err
+		}
+		cs.IncidentSince = startedAt
+		statuses = append(statuses, cs)
+	}
+	return statuses, rows.Err()
+}
+
 // OpenIncident records a new incident for checkID. Returns true if an incident
 // was already open (caller should skip alerting to avoid duplicate notifications).
 func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
