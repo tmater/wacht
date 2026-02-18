@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wacht — Distributed uptime monitoring, built in the EU</title>
+  <meta name="description" content="Run HTTP, TCP, and DNS checks from multiple probe locations. Quorum-based alerting. All data in infrastructure you control." />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #60a5fa;
+      --font: system-ui, -apple-system, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 4rem 1.5rem;
+      gap: 3rem;
+      max-width: 640px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .hero {
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: clamp(1.75rem, 5vw, 2.5rem);
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+    }
+
+    .hero p {
+      margin-top: 1rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.6;
+    }
+
+    .features {
+      list-style: none;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .features li::before {
+      content: "—";
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .form-section {
+      width: 100%;
+    }
+
+    .form-section p {
+      text-align: center;
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin-bottom: 1.25rem;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .form-row input[type="email"] {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.95rem;
+      padding: 0.65rem 0.9rem;
+      outline: none;
+    }
+
+    .form-row input[type="email"]:focus {
+      border-color: var(--accent);
+    }
+
+    .form-row input[type="email"]::placeholder {
+      color: var(--muted);
+    }
+
+    .form-row button {
+      background: var(--accent);
+      border: none;
+      border-radius: 6px;
+      color: #0f1117;
+      cursor: pointer;
+      font-family: var(--font);
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 0.65rem 1.25rem;
+      white-space: nowrap;
+    }
+
+    .form-row button:hover {
+      opacity: 0.9;
+    }
+
+    #form-success {
+      display: none;
+      text-align: center;
+      color: #6ee7b7;
+      font-size: 0.95rem;
+      margin-top: 0.75rem;
+    }
+
+    #form-error {
+      display: none;
+      text-align: center;
+      color: #fca5a5;
+      font-size: 0.95rem;
+      margin-top: 0.75rem;
+    }
+
+    footer {
+      text-align: center;
+      padding: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    footer a {
+      color: var(--muted);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="hero">
+    <h1>Distributed uptime monitoring,<br />built in the EU.</h1>
+    <p>Run checks from multiple probe locations. Only alert when a majority of probes agree something is actually down.</p>
+  </div>
+
+  <ul class="features">
+    <li>HTTP, TCP, and DNS checks</li>
+    <li>Quorum-based alerting — no false pages from a single flaky probe</li>
+    <li>Webhook alerts on state change</li>
+    <li>Public status page, read-only, no auth required</li>
+    <li>All data stays in infrastructure you control</li>
+  </ul>
+
+  <div class="form-section">
+    <p>Early access — get notified when it's ready to self-host.</p>
+    <div class="form-row">
+      <input type="email" id="EMAIL" name="EMAIL" placeholder="you@example.com" required />
+      <button type="button" onclick="subscribe()">Notify me</button>
+    </div>
+    <div id="form-success">You're on the list.</div>
+    <div id="form-error">Something went wrong. Try again.</div>
+  </div>
+</main>
+
+<footer>
+  <a href="https://github.com/tmater/wacht">GitHub</a> &nbsp;·&nbsp;
+  AGPL-3.0
+</footer>
+
+<script>
+  function subscribe() {
+    var email = document.getElementById('EMAIL').value;
+    if (!email) return;
+
+    var formData = new FormData();
+    formData.append('EMAIL', email);
+    formData.append('email_address_check', '');
+    formData.append('locale', 'en');
+
+    fetch('https://aa0f597e.sibforms.com/serve/MUIFALLpmqbnfNt22Zidgku-FXUD4CmRwjGjHv22Sw9JqUdOVoo-pqsEU5rOCo-hVuduM2G3gy91LlCrRprjuQK76bySV7_dFsRys5u0waIax-ea2Br1zqVMuE25uhjc1jfXS2skup2_C4qCmyyNY6fm57DKUF7YhiWv6ojb8_oA7Aps56acnwROS-LlngLoNVqUxMDk62mecbq9kQ==', {
+      method: 'POST',
+      body: formData,
+      mode: 'no-cors'
+    }).then(function() {
+      document.querySelector('.form-row').style.display = 'none';
+      document.getElementById('form-success').style.display = 'block';
+    }).catch(function() {
+      document.getElementById('form-error').style.display = 'block';
+    });
+  }
+
+  document.getElementById('EMAIL').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') subscribe();
+  });
+</script>
+
+</body>
+</html>
