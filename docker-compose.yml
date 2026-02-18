@@ -4,9 +4,9 @@ services:
       context: .
       args:
         BINARY: wacht-server
-    command: ["--config=/etc/wacht/wacht.yaml", "--db=/data/wacht.db"]
+    command: ["--config=/etc/wacht/server.yaml", "--db=/data/wacht.db"]
     volumes:
-      - ./wacht.yaml:/etc/wacht/wacht.yaml:ro
+      - ./server.yaml:/etc/wacht/server.yaml:ro
       - wacht-data:/data
     ports:
       - "8080:8080"
@@ -17,9 +17,9 @@ services:
       context: .
       args:
         BINARY: wacht-probe
-    command: ["--probe-id=probe-1", "--server=http://server:8080", "--config=/etc/wacht/wacht.yaml"]
+    command: ["--config=/etc/wacht/probe.yaml"]
     volumes:
-      - ./wacht.yaml:/etc/wacht/wacht.yaml:ro
+      - ./probe-1.yaml:/etc/wacht/probe.yaml:ro
     depends_on:
       - server
     restart: unless-stopped
@@ -29,9 +29,9 @@ services:
       context: .
       args:
         BINARY: wacht-probe
-    command: ["--probe-id=probe-2", "--server=http://server:8080", "--config=/etc/wacht/wacht.yaml"]
+    command: ["--config=/etc/wacht/probe.yaml"]
     volumes:
-      - ./wacht.yaml:/etc/wacht/wacht.yaml:ro
+      - ./probe-2.yaml:/etc/wacht/probe.yaml:ro
     depends_on:
       - server
     restart: unless-stopped

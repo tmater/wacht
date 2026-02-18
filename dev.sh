@@ -26,16 +26,16 @@ $GOBIN build -o bin/wacht-server ./cmd/wacht-server/
 $GOBIN build -o bin/wacht-probe ./cmd/wacht-probe/
 
 echo "Starting server... (logs/server.log)"
-bin/wacht-server --config=wacht.yaml > logs/server.log 2>&1 &
+bin/wacht-server --config=server.yaml > logs/server.log 2>&1 &
 SERVER_PID=$!
 sleep 1
 
-echo "Starting probe-eu-west... (logs/probe-eu-west.log)"
-bin/wacht-probe --probe-id=probe-eu-west --config=wacht.yaml > logs/probe-eu-west.log 2>&1 &
+echo "Starting probe-1... (logs/probe-1.log)"
+bin/wacht-probe --config=probe-1.yaml --server=http://localhost:8080 > logs/probe-1.log 2>&1 &
 PROBE1_PID=$!
 
-echo "Starting probe-eu-central... (logs/probe-eu-central.log)"
-bin/wacht-probe --probe-id=probe-eu-central --config=wacht.yaml > logs/probe-eu-central.log 2>&1 &
+echo "Starting probe-2... (logs/probe-2.log)"
+bin/wacht-probe --config=probe-2.yaml --server=http://localhost:8080 > logs/probe-2.log 2>&1 &
 PROBE2_PID=$!
 
 echo ""
@@ -50,4 +50,4 @@ cleanup() {
 }
 trap cleanup INT
 
-tail -f logs/server.log logs/probe-eu-west.log logs/probe-eu-central.log
+tail -f logs/server.log logs/probe-1.log logs/probe-2.log

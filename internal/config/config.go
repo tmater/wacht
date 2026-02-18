@@ -3,12 +3,21 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
+type ServerConfig struct {
+	Secret string  `yaml:"secret"`
 	Checks []Check `yaml:"checks"`
+}
+
+type ProbeConfig struct {
+	Secret            string        `yaml:"secret"`
+	Server            string        `yaml:"server"`
+	ProbeID           string        `yaml:"probe_id"`
+	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 }
 
 type Check struct {
@@ -18,20 +27,51 @@ type Check struct {
 	Webhook string `yaml:"webhook"`
 }
 
-// Load reads and parses a wacht.yaml config file.
-func Load(path string) (*Config, error) {
+// LoadServer reads and parses a server.yaml config file.
+func LoadServer(path string) (*ServerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	var cfg Config
+	var cfg ServerConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
+	if cfg.Secret == "" {
+		return nil, fmt.Errorf("config: secret is required")
+	}
 	if len(cfg.Checks) == 0 {
 		return nil, fmt.Errorf("config: no checks defined")
+	}
+
+	return &cfg, nil
+}
+
+// LoadProbe reads and parses a probe.yaml config file.
+func LoadProbe(path string) (*ProbeConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	var cfg ProbeConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	if cfg.Secret == "" {
+		return nil, fmt.Errorf("config: secret is required")
+	}
+	if cfg.Server == "" {
+		return nil, fmt.Errorf("config: server is required")
+	}
+	if cfg.ProbeID == "" {
+		return nil, fmt.Errorf("config: probe_id is required")
+	}
+	if cfg.HeartbeatInterval == 0 {
+		cfg.HeartbeatInterval = 30 * time.Second
 	}
 
 	return &cfg, nil

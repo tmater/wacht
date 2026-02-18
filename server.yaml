@@ -1,10 +1,8 @@
+secret: changeme
 checks:
   - id: check-cloudflare
     type: http
     target: https://cloudflare.com
-    webhook: ""
-
   - id: check-google
     type: http
     target: https://google.com
-    webhook: ""
