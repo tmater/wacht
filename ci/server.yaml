@@ -1,0 +1,5 @@
+secret: ci-smoke-secret
+checks:
+  - id: check-self
+    type: http
+    target: http://server:8080/status

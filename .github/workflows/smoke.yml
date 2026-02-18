@@ -1,0 +1,47 @@
+name: Smoke test
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start server and probe
+        run: docker compose -f docker-compose.ci.yml up -d --build
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8080/status; then
+              echo "Server is up"
+              break
+            fi
+            echo "Attempt $i failed, retrying in 2s..."
+            sleep 2
+          done
+
+      - name: Assert check-self is up
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sf http://localhost:8080/status)
+            CHECK=$(echo "$STATUS" | jq -r '.checks[] | select(.check_id == "check-self") | .status' 2>/dev/null)
+            if [ "$CHECK" = "✅ up" ]; then
+              echo "check-self is up — probe successfully connected and submitted results"
+              echo "$STATUS" | jq .
+              exit 0
+            fi
+            echo "Attempt $i: check-self not up yet (got: '$CHECK'), retrying in 3s..."
+            sleep 3
+          done
+          echo "check-self did not appear as up after waiting"
+          docker compose -f docker-compose.ci.yml logs
+          exit 1
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down -v
