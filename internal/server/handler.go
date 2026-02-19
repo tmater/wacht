@@ -64,6 +64,13 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	probeStatuses, err := h.store.AllProbeStatuses()
+	if err != nil {
+		log.Printf("status: failed to query probe statuses: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	type checkJSON struct {
 		CheckID       string  `json:"check_id"`
 		Target        string  `json:"target"`
@@ -71,15 +78,21 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		IncidentSince *string `json:"incident_since,omitempty"`
 	}
 
+	type probeJSON struct {
+		ProbeID    string `json:"probe_id"`
+		Online     bool   `json:"online"`
+		LastSeenAt string `json:"last_seen_at"`
+	}
+
 	checks := make([]checkJSON, 0, len(statuses))
 	for _, cs := range statuses {
 		cj := checkJSON{
 			CheckID: cs.CheckID,
 			Target:  cs.Target,
-			Status:  "✅ up",
+			Status:  "up",
 		}
 		if !cs.Up || cs.IncidentSince != nil {
-			cj.Status = "🔴 down"
+			cj.Status = "down"
 		}
 		if cs.IncidentSince != nil {
 			s := cs.IncidentSince.UTC().Format(time.RFC3339)
@@ -88,8 +101,17 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, cj)
 	}
 
+	probes := make([]probeJSON, 0, len(probeStatuses))
+	for _, ps := range probeStatuses {
+		probes = append(probes, probeJSON{
+			ProbeID:    ps.ProbeID,
+			Online:     time.Since(ps.LastSeenAt) < 90*time.Second,
+			LastSeenAt: ps.LastSeenAt.UTC().Format(time.RFC3339),
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks}); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks, "probes": probes}); err != nil {
 		log.Printf("status: failed to encode response: %s", err)
 	}
 }
