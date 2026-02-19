@@ -44,7 +44,7 @@ Start everything:
 docker compose up -d
 ```
 
-The server listens on port `8080`.
+The server listens on port `8080`. The dashboard is available at `http://localhost:3000`.
 
 ## Check types
 

@@ -214,7 +214,12 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 			FROM check_results
 			GROUP BY check_id
 		) latest ON cr.id = latest.max_id
-		LEFT JOIN incidents i ON cr.check_id = i.check_id AND i.resolved_at IS NULL
+		LEFT JOIN (
+			SELECT check_id, MIN(started_at) AS started_at
+			FROM incidents
+			WHERE resolved_at IS NULL
+			GROUP BY check_id
+		) i ON cr.check_id = i.check_id
 		ORDER BY cr.check_id
 	`)
 	if err != nil {
@@ -225,11 +230,31 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 	var statuses []CheckStatus
 	for rows.Next() {
 		var cs CheckStatus
-		var startedAt *time.Time
+		var startedAt *string
 		if err := rows.Scan(&cs.CheckID, &cs.Target, &cs.Up, &startedAt); err != nil {
 			return nil, err
 		}
-		cs.IncidentSince = startedAt
+		if startedAt != nil {
+			// SQLite stores time.Time as "2006-01-02 15:04:05.999999999 +0000 UTC"
+			// Try several formats in order of likelihood.
+			var t time.Time
+			var parseErr error
+			for _, layout := range []string{
+				"2006-01-02 15:04:05.999999999 +0000 UTC",
+				"2006-01-02 15:04:05 +0000 UTC",
+				"2006-01-02 15:04:05",
+				time.RFC3339,
+			} {
+				t, parseErr = time.Parse(layout, *startedAt)
+				if parseErr == nil {
+					break
+				}
+			}
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			cs.IncidentSince = &t
+		}
 		statuses = append(statuses, cs)
 	}
 	return statuses, rows.Err()

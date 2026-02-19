@@ -38,7 +38,21 @@ func (h *Handler) Routes() http.Handler {
 	api.HandleFunc("POST /api/results", h.handleResult)
 	mux.Handle("/api/", h.requireSecret(api))
 
-	return mux
+	return withCORS(mux)
+}
+
+// withCORS adds permissive CORS headers so the dashboard can talk to the
+// server from a different port during local development.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Wacht-Secret")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleStatus serves the public status page as JSON.

@@ -48,5 +48,14 @@ services:
       - server
     restart: unless-stopped
 
+  wacht-web:
+    build:
+      context: ./wacht-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
 volumes:
   wacht-data:
