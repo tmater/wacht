@@ -1,0 +1,15 @@
+secret: changeme
+checks:
+  - id: check-up
+    type: http
+    target: http://mock:9090/up
+    webhook: http://localhost/webhook-placeholder
+  - id: check-down
+    type: http
+    target: http://mock:9090/down
+  - id: check-flap
+    type: http
+    target: http://mock:9090/flap
+  - id: check-slow
+    type: http
+    target: http://mock:9090/slow

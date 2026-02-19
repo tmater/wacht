@@ -15,7 +15,7 @@ git clone https://github.com/tmater/wacht.git
 cd wacht
 ```
 
-Edit `server.yaml` — set a strong shared secret and configure your checks:
+Edit `config/server.yaml` — set a strong shared secret and configure your checks:
 
 ```yaml
 secret: your-secret-here
@@ -29,7 +29,7 @@ checks:
     target: db.example.com:5432
 ```
 
-Edit `probe-1.yaml` and `probe-2.yaml` — use the same secret:
+Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — use the same secret:
 
 ```yaml
 secret: your-secret-here
