@@ -1,0 +1,4 @@
+secret: changeme
+server: http://server:8080
+probe_id: probe-3
+heartbeat_interval: 30s
