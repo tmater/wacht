@@ -102,6 +102,80 @@ func TestRecentResultsPerProbe_LatestPerProbe(t *testing.T) {
 	}
 }
 
+func TestSeedChecks_SkipsExisting(t *testing.T) {
+	s := newTestStore(t)
+
+	checks := []Check{{ID: "c1", Type: "http", Target: "https://a.com", Webhook: ""}}
+	if err := s.SeedChecks(checks); err != nil {
+		t.Fatalf("SeedChecks: %v", err)
+	}
+
+	// Seed again with a different target — existing row must be unchanged.
+	checks[0].Target = "https://b.com"
+	if err := s.SeedChecks(checks); err != nil {
+		t.Fatalf("SeedChecks second call: %v", err)
+	}
+
+	c, err := s.GetCheck("c1")
+	if err != nil {
+		t.Fatalf("GetCheck: %v", err)
+	}
+	if c.Target != "https://a.com" {
+		t.Errorf("expected original target to be preserved, got %q", c.Target)
+	}
+}
+
+func TestCheckCRUD(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create
+	c := Check{ID: "c1", Type: "http", Target: "https://example.com", Webhook: ""}
+	if err := s.CreateCheck(c); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	// Get
+	got, err := s.GetCheck("c1")
+	if err != nil {
+		t.Fatalf("GetCheck: %v", err)
+	}
+	if got == nil || got.Target != "https://example.com" {
+		t.Fatalf("GetCheck: expected check, got %v", got)
+	}
+
+	// List
+	all, err := s.ListChecks()
+	if err != nil {
+		t.Fatalf("ListChecks: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("ListChecks: expected 1, got %d", len(all))
+	}
+
+	// Update
+	c.Target = "https://updated.com"
+	c.Webhook = "https://hooks.example.com"
+	if err := s.UpdateCheck(c); err != nil {
+		t.Fatalf("UpdateCheck: %v", err)
+	}
+	got, _ = s.GetCheck("c1")
+	if got.Target != "https://updated.com" || got.Webhook != "https://hooks.example.com" {
+		t.Errorf("UpdateCheck: unexpected values %+v", got)
+	}
+
+	// Delete
+	if err := s.DeleteCheck("c1"); err != nil {
+		t.Fatalf("DeleteCheck: %v", err)
+	}
+	got, err = s.GetCheck("c1")
+	if err != nil {
+		t.Fatalf("GetCheck after delete: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil after delete, got %+v", got)
+	}
+}
+
 func TestRecentResultsByProbe_OrderAndLimit(t *testing.T) {
 	s := newTestStore(t)
 

@@ -69,6 +69,18 @@ func New(path string) (*Store, error) {
 		return nil, err
 	}
 
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS checks (
+			id      TEXT PRIMARY KEY,
+			type    TEXT NOT NULL,
+			target  TEXT NOT NULL,
+			webhook TEXT NOT NULL DEFAULT ''
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
 	log.Printf("store: database ready at %s", path)
 	return &Store{db: db}, nil
 }
@@ -278,6 +290,84 @@ func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
 // ResolveIncident marks the open incident for checkID as resolved.
 func (s *Store) ResolveIncident(checkID string) error {
 	_, err := s.db.Exec(`UPDATE incidents SET resolved_at=? WHERE check_id=? AND resolved_at IS NULL`, time.Now().UTC(), checkID)
+	return err
+}
+
+// Check represents a monitored endpoint stored in the database.
+type Check struct {
+	ID      string `json:"ID"`
+	Type    string `json:"Type"`
+	Target  string `json:"Target"`
+	Webhook string `json:"Webhook"`
+}
+
+// SeedChecks inserts checks that do not already exist in the database.
+// Existing checks (matched by id) are left unchanged. Used to bootstrap
+// from YAML config on startup without overwriting DB-managed checks.
+func (s *Store) SeedChecks(checks []Check) error {
+	for _, c := range checks {
+		_, err := s.db.Exec(`
+			INSERT INTO checks (id, type, target, webhook)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(id) DO NOTHING
+		`, c.ID, c.Type, c.Target, c.Webhook)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ListChecks returns all checks from the database.
+func (s *Store) ListChecks() ([]Check, error) {
+	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var checks []Check
+	for rows.Next() {
+		var c Check
+		if err := rows.Scan(&c.ID, &c.Type, &c.Target, &c.Webhook); err != nil {
+			return nil, err
+		}
+		checks = append(checks, c)
+	}
+	return checks, rows.Err()
+}
+
+// GetCheck returns a single check by id, or (nil, nil) if not found.
+func (s *Store) GetCheck(id string) (*Check, error) {
+	var c Check
+	err := s.db.QueryRow(`SELECT id, type, target, webhook FROM checks WHERE id=?`, id).
+		Scan(&c.ID, &c.Type, &c.Target, &c.Webhook)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// CreateCheck inserts a new check. Returns an error if the id already exists.
+func (s *Store) CreateCheck(c Check) error {
+	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook) VALUES (?, ?, ?, ?)`,
+		c.ID, c.Type, c.Target, c.Webhook)
+	return err
+}
+
+// UpdateCheck replaces type, target, and webhook for an existing check.
+func (s *Store) UpdateCheck(c Check) error {
+	_, err := s.db.Exec(`UPDATE checks SET type=?, target=?, webhook=? WHERE id=?`,
+		c.Type, c.Target, c.Webhook, c.ID)
+	return err
+}
+
+// DeleteCheck removes a check by id.
+func (s *Store) DeleteCheck(id string) error {
+	_, err := s.db.Exec(`DELETE FROM checks WHERE id=?`, id)
 	return err
 }
 

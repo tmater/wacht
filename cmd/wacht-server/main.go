@@ -47,6 +47,14 @@ func main() {
 	}
 	defer db.Close()
 
+	seed := make([]store.Check, len(cfg.Checks))
+	for i, c := range cfg.Checks {
+		seed[i] = store.Check{ID: c.ID, Type: c.Type, Target: c.Target, Webhook: c.Webhook}
+	}
+	if err := db.SeedChecks(seed); err != nil {
+		log.Fatalf("failed to seed checks: %s", err)
+	}
+
 	h := server.New(db, cfg)
 
 	go staleProbeLoop(db)

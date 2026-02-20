@@ -36,6 +36,10 @@ func (h *Handler) Routes() http.Handler {
 	api.HandleFunc("GET /api/probes/checks", h.handleChecks)
 	api.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
 	api.HandleFunc("POST /api/results", h.handleResult)
+	api.HandleFunc("GET /api/checks", h.handleListChecks)
+	api.HandleFunc("POST /api/checks", h.handleCreateCheck)
+	api.HandleFunc("PUT /api/checks/{id}", h.handleUpdateCheck)
+	api.HandleFunc("DELETE /api/checks/{id}", h.handleDeleteCheck)
 	mux.Handle("/api/", h.requireSecret(api))
 
 	return withCORS(mux)
@@ -129,10 +133,81 @@ func (h *Handler) requireSecret(next http.Handler) http.Handler {
 
 // handleChecks returns the list of checks the probe should run.
 func (h *Handler) handleChecks(w http.ResponseWriter, r *http.Request) {
+	checks, err := h.store.ListChecks()
+	if err != nil {
+		log.Printf("handler: failed to list checks: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(h.config.Checks); err != nil {
+	if err := json.NewEncoder(w).Encode(checks); err != nil {
 		log.Printf("handler: failed to encode checks: %s", err)
 	}
+}
+
+// handleListChecks returns all checks for the dashboard/API.
+func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request) {
+	checks, err := h.store.ListChecks()
+	if err != nil {
+		log.Printf("handler: failed to list checks: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(checks); err != nil {
+		log.Printf("handler: failed to encode checks: %s", err)
+	}
+}
+
+// handleCreateCheck creates a new check.
+func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
+	var c store.Check
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if c.ID == "" || c.Type == "" || c.Target == "" {
+		http.Error(w, "id, type, and target are required", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.CreateCheck(c); err != nil {
+		log.Printf("handler: failed to create check id=%s: %s", c.ID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+// handleUpdateCheck replaces type, target, and webhook for an existing check.
+func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var c store.Check
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	c.ID = id
+	if c.Type == "" || c.Target == "" {
+		http.Error(w, "type and target are required", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.UpdateCheck(c); err != nil {
+		log.Printf("handler: failed to update check id=%s: %s", id, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteCheck removes a check by id.
+func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.store.DeleteCheck(id); err != nil {
+		log.Printf("handler: failed to delete check id=%s: %s", id, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleHeartbeat updates last_seen_at for a registered probe.
@@ -257,13 +332,13 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) checkByID(id string) *config.Check {
-	for i := range h.config.Checks {
-		if h.config.Checks[i].ID == id {
-			return &h.config.Checks[i]
-		}
+func (h *Handler) checkByID(id string) *store.Check {
+	c, err := h.store.GetCheck(id)
+	if err != nil {
+		log.Printf("handler: failed to look up check id=%s: %s", id, err)
+		return nil
 	}
-	return nil
+	return c
 }
 
 func countDown(results []proto.CheckResult) int {
