@@ -55,6 +55,19 @@ func main() {
 		log.Fatalf("failed to seed checks: %s", err)
 	}
 
+	if cfg.SeedUser.Email != "" && cfg.SeedUser.Password != "" {
+		exists, err := db.UserExists()
+		if err != nil {
+			log.Fatalf("failed to check for existing users: %s", err)
+		}
+		if !exists {
+			if _, err := db.CreateUser(cfg.SeedUser.Email, cfg.SeedUser.Password); err != nil {
+				log.Fatalf("failed to seed user: %s", err)
+			}
+			log.Printf("seeded dev user: %s", cfg.SeedUser.Email)
+		}
+	}
+
 	h := server.New(db, cfg)
 
 	go staleProbeLoop(db)

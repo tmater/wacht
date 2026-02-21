@@ -1,13 +1,89 @@
 import { useEffect, useState } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
-const API_SECRET = import.meta.env.VITE_API_SECRET ?? ''
 const REFRESH_INTERVAL_MS = 30_000
-
 const CHECK_TYPES = ['http', 'tcp', 'dns']
 
+function getToken() { return localStorage.getItem('wacht_token') }
+function setToken(t) { localStorage.setItem('wacht_token', t) }
+function clearToken() { localStorage.removeItem('wacht_token') }
+function getEmail() { return localStorage.getItem('wacht_email') }
+function saveEmail(e) { localStorage.setItem('wacht_email', e) }
+function clearEmail() { localStorage.removeItem('wacht_email') }
+
 function authHeaders() {
-  return { 'X-Wacht-Secret': API_SECRET, 'Content-Type': 'application/json' }
+  return { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
+}
+
+// ---- LoginPage ---------------------------------------------------------------
+
+function LoginPage({ onLogin }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [err, setErr] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setErr(null)
+    setLoading(true)
+    try {
+      const res = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text.trim() || `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      setToken(data.token)
+      onLogin(data.email)
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
+      <div className="w-full max-w-sm">
+        <h1 className="text-xl font-bold text-gray-100 mb-6">Wacht</h1>
+        <form onSubmit={handleSubmit} className="rounded-lg border border-gray-700 bg-gray-800 p-6">
+          <div className="mb-4">
+            <label className="block text-xs text-gray-400 mb-1">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-gray-400"
+            />
+          </div>
+          <div className="mb-4">
+            <label className="block text-xs text-gray-400 mb-1">Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-gray-400"
+            />
+          </div>
+          {err && <p className="mb-3 text-xs text-red-400">{err}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {loading ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
 }
 
 // ---- CheckForm ---------------------------------------------------------------
@@ -158,15 +234,14 @@ function ProbeRow({ probe }) {
   )
 }
 
-// ---- App ---------------------------------------------------------------------
+// ---- Dashboard ---------------------------------------------------------------
 
-export default function App() {
-  const [checks, setChecks] = useState([])       // from /api/checks
-  const [statuses, setStatuses] = useState([])   // from /status
+function Dashboard({ email, onLogout }) {
+  const [checks, setChecks] = useState([])
+  const [statuses, setStatuses] = useState([])
   const [probes, setProbes] = useState([])
   const [lastUpdated, setLastUpdated] = useState(null)
   const [error, setError] = useState(null)
-
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
 
@@ -176,6 +251,7 @@ export default function App() {
         fetch(`${API_URL}/status`),
         fetch(`${API_URL}/api/checks`, { headers: authHeaders() }),
       ])
+      if (checksRes.status === 401) { onLogout(); return }
       if (!statusRes.ok) throw new Error(`status HTTP ${statusRes.status}`)
       if (!checksRes.ok) throw new Error(`checks HTTP ${checksRes.status}`)
       const statusData = await statusRes.json()
@@ -207,6 +283,11 @@ export default function App() {
     }
   }
 
+  async function handleLogoutClick() {
+    await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', headers: authHeaders() })
+    onLogout()
+  }
+
   function handleSaved() {
     setShowAddForm(false)
     setEditingId(null)
@@ -224,9 +305,20 @@ export default function App() {
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-100">Wacht</h1>
-          {lastUpdated && (
-            <p className="text-xs text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</p>
-          )}
+          <div className="flex items-center gap-4">
+            {lastUpdated && (
+              <p className="text-xs text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</p>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">{email}</span>
+              <button
+                onClick={handleLogoutClick}
+                className="text-xs text-gray-500 hover:text-gray-300"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
         </div>
 
         {error && (
@@ -266,16 +358,16 @@ export default function App() {
             <CheckForm onSave={handleSaved} onCancel={() => setShowAddForm(false)} />
           )}
 
-          {checks.length === 0 && !error && !showAddForm && (
-            <p className="text-sm text-gray-500">No checks yet.</p>
-          )}
-
           {editingId && (
             <CheckForm
               initial={checks.find(c => c.ID === editingId)}
               onSave={handleSaved}
               onCancel={() => setEditingId(null)}
             />
+          )}
+
+          {checks.length === 0 && !error && !showAddForm && (
+            <p className="text-sm text-gray-500">No checks yet.</p>
           )}
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -305,4 +397,27 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+// ---- App ---------------------------------------------------------------------
+
+export default function App() {
+  const [token, setTokenState] = useState(getToken())
+  const [email, setEmail] = useState(getEmail())
+
+  function handleLogin(userEmail) {
+    setTokenState(getToken())
+    saveEmail(userEmail)
+    setEmail(userEmail)
+  }
+
+  function handleLogout() {
+    clearToken()
+    clearEmail()
+    setTokenState(null)
+    setEmail(null)
+  }
+
+  if (!token) return <LoginPage onLogin={handleLogin} />
+  return <Dashboard email={email} onLogout={handleLogout} />
 }

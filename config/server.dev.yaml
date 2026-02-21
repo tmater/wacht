@@ -1,4 +1,7 @@
 secret: changeme
+seed_user:
+  email: dev@wacht.local
+  password: devpassword
 checks:
   - id: check-up
     type: http

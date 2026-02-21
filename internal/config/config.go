@@ -9,8 +9,14 @@ import (
 )
 
 type ServerConfig struct {
-	Secret string  `yaml:"secret"`
-	Checks []Check `yaml:"checks"`
+	Secret   string   `yaml:"secret"`
+	Checks   []Check  `yaml:"checks"`
+	SeedUser SeedUser `yaml:"seed_user"`
+}
+
+type SeedUser struct {
+	Email    string `yaml:"email"`
+	Password string `yaml:"password"`
 }
 
 type ProbeConfig struct {
@@ -42,10 +48,6 @@ func LoadServer(path string) (*ServerConfig, error) {
 	if cfg.Secret == "" {
 		return nil, fmt.Errorf("config: secret is required")
 	}
-	if len(cfg.Checks) == 0 {
-		return nil, fmt.Errorf("config: no checks defined")
-	}
-
 	return &cfg, nil
 }
 

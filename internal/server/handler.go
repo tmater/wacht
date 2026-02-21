@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
@@ -12,6 +14,10 @@ import (
 	"github.com/tmater/wacht/internal/quorum"
 	"github.com/tmater/wacht/internal/store"
 )
+
+type contextKey string
+
+const contextKeyUser contextKey = "user"
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
@@ -26,21 +32,28 @@ func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 
 // Routes registers all HTTP routes.
 func (h *Handler) Routes() http.Handler {
-	// Public routes — no secret required.
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /status", h.handleStatus)
 
-	// Protected routes — all under /api, require X-Wacht-Secret.
-	api := http.NewServeMux()
-	api.HandleFunc("POST /api/probes/register", h.handleRegister)
-	api.HandleFunc("GET /api/probes/checks", h.handleChecks)
-	api.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
-	api.HandleFunc("POST /api/results", h.handleResult)
-	api.HandleFunc("GET /api/checks", h.handleListChecks)
-	api.HandleFunc("POST /api/checks", h.handleCreateCheck)
-	api.HandleFunc("PUT /api/checks/{id}", h.handleUpdateCheck)
-	api.HandleFunc("DELETE /api/checks/{id}", h.handleDeleteCheck)
-	mux.Handle("/api/", h.requireSecret(api))
+	// Public routes — no auth required.
+	mux.HandleFunc("GET /status", h.handleStatus)
+	mux.HandleFunc("POST /api/auth/register", h.handleRegister)
+	mux.HandleFunc("POST /api/auth/login", h.handleLogin)
+	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
+
+	// Probe routes — shared secret auth (internal, not customer-facing).
+	probe := http.NewServeMux()
+	probe.HandleFunc("POST /api/probes/register", h.handleProbeRegister)
+	probe.HandleFunc("GET /api/probes/checks", h.handleProbeChecks)
+	probe.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
+	probe.HandleFunc("POST /api/results", h.handleResult)
+	mux.Handle("/api/probes/", h.requireSecret(probe))
+	mux.Handle("/api/results", h.requireSecret(probe))
+
+	// Dashboard routes — session auth.
+	mux.HandleFunc("GET /api/checks", h.requireSession(h.handleListChecks))
+	mux.HandleFunc("POST /api/checks", h.requireSession(h.handleCreateCheck))
+	mux.HandleFunc("PUT /api/checks/{id}", h.requireSession(h.handleUpdateCheck))
+	mux.HandleFunc("DELETE /api/checks/{id}", h.requireSession(h.handleDeleteCheck))
 
 	return withCORS(mux)
 }
@@ -50,7 +63,7 @@ func (h *Handler) Routes() http.Handler {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Wacht-Secret")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -132,9 +145,114 @@ func (h *Handler) requireSecret(next http.Handler) http.Handler {
 	})
 }
 
-// handleChecks returns the list of checks the probe should run.
-func (h *Handler) handleChecks(w http.ResponseWriter, r *http.Request) {
-	checks, err := h.store.ListChecks()
+// requireSession validates the Bearer token and injects the user into context.
+// In Go, context.WithValue is the standard way to pass request-scoped values
+// through middleware — similar to ThreadLocal in Java.
+func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		user, err := h.store.GetSessionUser(token)
+		if err != nil {
+			log.Printf("auth: session lookup error: %s", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if user == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), contextKeyUser, user)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// sessionUser extracts the authenticated user from the request context.
+func sessionUser(r *http.Request) *store.User {
+	u, _ := r.Context().Value(contextKeyUser).(*store.User)
+	return u
+}
+
+// handleRegister creates a new user account.
+func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "email and password are required", http.StatusBadRequest)
+		return
+	}
+	user, err := h.store.CreateUser(req.Email, req.Password)
+	if err != nil {
+		log.Printf("auth: failed to create user email=%s: %s", req.Email, err)
+		http.Error(w, "could not create user", http.StatusInternalServerError)
+		return
+	}
+	token, err := h.store.CreateSession(user.ID)
+	if err != nil {
+		log.Printf("auth: failed to create session user_id=%d: %s", user.ID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": user.Email})
+}
+
+// handleLogin authenticates a user and returns a session token.
+func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	user, err := h.store.AuthenticateUser(req.Email, req.Password)
+	if err != nil {
+		log.Printf("auth: authenticate error email=%s: %s", req.Email, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	token, err := h.store.CreateSession(user.ID)
+	if err != nil {
+		log.Printf("auth: failed to create session user_id=%d: %s", user.ID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": user.Email})
+}
+
+// handleLogout deletes the session token.
+func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := h.store.DeleteSession(token); err != nil {
+		log.Printf("auth: failed to delete session: %s", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleProbeChecks returns all checks for probes to run (no user scoping).
+func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
+	checks, err := h.store.ListAllChecks()
 	if err != nil {
 		log.Printf("handler: failed to list checks: %s", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -146,9 +264,10 @@ func (h *Handler) handleChecks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleListChecks returns all checks for the dashboard/API.
+// handleListChecks returns checks owned by the authenticated user.
 func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request) {
-	checks, err := h.store.ListChecks()
+	user := sessionUser(r)
+	checks, err := h.store.ListChecks(user.ID)
 	if err != nil {
 		log.Printf("handler: failed to list checks: %s", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -160,8 +279,9 @@ func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleCreateCheck creates a new check.
+// handleCreateCheck creates a new check owned by the authenticated user.
 func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
+	user := sessionUser(r)
 	var c store.Check
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -171,7 +291,7 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id, type, and target are required", http.StatusBadRequest)
 		return
 	}
-	if err := h.store.CreateCheck(c); err != nil {
+	if err := h.store.CreateCheck(c, user.ID); err != nil {
 		log.Printf("handler: failed to create check id=%s: %s", c.ID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -179,8 +299,9 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// handleUpdateCheck replaces type, target, and webhook for an existing check.
+// handleUpdateCheck replaces type, target, and webhook for a check owned by the authenticated user.
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	user := sessionUser(r)
 	id := r.PathValue("id")
 	var c store.Check
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
@@ -192,7 +313,7 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "type and target are required", http.StatusBadRequest)
 		return
 	}
-	if err := h.store.UpdateCheck(c); err != nil {
+	if err := h.store.UpdateCheck(c, user.ID); err != nil {
 		log.Printf("handler: failed to update check id=%s: %s", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -200,10 +321,11 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeleteCheck removes a check by id.
+// handleDeleteCheck removes a check owned by the authenticated user.
 func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
+	user := sessionUser(r)
 	id := r.PathValue("id")
-	if err := h.store.DeleteCheck(id); err != nil {
+	if err := h.store.DeleteCheck(id, user.ID); err != nil {
 		log.Printf("handler: failed to delete check id=%s: %s", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -232,8 +354,8 @@ func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleRegister registers a probe on startup.
-func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
+// handleProbeRegister registers a probe on startup.
+func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ProbeID string `json:"probe_id"`
 		Version string `json:"version"`

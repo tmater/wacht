@@ -1,11 +1,14 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"log"
 	"time"
 
 	"github.com/tmater/wacht/internal/proto"
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -74,7 +77,32 @@ func New(path string) (*Store, error) {
 			id      TEXT PRIMARY KEY,
 			type    TEXT NOT NULL,
 			target  TEXT NOT NULL,
-			webhook TEXT NOT NULL DEFAULT ''
+			webhook TEXT NOT NULL DEFAULT '',
+			user_id INTEGER
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			email         TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at    DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			token      TEXT PRIMARY KEY,
+			user_id    INTEGER NOT NULL REFERENCES users(id),
+			created_at DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL
 		)
 	`)
 	if err != nil {
@@ -318,8 +346,27 @@ func (s *Store) SeedChecks(checks []Check) error {
 	return nil
 }
 
-// ListChecks returns all checks from the database.
-func (s *Store) ListChecks() ([]Check, error) {
+// ListChecks returns all checks owned by userID.
+func (s *Store) ListChecks(userID int64) ([]Check, error) {
+	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks WHERE user_id=? ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var checks []Check
+	for rows.Next() {
+		var c Check
+		if err := rows.Scan(&c.ID, &c.Type, &c.Target, &c.Webhook); err != nil {
+			return nil, err
+		}
+		checks = append(checks, c)
+	}
+	return checks, rows.Err()
+}
+
+// ListAllChecks returns all checks regardless of owner. Used by probes.
+func (s *Store) ListAllChecks() ([]Check, error) {
 	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -351,23 +398,116 @@ func (s *Store) GetCheck(id string) (*Check, error) {
 	return &c, nil
 }
 
-// CreateCheck inserts a new check. Returns an error if the id already exists.
-func (s *Store) CreateCheck(c Check) error {
-	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook) VALUES (?, ?, ?, ?)`,
-		c.ID, c.Type, c.Target, c.Webhook)
+// CreateCheck inserts a new check owned by userID.
+func (s *Store) CreateCheck(c Check, userID int64) error {
+	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook, user_id) VALUES (?, ?, ?, ?, ?)`,
+		c.ID, c.Type, c.Target, c.Webhook, userID)
 	return err
 }
 
-// UpdateCheck replaces type, target, and webhook for an existing check.
-func (s *Store) UpdateCheck(c Check) error {
-	_, err := s.db.Exec(`UPDATE checks SET type=?, target=?, webhook=? WHERE id=?`,
-		c.Type, c.Target, c.Webhook, c.ID)
+// UpdateCheck replaces type, target, and webhook for a check owned by userID.
+func (s *Store) UpdateCheck(c Check, userID int64) error {
+	_, err := s.db.Exec(`UPDATE checks SET type=?, target=?, webhook=? WHERE id=? AND user_id=?`,
+		c.Type, c.Target, c.Webhook, c.ID, userID)
 	return err
 }
 
-// DeleteCheck removes a check by id.
-func (s *Store) DeleteCheck(id string) error {
-	_, err := s.db.Exec(`DELETE FROM checks WHERE id=?`, id)
+// DeleteCheck removes a check owned by userID.
+func (s *Store) DeleteCheck(id string, userID int64) error {
+	_, err := s.db.Exec(`DELETE FROM checks WHERE id=? AND user_id=?`, id, userID)
+	return err
+}
+
+// User represents a registered user.
+type User struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	CreatedAt    time.Time
+}
+
+// CreateUser hashes the password and inserts a new user. Returns the created user.
+func (s *Store) CreateUser(email, password string) (*User, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	res, err := s.db.Exec(`INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)`,
+		email, string(hash), now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &User{ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now}, nil
+}
+
+// AuthenticateUser verifies email+password and returns the user on success.
+func (s *Store) AuthenticateUser(email, password string) (*User, error) {
+	var u User
+	err := s.db.QueryRow(`SELECT id, email, password_hash, created_at FROM users WHERE email=?`, email).
+		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
+		return nil, nil // wrong password
+	}
+	return &u, nil
+}
+
+// UserExists reports whether any user exists in the database.
+func (s *Store) UserExists() (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM users`).Scan(&count)
+	return count > 0, err
+}
+
+// CreateSession generates a random token, stores it, and returns it.
+// Sessions expire after 30 days.
+func (s *Store) CreateSession(userID int64) (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(b)
+	now := time.Now().UTC()
+	_, err := s.db.Exec(`INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		token, userID, now, now.Add(30*24*time.Hour))
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// GetSessionUser returns the user for a valid, non-expired session token.
+// Returns nil if the token is missing or expired.
+func (s *Store) GetSessionUser(token string) (*User, error) {
+	var u User
+	err := s.db.QueryRow(`
+		SELECT u.id, u.email, u.password_hash, u.created_at
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.token = ? AND s.expires_at > ?
+	`, token, time.Now().UTC()).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// DeleteSession removes a session token (logout).
+func (s *Store) DeleteSession(token string) error {
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE token=?`, token)
 	return err
 }
 
