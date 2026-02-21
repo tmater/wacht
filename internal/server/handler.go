@@ -51,6 +51,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Wacht-Secret")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -326,6 +327,11 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		}
+	} else {
+		// Majority reports up — resolve any open incident.
+		if err := h.store.ResolveIncident(result.CheckID); err != nil {
+			log.Printf("alert: failed to resolve incident check_id=%s: %s", result.CheckID, err)
 		}
 	}
 

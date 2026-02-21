@@ -40,7 +40,15 @@ func main() {
 	}
 	log.Printf("probe: fetched %d checks from server", len(checks))
 
-	go heartbeatLoop(cfg.Server, cfg.Secret, cfg.ProbeID, cfg.HeartbeatInterval)
+	go heartbeatLoop(cfg.Server, cfg.Secret, cfg.ProbeID, cfg.HeartbeatInterval, func() {
+		updated, err := fetchChecks(cfg.Server, cfg.Secret)
+		if err != nil {
+			log.Printf("probe: failed to refresh checks: %s", err)
+			return
+		}
+		checks = updated
+		log.Printf("probe: refreshed %d checks from server", len(checks))
+	})
 
 	interval := 30 * time.Second
 
@@ -69,7 +77,7 @@ func main() {
 	}
 }
 
-func heartbeatLoop(serverURL, secret, probeID string, interval time.Duration) {
+func heartbeatLoop(serverURL, secret, probeID string, interval time.Duration, onHeartbeat func()) {
 	for {
 		time.Sleep(interval)
 		body, _ := json.Marshal(map[string]string{"probe_id": probeID})
@@ -87,6 +95,7 @@ func heartbeatLoop(serverURL, secret, probeID string, interval time.Duration) {
 		}
 		resp.Body.Close()
 		log.Printf("probe: heartbeat sent probe_id=%s status=%d", probeID, resp.StatusCode)
+		onHeartbeat()
 	}
 }
 

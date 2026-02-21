@@ -1,33 +1,146 @@
 import { useEffect, useState } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
+const API_SECRET = import.meta.env.VITE_API_SECRET ?? ''
 const REFRESH_INTERVAL_MS = 30_000
 
-function CheckCard({ check }) {
-  const up = check.status === 'up'
+const CHECK_TYPES = ['http', 'tcp', 'dns']
+
+function authHeaders() {
+  return { 'X-Wacht-Secret': API_SECRET, 'Content-Type': 'application/json' }
+}
+
+// ---- CheckForm ---------------------------------------------------------------
+
+function CheckForm({ initial, onSave, onCancel }) {
+  const isNew = !initial
+  const [id, setId] = useState(initial?.ID ?? '')
+  const [type, setType] = useState(initial?.Type ?? 'http')
+  const [target, setTarget] = useState(initial?.Target ?? '')
+  const [webhook, setWebhook] = useState(initial?.Webhook ?? '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setErr(null)
+    setSaving(true)
+    try {
+      const body = JSON.stringify({ ID: id, Type: type, Target: target, Webhook: webhook })
+      const res = isNew
+        ? await fetch(`${API_URL}/api/checks`, { method: 'POST', headers: authHeaders(), body })
+        : await fetch(`${API_URL}/api/checks/${initial.ID}`, { method: 'PUT', headers: authHeaders(), body })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text.trim() || `HTTP ${res.status}`)
+      }
+      onSave()
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="rounded-lg border border-gray-600 bg-gray-750 p-4 mb-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">ID</label>
+          <input
+            required
+            disabled={!isNew}
+            value={id}
+            onChange={e => setId(e.target.value)}
+            placeholder="check-my-api"
+            className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 disabled:opacity-50 focus:outline-none focus:border-gray-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Type</label>
+          <select
+            value={type}
+            onChange={e => setType(e.target.value)}
+            className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-gray-400"
+          >
+            {CHECK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Target</label>
+          <input
+            required
+            value={target}
+            onChange={e => setTarget(e.target.value)}
+            placeholder="https://example.com"
+            className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Webhook <span className="text-gray-600">(optional)</span></label>
+          <input
+            value={webhook}
+            onChange={e => setWebhook(e.target.value)}
+            placeholder="https://hooks.example.com/..."
+            className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-400"
+          />
+        </div>
+      </div>
+      {err && <p className="mt-2 text-xs text-red-400">{err}</p>}
+      <div className="mt-3 flex gap-2">
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : isNew ? 'Add check' : 'Save'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded bg-gray-700 px-3 py-1.5 text-xs font-semibold text-gray-300 hover:bg-gray-600"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
+// ---- CheckCard ---------------------------------------------------------------
+
+function CheckCard({ check, statusCheck, onEdit, onDelete }) {
+  const up = statusCheck?.status === 'up'
+  const hasStatus = !!statusCheck
+
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="font-mono text-sm font-semibold text-gray-100">{check.check_id}</p>
-          <p className="mt-0.5 text-xs text-gray-400 break-all">{check.target}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-mono text-sm font-semibold text-gray-100">{check.ID}</p>
+          <p className="mt-0.5 text-xs text-gray-400 break-all">{check.Target}</p>
+          <p className="mt-0.5 text-xs text-gray-600 uppercase">{check.Type}</p>
         </div>
-        <span
-          className={`ml-4 shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-            up ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'
-          }`}
-        >
-          {up ? 'UP' : 'DOWN'}
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {hasStatus && (
+            <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${up ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
+              {up ? 'UP' : 'DOWN'}
+            </span>
+          )}
+          <button onClick={onEdit} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
+          <button onClick={onDelete} className="text-xs text-gray-500 hover:text-red-400">Delete</button>
+        </div>
       </div>
-      {check.incident_since && (
+      {statusCheck?.incident_since && (
         <p className="mt-2 text-xs text-red-400">
-          Down since {new Date(check.incident_since).toLocaleString()}
+          Down since {new Date(statusCheck.incident_since).toLocaleString()}
         </p>
       )}
     </div>
   )
 }
+
+// ---- ProbeRow ----------------------------------------------------------------
 
 function ProbeRow({ probe }) {
   return (
@@ -37,11 +150,7 @@ function ProbeRow({ probe }) {
         <p className="text-xs text-gray-500">
           {new Date(probe.last_seen_at).toLocaleTimeString()}
         </p>
-        <span
-          className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-            probe.online ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'
-          }`}
-        >
+        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${probe.online ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
           {probe.online ? 'ONLINE' : 'OFFLINE'}
         </span>
       </div>
@@ -49,19 +158,31 @@ function ProbeRow({ probe }) {
   )
 }
 
+// ---- App ---------------------------------------------------------------------
+
 export default function App() {
-  const [checks, setChecks] = useState([])
+  const [checks, setChecks] = useState([])       // from /api/checks
+  const [statuses, setStatuses] = useState([])   // from /status
   const [probes, setProbes] = useState([])
   const [lastUpdated, setLastUpdated] = useState(null)
   const [error, setError] = useState(null)
 
-  async function fetchStatus() {
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+
+  async function fetchAll() {
     try {
-      const res = await fetch(`${API_URL}/status`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      setChecks(data.checks ?? [])
-      setProbes(data.probes ?? [])
+      const [statusRes, checksRes] = await Promise.all([
+        fetch(`${API_URL}/status`),
+        fetch(`${API_URL}/api/checks`, { headers: authHeaders() }),
+      ])
+      if (!statusRes.ok) throw new Error(`status HTTP ${statusRes.status}`)
+      if (!checksRes.ok) throw new Error(`checks HTTP ${checksRes.status}`)
+      const statusData = await statusRes.json()
+      const checksData = await checksRes.json()
+      setStatuses(statusData.checks ?? [])
+      setProbes(statusData.probes ?? [])
+      setChecks(checksData ?? [])
       setLastUpdated(new Date())
       setError(null)
     } catch (e) {
@@ -70,23 +191,41 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchStatus()
-    const id = setInterval(fetchStatus, REFRESH_INTERVAL_MS)
+    fetchAll()
+    const id = setInterval(fetchAll, REFRESH_INTERVAL_MS)
     return () => clearInterval(id)
   }, [])
 
-  const allUp = checks.length > 0 && checks.every(c => c.status === 'up')
-  const downCount = checks.filter(c => c.status !== 'up').length
+  async function handleDelete(id) {
+    if (!confirm(`Delete check "${id}"?`)) return
+    try {
+      const res = await fetch(`${API_URL}/api/checks/${id}`, { method: 'DELETE', headers: authHeaders() })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      fetchAll()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  function handleSaved() {
+    setShowAddForm(false)
+    setEditingId(null)
+    fetchAll()
+  }
+
+  const statusByID = Object.fromEntries(statuses.map(s => [s.check_id, s]))
+  const allUp = statuses.length > 0 && statuses.every(s => s.status === 'up')
+  const downCount = statuses.filter(s => s.status !== 'up').length
 
   return (
     <div className="min-h-screen bg-gray-900 p-6">
       <div className="mx-auto max-w-3xl">
+
+        {/* Header */}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-100">Wacht</h1>
           {lastUpdated && (
-            <p className="text-xs text-gray-500">
-              Updated {lastUpdated.toLocaleTimeString()}
-            </p>
+            <p className="text-xs text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</p>
           )}
         </div>
 
@@ -96,31 +235,63 @@ export default function App() {
           </div>
         )}
 
-        {checks.length === 0 && !error && (
-          <p className="text-sm text-gray-500">Loading...</p>
+        {/* Summary bar */}
+        {statuses.length > 0 && (
+          <div className="mb-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
+            <p className="text-sm text-gray-400">
+              {allUp
+                ? <span className="font-semibold text-green-400">All checks passing</span>
+                : <span className="font-semibold text-red-400">{downCount} check{downCount !== 1 ? 's' : ''} down</span>
+              }
+              <span className="text-gray-600"> · {statuses.length} total</span>
+            </p>
+          </div>
         )}
 
-        {checks.length > 0 && (
-          <>
-            <div className="mb-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
-              <p className="text-sm text-gray-400">
-                {allUp ? (
-                  <span className="font-semibold text-green-400">All checks passing</span>
-                ) : (
-                  <span className="font-semibold text-red-400">{downCount} check{downCount !== 1 ? 's' : ''} down</span>
-                )}
-                <span className="text-gray-600"> · {checks.length} total</span>
-              </p>
-            </div>
+        {/* Checks section */}
+        <div className="mb-8">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Checks</h2>
+            {!showAddForm && (
+              <button
+                onClick={() => { setShowAddForm(true); setEditingId(null) }}
+                className="rounded bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-500"
+              >
+                + Add check
+              </button>
+            )}
+          </div>
 
-            <div className="mb-8 grid gap-3 sm:grid-cols-2">
-              {checks.map(check => (
-                <CheckCard key={check.check_id} check={check} />
-              ))}
-            </div>
-          </>
-        )}
+          {showAddForm && (
+            <CheckForm onSave={handleSaved} onCancel={() => setShowAddForm(false)} />
+          )}
 
+          {checks.length === 0 && !error && !showAddForm && (
+            <p className="text-sm text-gray-500">No checks yet.</p>
+          )}
+
+          {editingId && (
+            <CheckForm
+              initial={checks.find(c => c.ID === editingId)}
+              onSave={handleSaved}
+              onCancel={() => setEditingId(null)}
+            />
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {checks.map(check => (
+              <CheckCard
+                key={check.ID}
+                check={check}
+                statusCheck={statusByID[check.ID]}
+                onEdit={() => { setEditingId(check.ID); setShowAddForm(false) }}
+                onDelete={() => handleDelete(check.ID)}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Probes section */}
         {probes.length > 0 && (
           <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Probes</h2>
