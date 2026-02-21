@@ -30,7 +30,7 @@ jobs:
           for i in $(seq 1 20); do
             STATUS=$(curl -sf http://localhost:8080/status)
             CHECK=$(echo "$STATUS" | jq -r '.checks[] | select(.check_id == "check-self") | .status' 2>/dev/null)
-            if [ "$CHECK" = "✅ up" ]; then
+            if [ "$CHECK" = "up" ]; then
               echo "check-self is up — probe successfully connected and submitted results"
               echo "$STATUS" | jq .
               exit 0
