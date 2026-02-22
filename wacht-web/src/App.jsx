@@ -80,6 +80,12 @@ function LoginPage({ onLogin }) {
           >
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
+          <p className="mt-4 text-xs text-gray-500 text-center">
+            No account?{' '}
+            <a href="mailto:wacht.eu@proton.me" className="text-gray-400 hover:text-gray-300">
+              Contact us for trial access
+            </a>
+          </p>
         </form>
       </div>
     </div>
