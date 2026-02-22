@@ -16,7 +16,7 @@ export default function Dashboard({ email, onLogout, onAccount }) {
   async function fetchAll() {
     try {
       const [statusRes, checksRes] = await Promise.all([
-        fetch(`${API_URL}/status`),
+        fetch(`${API_URL}/status`, { headers: authHeaders() }),
         fetch(`${API_URL}/api/checks`, { headers: authHeaders() }),
       ])
       if (checksRes.status === 401) { onLogout(); return }

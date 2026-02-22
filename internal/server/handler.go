@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
@@ -21,13 +22,14 @@ const contextKeyUser contextKey = "user"
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
-	store  *store.Store
-	config *config.ServerConfig
+	store       *store.Store
+	config      *config.ServerConfig
+	loginLimiter *rateLimiter
 }
 
 // New creates a new Handler.
 func New(store *store.Store, cfg *config.ServerConfig) *Handler {
-	return &Handler{store: store, config: cfg}
+	return &Handler{store: store, config: cfg, loginLimiter: newRateLimiter()}
 }
 
 // Routes registers all HTTP routes.
@@ -35,9 +37,7 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	// Public routes — no auth required.
-	mux.HandleFunc("GET /status", h.handleStatus)
-	mux.HandleFunc("POST /api/auth/register", h.handleRegister)
-	mux.HandleFunc("POST /api/auth/login", h.handleLogin)
+	mux.HandleFunc("POST /api/auth/login", h.loginLimiter.middleware(h.handleLogin))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
 
 	// Probe routes — shared secret auth (internal, not customer-facing).
@@ -50,6 +50,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("/api/results", h.requireSecret(probe))
 
 	// Dashboard routes — session auth.
+	mux.HandleFunc("GET /status", h.requireSession(h.handleStatus))
 	mux.HandleFunc("GET /api/checks", h.requireSession(h.handleListChecks))
 	mux.HandleFunc("POST /api/checks", h.requireSession(h.handleCreateCheck))
 	mux.HandleFunc("PUT /api/checks/{id}", h.requireSession(h.handleUpdateCheck))
@@ -177,35 +178,54 @@ func sessionUser(r *http.Request) *store.User {
 	return u
 }
 
-// handleRegister creates a new user account.
-func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+// rateLimiter is a simple per-IP token bucket rate limiter.
+// In Java terms: a filter backed by a ConcurrentHashMap of per-IP state.
+type rateLimiter struct {
+	mu     sync.Mutex
+	tokens map[string]*tokenBucket
+}
+
+type tokenBucket struct {
+	count    int
+	resetAt  time.Time
+}
+
+const (
+	rateLimitRequests = 10
+	rateLimitWindow   = time.Minute
+)
+
+func newRateLimiter() *rateLimiter {
+	return &rateLimiter{tokens: make(map[string]*tokenBucket)}
+}
+
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	b, ok := rl.tokens[ip]
+	if !ok || time.Now().After(b.resetAt) {
+		rl.tokens[ip] = &tokenBucket{count: 1, resetAt: time.Now().Add(rateLimitWindow)}
+		return true
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+	if b.count >= rateLimitRequests {
+		return false
 	}
-	if req.Email == "" || req.Password == "" {
-		http.Error(w, "email and password are required", http.StatusBadRequest)
-		return
+	b.count++
+	return true
+}
+
+func (rl *rateLimiter) middleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		if i := strings.LastIndex(ip, ":"); i != -1 {
+			ip = ip[:i]
+		}
+		if !rl.allow(ip) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		next(w, r)
 	}
-	user, err := h.store.CreateUser(req.Email, req.Password)
-	if err != nil {
-		log.Printf("auth: failed to create user email=%s: %s", req.Email, err)
-		http.Error(w, "could not create user", http.StatusInternalServerError)
-		return
-	}
-	token, err := h.store.CreateSession(user.ID)
-	if err != nil {
-		log.Printf("auth: failed to create session user_id=%d: %s", user.ID, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": user.Email})
 }
 
 // handleLogin authenticates a user and returns a session token.

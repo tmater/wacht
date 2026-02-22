@@ -1,5 +1,8 @@
 secret: ci-smoke-secret
+seed_user:
+  email: ci@wacht.local
+  password: ci-smoke-password
 checks:
   - id: check-self
     type: http
-    target: http://server:8080/status
+    target: http://server:8080/api/auth/login
