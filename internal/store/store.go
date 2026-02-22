@@ -484,6 +484,25 @@ func (s *Store) DeleteSession(token string) error {
 	return err
 }
 
+// UpdateUserPassword verifies the current password and replaces it with a new one.
+// Returns false if the current password is wrong.
+func (s *Store) UpdateUserPassword(userID int64, currentPassword, newPassword string) (bool, error) {
+	var hash string
+	err := s.db.QueryRow(`SELECT password_hash FROM users WHERE id=$1`, userID).Scan(&hash)
+	if err != nil {
+		return false, err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(currentPassword)); err != nil {
+		return false, nil // wrong current password
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return false, err
+	}
+	_, err = s.db.Exec(`UPDATE users SET password_hash=$1 WHERE id=$2`, string(newHash), userID)
+	return err == nil, err
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()
