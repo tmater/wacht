@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { API_URL, REFRESH_INTERVAL_MS, authHeaders } from './api.js'
 import CheckForm from './CheckForm.jsx'
-import CheckCard from './CheckCard.jsx'
+import CheckRow from './CheckRow.jsx'
 import ProbeRow from './ProbeRow.jsx'
 
 export default function Dashboard({ email, onLogout, onAccount }) {
@@ -65,6 +65,8 @@ export default function Dashboard({ email, onLogout, onAccount }) {
   const statusByID = Object.fromEntries(statuses.map(s => [s.check_id, s]))
   const allUp = statuses.length > 0 && statuses.every(s => s.status === 'up')
   const downCount = statuses.filter(s => s.status !== 'up').length
+  const probesTotal = probes.length
+  const probesUp = probes.filter(p => p.online).length
 
   return (
     <div className="min-h-screen bg-gray-900 p-6">
@@ -137,6 +139,7 @@ export default function Dashboard({ email, onLogout, onAccount }) {
               initial={checks.find(c => c.ID === editingId)}
               onSave={handleSaved}
               onCancel={() => setEditingId(null)}
+              onDelete={() => handleDelete(editingId)}
             />
           )}
 
@@ -144,14 +147,15 @@ export default function Dashboard({ email, onLogout, onAccount }) {
             <p className="text-sm text-gray-500">No checks yet.</p>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-gray-700 bg-gray-800 px-4 divide-y divide-gray-700">
             {checks.map(check => (
-              <CheckCard
+              <CheckRow
                 key={check.ID}
                 check={check}
                 statusCheck={statusByID[check.ID]}
+                probesUp={probesUp}
+                probesTotal={probesTotal}
                 onEdit={() => { setEditingId(check.ID); setShowAddForm(false) }}
-                onDelete={() => handleDelete(check.ID)}
               />
             ))}
           </div>

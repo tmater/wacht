@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { API_URL, CHECK_TYPES, authHeaders } from './api.js'
 
-export default function CheckForm({ initial, onSave, onCancel }) {
+export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
   const isNew = !initial
   const [id, setId] = useState(initial?.ID ?? '')
   const [type, setType] = useState(initial?.Type ?? 'http')
@@ -76,7 +76,7 @@ export default function CheckForm({ initial, onSave, onCancel }) {
         </div>
       </div>
       {err && <p className="mt-2 text-xs text-red-400">{err}</p>}
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex items-center gap-2">
         <button
           type="submit"
           disabled={saving}
@@ -91,6 +91,15 @@ export default function CheckForm({ initial, onSave, onCancel }) {
         >
           Cancel
         </button>
+        {!isNew && onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="ml-auto rounded bg-red-900 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-800"
+          >
+            Delete check
+          </button>
+        )}
       </div>
     </form>
   )
