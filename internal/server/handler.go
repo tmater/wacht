@@ -37,6 +37,7 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	// Public routes — no auth required.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("POST /api/auth/login", h.loginLimiter.middleware(h.handleLogin))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
 

@@ -5,4 +5,4 @@ seed_user:
 checks:
   - id: check-self
     type: http
-    target: http://server:8080/api/auth/login
+    target: http://server:8080/healthz

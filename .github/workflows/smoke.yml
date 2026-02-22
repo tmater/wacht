@@ -16,19 +16,28 @@ jobs:
 
       - name: Wait for server
         run: |
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:8080/status; then
-              echo "Server is up"
+          for i in $(seq 1 30); do
+            STATUS=$(docker compose -f docker-compose.ci.yml ps --format json server 2>/dev/null | jq -r '.Health // empty')
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Server is healthy"
               break
             fi
-            echo "Attempt $i failed, retrying in 2s..."
+            echo "Attempt $i: server not healthy yet (status: $STATUS), retrying in 2s..."
             sleep 2
           done
 
       - name: Assert check-self is up
         run: |
+          TOKEN=$(curl -sf -X POST http://localhost:8080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci@wacht.local","password":"ci-smoke-password"}' \
+            | jq -r '.token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to obtain auth token"
+            exit 1
+          fi
           for i in $(seq 1 20); do
-            STATUS=$(curl -sf http://localhost:8080/status)
+            STATUS=$(curl -sf http://localhost:8080/status -H "Authorization: Bearer $TOKEN")
             CHECK=$(echo "$STATUS" | jq -r '.checks[] | select(.check_id == "check-self") | .status' 2>/dev/null)
             if [ "$CHECK" = "up" ]; then
               echo "check-self is up — probe successfully connected and submitted results"

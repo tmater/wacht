@@ -26,6 +26,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   probe:
     build:
@@ -36,7 +42,8 @@ services:
     volumes:
       - ./ci/probe.yaml:/etc/wacht/probe.yaml:ro
     depends_on:
-      - server
+      server:
+        condition: service_healthy
 
 volumes:
   wacht-ci-data:
