@@ -1,19 +1,59 @@
 package store
 
 import (
+	"context"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/tmater/wacht/internal/proto"
 )
 
+var testDSN string
+
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+
+	ctr, err := postgres.Run(ctx,
+		"postgres:16-alpine",
+		postgres.WithDatabase("wacht_test"),
+		postgres.WithUsername("wacht"),
+		postgres.WithPassword("wacht"),
+		postgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		panic("start postgres container: " + err.Error())
+	}
+
+	testDSN, err = ctr.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		panic("get connection string: " + err.Error())
+	}
+
+	code := m.Run()
+
+	_ = ctr.Terminate(ctx)
+	os.Exit(code)
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := New("file::memory:?cache=shared&mode=memory")
+
+	s, err := New(testDSN)
 	if err != nil {
-		t.Fatalf("failed to open in-memory store: %v", err)
+		t.Fatalf("failed to open store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
+
+	// Wipe all tables so tests don't interfere with each other.
+	_, err = s.db.Exec(`
+		TRUNCATE check_results, incidents, sessions, checks, users RESTART IDENTITY CASCADE
+	`)
+	if err != nil {
+		t.Fatalf("truncate tables: %v", err)
+	}
+
 	return s
 }
 
@@ -106,13 +146,13 @@ func TestSeedChecks_SkipsExisting(t *testing.T) {
 	s := newTestStore(t)
 
 	checks := []Check{{ID: "c1", Type: "http", Target: "https://a.com", Webhook: ""}}
-	if err := s.SeedChecks(checks); err != nil {
+	if err := s.SeedChecks(checks, 0); err != nil {
 		t.Fatalf("SeedChecks: %v", err)
 	}
 
 	// Seed again with a different target — existing row must be unchanged.
 	checks[0].Target = "https://b.com"
-	if err := s.SeedChecks(checks); err != nil {
+	if err := s.SeedChecks(checks, 0); err != nil {
 		t.Fatalf("SeedChecks second call: %v", err)
 	}
 

@@ -31,7 +31,7 @@ func staleProbeLoop(db *store.Store) {
 
 func main() {
 	configPath := flag.String("config", "server.yaml", "path to server config file")
-	dbPath := flag.String("db", "wacht.db", "path to SQLite database file")
+	dsn := flag.String("dsn", "", "Postgres DSN (e.g. postgres://user:pass@host/db)")
 	flag.Parse()
 
 	log.Println("wacht-server starting")
@@ -41,31 +41,46 @@ func main() {
 		log.Fatalf("failed to load config: %s", err)
 	}
 
-	db, err := store.New(*dbPath)
+	if *dsn == "" {
+		log.Fatalf("--dsn is required")
+	}
+
+	db, err := store.New(*dsn)
 	if err != nil {
 		log.Fatalf("failed to open database: %s", err)
 	}
 	defer db.Close()
 
-	seed := make([]store.Check, len(cfg.Checks))
-	for i, c := range cfg.Checks {
-		seed[i] = store.Check{ID: c.ID, Type: c.Type, Target: c.Target, Webhook: c.Webhook}
-	}
-	if err := db.SeedChecks(seed); err != nil {
-		log.Fatalf("failed to seed checks: %s", err)
-	}
-
+	var seedUserID int64
 	if cfg.SeedUser.Email != "" && cfg.SeedUser.Password != "" {
 		exists, err := db.UserExists()
 		if err != nil {
 			log.Fatalf("failed to check for existing users: %s", err)
 		}
 		if !exists {
-			if _, err := db.CreateUser(cfg.SeedUser.Email, cfg.SeedUser.Password); err != nil {
+			u, err := db.CreateUser(cfg.SeedUser.Email, cfg.SeedUser.Password)
+			if err != nil {
 				log.Fatalf("failed to seed user: %s", err)
 			}
 			log.Printf("seeded dev user: %s", cfg.SeedUser.Email)
+			seedUserID = u.ID
+		} else {
+			u, err := db.AuthenticateUser(cfg.SeedUser.Email, cfg.SeedUser.Password)
+			if err != nil {
+				log.Fatalf("failed to look up seed user: %s", err)
+			}
+			if u != nil {
+				seedUserID = u.ID
+			}
 		}
+	}
+
+	seed := make([]store.Check, len(cfg.Checks))
+	for i, c := range cfg.Checks {
+		seed[i] = store.Check{ID: c.ID, Type: c.Type, Target: c.Target, Webhook: c.Webhook}
+	}
+	if err := db.SeedChecks(seed, seedUserID); err != nil {
+		log.Fatalf("failed to seed checks: %s", err)
 	}
 
 	h := server.New(db, cfg)

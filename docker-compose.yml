@@ -1,15 +1,32 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wacht
+      POSTGRES_PASSWORD: wacht
+      POSTGRES_DB: wacht
+    volumes:
+      - wacht-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wacht"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   server:
     build:
       context: .
       args:
         BINARY: wacht-server
-    command: ["--config=/etc/wacht/server.yaml", "--db=/data/wacht.db"]
+    command: ["--config=/etc/wacht/server.yaml", "--dsn=postgres://wacht:wacht@postgres/wacht?sslmode=disable"]
     volumes:
       - ./config/server.yaml:/etc/wacht/server.yaml:ro
-      - wacht-data:/data
     ports:
       - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   probe-1:

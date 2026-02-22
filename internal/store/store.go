@@ -9,7 +9,7 @@ import (
 
 	"github.com/tmater/wacht/internal/proto"
 	"golang.org/x/crypto/bcrypt"
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Store handles persistence of check results.
@@ -17,23 +17,16 @@ type Store struct {
 	db *sql.DB
 }
 
-// New opens the SQLite database and creates tables if they don't exist.
-func New(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+// New opens the Postgres database and creates tables if they don't exist.
+func New(dsn string) (*Store, error) {
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return nil, err
-	}
-
-	// Single connection prevents concurrent write contention in SQLite.
-	db.SetMaxOpenConns(1)
-
-	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return nil, err
 	}
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS check_results (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			id          BIGSERIAL PRIMARY KEY,
 			check_id    TEXT NOT NULL,
 			probe_id    TEXT NOT NULL,
 			type        TEXT NOT NULL,
@@ -41,7 +34,7 @@ func New(path string) (*Store, error) {
 			up          BOOLEAN NOT NULL,
 			latency_ms  INTEGER NOT NULL,
 			error       TEXT,
-			timestamp   DATETIME NOT NULL
+			timestamp   TIMESTAMPTZ NOT NULL
 		)
 	`)
 	if err != nil {
@@ -52,8 +45,8 @@ func New(path string) (*Store, error) {
 		CREATE TABLE IF NOT EXISTS probes (
 			probe_id        TEXT PRIMARY KEY,
 			version         TEXT NOT NULL,
-			registered_at   DATETIME NOT NULL,
-			last_seen_at    DATETIME NOT NULL
+			registered_at   TIMESTAMPTZ NOT NULL,
+			last_seen_at    TIMESTAMPTZ NOT NULL
 		)
 	`)
 	if err != nil {
@@ -62,10 +55,10 @@ func New(path string) (*Store, error) {
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS incidents (
-			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			id              BIGSERIAL PRIMARY KEY,
 			check_id        TEXT NOT NULL,
-			started_at      DATETIME NOT NULL,
-			resolved_at     DATETIME
+			started_at      TIMESTAMPTZ NOT NULL,
+			resolved_at     TIMESTAMPTZ
 		)
 	`)
 	if err != nil {
@@ -87,10 +80,10 @@ func New(path string) (*Store, error) {
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
-			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			id            BIGSERIAL PRIMARY KEY,
 			email         TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
-			created_at    DATETIME NOT NULL
+			created_at    TIMESTAMPTZ NOT NULL
 		)
 	`)
 	if err != nil {
@@ -101,15 +94,15 @@ func New(path string) (*Store, error) {
 		CREATE TABLE IF NOT EXISTS sessions (
 			token      TEXT PRIMARY KEY,
 			user_id    INTEGER NOT NULL REFERENCES users(id),
-			created_at DATETIME NOT NULL,
-			expires_at DATETIME NOT NULL
+			created_at TIMESTAMPTZ NOT NULL,
+			expires_at TIMESTAMPTZ NOT NULL
 		)
 	`)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("store: database ready at %s", path)
+	log.Printf("store: database ready")
 	return &Store{db: db}, nil
 }
 
@@ -117,7 +110,7 @@ func New(path string) (*Store, error) {
 func (s *Store) SaveResult(r proto.CheckResult) error {
 	_, err := s.db.Exec(`
 		INSERT INTO check_results (check_id, probe_id, type, target, up, latency_ms, error, timestamp)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`,
 		r.CheckID,
 		r.ProbeID,
@@ -137,9 +130,9 @@ func (s *Store) RecentResultsByProbe(checkID, probeID string, n int) ([]proto.Ch
 	rows, err := s.db.Query(`
 		SELECT probe_id, up
 		FROM check_results
-		WHERE check_id = ? AND probe_id = ?
+		WHERE check_id = $1 AND probe_id = $2
 		ORDER BY id DESC
-		LIMIT ?
+		LIMIT $3
 	`, checkID, probeID, n)
 	if err != nil {
 		return nil, err
@@ -166,7 +159,7 @@ func (s *Store) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, erro
 		WHERE id IN (
 			SELECT MAX(id)
 			FROM check_results
-			WHERE check_id = ?
+			WHERE check_id = $1
 			GROUP BY probe_id
 		)
 	`, checkID)
@@ -191,22 +184,22 @@ func (s *Store) RegisterProbe(probeID, version string) error {
 	now := time.Now().UTC()
 	_, err := s.db.Exec(`
 		INSERT INTO probes (probe_id, version, registered_at, last_seen_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(probe_id) DO UPDATE SET version=excluded.version, registered_at=excluded.registered_at, last_seen_at=excluded.last_seen_at
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (probe_id) DO UPDATE SET version=excluded.version, registered_at=excluded.registered_at, last_seen_at=excluded.last_seen_at
 	`, probeID, version, now, now)
 	return err
 }
 
 // UpdateProbeHeartbeat updates last_seen_at for a registered probe.
 func (s *Store) UpdateProbeHeartbeat(probeID string) error {
-	_, err := s.db.Exec(`UPDATE probes SET last_seen_at=? WHERE probe_id=?`, time.Now().UTC(), probeID)
+	_, err := s.db.Exec(`UPDATE probes SET last_seen_at=$1 WHERE probe_id=$2`, time.Now().UTC(), probeID)
 	return err
 }
 
 // IsProbeRegistered reports whether a probe_id exists in the probes table.
 func (s *Store) IsProbeRegistered(probeID string) (bool, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(1) FROM probes WHERE probe_id=?`, probeID).Scan(&count)
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM probes WHERE probe_id=$1`, probeID).Scan(&count)
 	return count > 0, err
 }
 
@@ -270,31 +263,11 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 	var statuses []CheckStatus
 	for rows.Next() {
 		var cs CheckStatus
-		var startedAt *string
+		var startedAt *time.Time
 		if err := rows.Scan(&cs.CheckID, &cs.Target, &cs.Up, &startedAt); err != nil {
 			return nil, err
 		}
-		if startedAt != nil {
-			// SQLite stores time.Time as "2006-01-02 15:04:05.999999999 +0000 UTC"
-			// Try several formats in order of likelihood.
-			var t time.Time
-			var parseErr error
-			for _, layout := range []string{
-				"2006-01-02 15:04:05.999999999 +0000 UTC",
-				"2006-01-02 15:04:05 +0000 UTC",
-				"2006-01-02 15:04:05",
-				time.RFC3339,
-			} {
-				t, parseErr = time.Parse(layout, *startedAt)
-				if parseErr == nil {
-					break
-				}
-			}
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			cs.IncidentSince = &t
-		}
+		cs.IncidentSince = startedAt
 		statuses = append(statuses, cs)
 	}
 	return statuses, rows.Err()
@@ -304,20 +277,20 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 // was already open (caller should skip alerting to avoid duplicate notifications).
 func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
 	var count int
-	err = s.db.QueryRow(`SELECT COUNT(1) FROM incidents WHERE check_id=? AND resolved_at IS NULL`, checkID).Scan(&count)
+	err = s.db.QueryRow(`SELECT COUNT(1) FROM incidents WHERE check_id=$1 AND resolved_at IS NULL`, checkID).Scan(&count)
 	if err != nil {
 		return false, err
 	}
 	if count > 0 {
 		return true, nil
 	}
-	_, err = s.db.Exec(`INSERT INTO incidents (check_id, started_at) VALUES (?, ?)`, checkID, time.Now().UTC())
+	_, err = s.db.Exec(`INSERT INTO incidents (check_id, started_at) VALUES ($1, $2)`, checkID, time.Now().UTC())
 	return false, err
 }
 
 // ResolveIncident marks the open incident for checkID as resolved.
 func (s *Store) ResolveIncident(checkID string) error {
-	_, err := s.db.Exec(`UPDATE incidents SET resolved_at=? WHERE check_id=? AND resolved_at IS NULL`, time.Now().UTC(), checkID)
+	_, err := s.db.Exec(`UPDATE incidents SET resolved_at=$1 WHERE check_id=$2 AND resolved_at IS NULL`, time.Now().UTC(), checkID)
 	return err
 }
 
@@ -332,13 +305,14 @@ type Check struct {
 // SeedChecks inserts checks that do not already exist in the database.
 // Existing checks (matched by id) are left unchanged. Used to bootstrap
 // from YAML config on startup without overwriting DB-managed checks.
-func (s *Store) SeedChecks(checks []Check) error {
+// If userID is non-zero, newly inserted checks are assigned to that user.
+func (s *Store) SeedChecks(checks []Check, userID int64) error {
 	for _, c := range checks {
 		_, err := s.db.Exec(`
-			INSERT INTO checks (id, type, target, webhook)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(id) DO NOTHING
-		`, c.ID, c.Type, c.Target, c.Webhook)
+			INSERT INTO checks (id, type, target, webhook, user_id)
+			VALUES ($1, $2, $3, $4, NULLIF($5, 0))
+			ON CONFLICT (id) DO NOTHING
+		`, c.ID, c.Type, c.Target, c.Webhook, userID)
 		if err != nil {
 			return err
 		}
@@ -348,7 +322,7 @@ func (s *Store) SeedChecks(checks []Check) error {
 
 // ListChecks returns all checks owned by userID.
 func (s *Store) ListChecks(userID int64) ([]Check, error) {
-	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks WHERE user_id=? ORDER BY id`, userID)
+	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks WHERE user_id=$1 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +361,7 @@ func (s *Store) ListAllChecks() ([]Check, error) {
 // GetCheck returns a single check by id, or (nil, nil) if not found.
 func (s *Store) GetCheck(id string) (*Check, error) {
 	var c Check
-	err := s.db.QueryRow(`SELECT id, type, target, webhook FROM checks WHERE id=?`, id).
+	err := s.db.QueryRow(`SELECT id, type, target, webhook FROM checks WHERE id=$1`, id).
 		Scan(&c.ID, &c.Type, &c.Target, &c.Webhook)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -400,21 +374,21 @@ func (s *Store) GetCheck(id string) (*Check, error) {
 
 // CreateCheck inserts a new check owned by userID.
 func (s *Store) CreateCheck(c Check, userID int64) error {
-	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook, user_id) VALUES (?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook, user_id) VALUES ($1, $2, $3, $4, $5)`,
 		c.ID, c.Type, c.Target, c.Webhook, userID)
 	return err
 }
 
 // UpdateCheck replaces type, target, and webhook for a check owned by userID.
 func (s *Store) UpdateCheck(c Check, userID int64) error {
-	_, err := s.db.Exec(`UPDATE checks SET type=?, target=?, webhook=? WHERE id=? AND user_id=?`,
+	_, err := s.db.Exec(`UPDATE checks SET type=$1, target=$2, webhook=$3 WHERE id=$4 AND user_id=$5`,
 		c.Type, c.Target, c.Webhook, c.ID, userID)
 	return err
 }
 
 // DeleteCheck removes a check owned by userID.
 func (s *Store) DeleteCheck(id string, userID int64) error {
-	_, err := s.db.Exec(`DELETE FROM checks WHERE id=? AND user_id=?`, id, userID)
+	_, err := s.db.Exec(`DELETE FROM checks WHERE id=$1 AND user_id=$2`, id, userID)
 	return err
 }
 
@@ -433,12 +407,11 @@ func (s *Store) CreateUser(email, password string) (*User, error) {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	res, err := s.db.Exec(`INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)`,
-		email, string(hash), now)
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
+	var id int64
+	err = s.db.QueryRow(
+		`INSERT INTO users (email, password_hash, created_at) VALUES ($1, $2, $3) RETURNING id`,
+		email, string(hash), now,
+	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +421,7 @@ func (s *Store) CreateUser(email, password string) (*User, error) {
 // AuthenticateUser verifies email+password and returns the user on success.
 func (s *Store) AuthenticateUser(email, password string) (*User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, created_at FROM users WHERE email=?`, email).
+	err := s.db.QueryRow(`SELECT id, email, password_hash, created_at FROM users WHERE email=$1`, email).
 		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -478,7 +451,7 @@ func (s *Store) CreateSession(userID int64) (string, error) {
 	}
 	token := hex.EncodeToString(b)
 	now := time.Now().UTC()
-	_, err := s.db.Exec(`INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)`,
 		token, userID, now, now.Add(30*24*time.Hour))
 	if err != nil {
 		return "", err
@@ -494,7 +467,7 @@ func (s *Store) GetSessionUser(token string) (*User, error) {
 		SELECT u.id, u.email, u.password_hash, u.created_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
-		WHERE s.token = ? AND s.expires_at > ?
+		WHERE s.token = $1 AND s.expires_at > $2
 	`, token, time.Now().UTC()).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -507,7 +480,7 @@ func (s *Store) GetSessionUser(token string) (*User, error) {
 
 // DeleteSession removes a session token (logout).
 func (s *Store) DeleteSession(token string) error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE token=?`, token)
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE token=$1`, token)
 	return err
 }
 
