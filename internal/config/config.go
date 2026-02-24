@@ -27,10 +27,11 @@ type ProbeConfig struct {
 }
 
 type Check struct {
-	ID      string `yaml:"id"`
-	Type    string `yaml:"type"`
-	Target  string `yaml:"target"`
-	Webhook string `yaml:"webhook"`
+	ID       string `yaml:"id"`
+	Type     string `yaml:"type"`
+	Target   string `yaml:"target"`
+	Webhook  string `yaml:"webhook"`
+	Interval int    `yaml:"interval"`
 }
 
 // LoadServer reads and parses a server.yaml config file.

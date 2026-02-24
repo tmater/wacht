@@ -78,6 +78,11 @@ func New(dsn string) (*Store, error) {
 		return nil, err
 	}
 
+	_, err = db.Exec(`ALTER TABLE checks ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30`)
+	if err != nil {
+		return nil, err
+	}
+
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id            BIGSERIAL PRIMARY KEY,
@@ -296,10 +301,11 @@ func (s *Store) ResolveIncident(checkID string) error {
 
 // Check represents a monitored endpoint stored in the database.
 type Check struct {
-	ID      string `json:"ID"`
-	Type    string `json:"Type"`
-	Target  string `json:"Target"`
-	Webhook string `json:"Webhook"`
+	ID       string `json:"ID"`
+	Type     string `json:"Type"`
+	Target   string `json:"Target"`
+	Webhook  string `json:"Webhook"`
+	Interval int    `json:"Interval"`
 }
 
 // SeedChecks inserts checks that do not already exist in the database.
@@ -308,11 +314,15 @@ type Check struct {
 // If userID is non-zero, newly inserted checks are assigned to that user.
 func (s *Store) SeedChecks(checks []Check, userID int64) error {
 	for _, c := range checks {
+		interval := c.Interval
+		if interval <= 0 {
+			interval = 30
+		}
 		_, err := s.db.Exec(`
-			INSERT INTO checks (id, type, target, webhook, user_id)
-			VALUES ($1, $2, $3, $4, NULLIF($5, 0))
+			INSERT INTO checks (id, type, target, webhook, user_id, interval_seconds)
+			VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6)
 			ON CONFLICT (id) DO NOTHING
-		`, c.ID, c.Type, c.Target, c.Webhook, userID)
+		`, c.ID, c.Type, c.Target, c.Webhook, userID, interval)
 		if err != nil {
 			return err
 		}
@@ -322,7 +332,7 @@ func (s *Store) SeedChecks(checks []Check, userID int64) error {
 
 // ListChecks returns all checks owned by userID.
 func (s *Store) ListChecks(userID int64) ([]Check, error) {
-	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks WHERE user_id=$1 ORDER BY id`, userID)
+	rows, err := s.db.Query(`SELECT id, type, target, webhook, interval_seconds FROM checks WHERE user_id=$1 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +341,7 @@ func (s *Store) ListChecks(userID int64) ([]Check, error) {
 	var checks []Check
 	for rows.Next() {
 		var c Check
-		if err := rows.Scan(&c.ID, &c.Type, &c.Target, &c.Webhook); err != nil {
+		if err := rows.Scan(&c.ID, &c.Type, &c.Target, &c.Webhook, &c.Interval); err != nil {
 			return nil, err
 		}
 		checks = append(checks, c)
@@ -341,7 +351,7 @@ func (s *Store) ListChecks(userID int64) ([]Check, error) {
 
 // ListAllChecks returns all checks regardless of owner. Used by probes.
 func (s *Store) ListAllChecks() ([]Check, error) {
-	rows, err := s.db.Query(`SELECT id, type, target, webhook FROM checks ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, type, target, webhook, interval_seconds FROM checks ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +360,7 @@ func (s *Store) ListAllChecks() ([]Check, error) {
 	var checks []Check
 	for rows.Next() {
 		var c Check
-		if err := rows.Scan(&c.ID, &c.Type, &c.Target, &c.Webhook); err != nil {
+		if err := rows.Scan(&c.ID, &c.Type, &c.Target, &c.Webhook, &c.Interval); err != nil {
 			return nil, err
 		}
 		checks = append(checks, c)
@@ -361,8 +371,8 @@ func (s *Store) ListAllChecks() ([]Check, error) {
 // GetCheck returns a single check by id, or (nil, nil) if not found.
 func (s *Store) GetCheck(id string) (*Check, error) {
 	var c Check
-	err := s.db.QueryRow(`SELECT id, type, target, webhook FROM checks WHERE id=$1`, id).
-		Scan(&c.ID, &c.Type, &c.Target, &c.Webhook)
+	err := s.db.QueryRow(`SELECT id, type, target, webhook, interval_seconds FROM checks WHERE id=$1`, id).
+		Scan(&c.ID, &c.Type, &c.Target, &c.Webhook, &c.Interval)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -374,15 +384,23 @@ func (s *Store) GetCheck(id string) (*Check, error) {
 
 // CreateCheck inserts a new check owned by userID.
 func (s *Store) CreateCheck(c Check, userID int64) error {
-	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook, user_id) VALUES ($1, $2, $3, $4, $5)`,
-		c.ID, c.Type, c.Target, c.Webhook, userID)
+	interval := c.Interval
+	if interval <= 0 {
+		interval = 30
+	}
+	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook, user_id, interval_seconds) VALUES ($1, $2, $3, $4, $5, $6)`,
+		c.ID, c.Type, c.Target, c.Webhook, userID, interval)
 	return err
 }
 
-// UpdateCheck replaces type, target, and webhook for a check owned by userID.
+// UpdateCheck replaces type, target, webhook, and interval_seconds for a check owned by userID.
 func (s *Store) UpdateCheck(c Check, userID int64) error {
-	_, err := s.db.Exec(`UPDATE checks SET type=$1, target=$2, webhook=$3 WHERE id=$4 AND user_id=$5`,
-		c.Type, c.Target, c.Webhook, c.ID, userID)
+	interval := c.Interval
+	if interval <= 0 {
+		interval = 30
+	}
+	_, err := s.db.Exec(`UPDATE checks SET type=$1, target=$2, webhook=$3, interval_seconds=$4 WHERE id=$5 AND user_id=$6`,
+		c.Type, c.Target, c.Webhook, interval, c.ID, userID)
 	return err
 }
 

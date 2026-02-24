@@ -7,6 +7,7 @@ export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
   const [type, setType] = useState(initial?.Type ?? 'http')
   const [target, setTarget] = useState(initial?.Target ?? '')
   const [webhook, setWebhook] = useState(initial?.Webhook ?? '')
+  const [interval, setInterval] = useState(initial?.Interval ?? 30)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -15,7 +16,7 @@ export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
     setErr(null)
     setSaving(true)
     try {
-      const body = JSON.stringify({ ID: id, Type: type, Target: target, Webhook: webhook })
+      const body = JSON.stringify({ ID: id, Type: type, Target: target, Webhook: webhook, Interval: parseInt(interval, 10) })
       const res = isNew
         ? await fetch(`${API_URL}/api/checks`, { method: 'POST', headers: authHeaders(), body })
         : await fetch(`${API_URL}/api/checks/${initial.ID}`, { method: 'PUT', headers: authHeaders(), body })
@@ -72,6 +73,17 @@ export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
             onChange={e => setWebhook(e.target.value)}
             placeholder="https://hooks.example.com/..."
             className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Interval <span className="text-gray-600">(seconds)</span></label>
+          <input
+            type="number"
+            min="1"
+            max="86400"
+            value={interval}
+            onChange={e => setInterval(e.target.value)}
+            className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-gray-400"
           />
         </div>
       </div>

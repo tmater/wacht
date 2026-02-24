@@ -313,6 +313,10 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id, type, and target are required", http.StatusBadRequest)
 		return
 	}
+	if c.Interval < 0 || c.Interval > 86400 {
+		http.Error(w, "interval must be between 0 and 86400 seconds", http.StatusBadRequest)
+		return
+	}
 	if err := h.store.CreateCheck(c, user.ID); err != nil {
 		log.Printf("handler: failed to create check id=%s: %s", c.ID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -333,6 +337,10 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	c.ID = id
 	if c.Type == "" || c.Target == "" {
 		http.Error(w, "type and target are required", http.StatusBadRequest)
+		return
+	}
+	if c.Interval < 0 || c.Interval > 86400 {
+		http.Error(w, "interval must be between 0 and 86400 seconds", http.StatusBadRequest)
 		return
 	}
 	if err := h.store.UpdateCheck(c, user.ID); err != nil {

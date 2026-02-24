@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/tmater/wacht/internal/check"
@@ -40,40 +42,70 @@ func main() {
 	}
 	log.Printf("probe: fetched %d checks from server", len(checks))
 
-	go heartbeatLoop(cfg.Server, cfg.Secret, cfg.ProbeID, cfg.HeartbeatInterval, func() {
+	var (
+		mu       sync.Mutex
+		cancelFn context.CancelFunc
+	)
+
+	startScheduler := func(cs []config.Check) {
+		mu.Lock()
+		if cancelFn != nil {
+			cancelFn()
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelFn = cancel
+		mu.Unlock()
+
+		for _, c := range cs {
+			c := c
+			interval := time.Duration(c.Interval) * time.Second
+			if interval <= 0 {
+				interval = 30 * time.Second
+			}
+			go func() {
+				runAndPost(cfg, c)
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						runAndPost(cfg, c)
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+		}
+	}
+
+	startScheduler(checks)
+
+	heartbeatLoop(cfg.Server, cfg.Secret, cfg.ProbeID, cfg.HeartbeatInterval, func() {
 		updated, err := fetchChecks(cfg.Server, cfg.Secret)
 		if err != nil {
 			log.Printf("probe: failed to refresh checks: %s", err)
 			return
 		}
-		checks = updated
-		log.Printf("probe: refreshed %d checks from server", len(checks))
+		log.Printf("probe: refreshed %d checks from server", len(updated))
+		startScheduler(updated)
 	})
+}
 
-	interval := 30 * time.Second
-
-	for {
-		for _, c := range checks {
-			var result proto.CheckResult
-			switch c.Type {
-			case "http", "":
-				result = check.HTTP(c.ID, cfg.ProbeID, c.Target)
-			case "tcp":
-				result = check.TCP(c.ID, cfg.ProbeID, c.Target)
-			case "dns":
-				result = check.DNS(c.ID, cfg.ProbeID, c.Target)
-			default:
-				log.Printf("probe: unknown check type %q for check_id=%s, skipping", c.Type, c.ID)
-				continue
-			}
-
-			if err := postResult(cfg.Server, cfg.Secret, result); err != nil {
-				log.Printf("failed to post result: %s", err)
-			}
-		}
-
-		log.Printf("sleeping %s until next round", interval)
-		time.Sleep(interval)
+func runAndPost(cfg *config.ProbeConfig, c config.Check) {
+	var result proto.CheckResult
+	switch c.Type {
+	case "http", "":
+		result = check.HTTP(c.ID, cfg.ProbeID, c.Target)
+	case "tcp":
+		result = check.TCP(c.ID, cfg.ProbeID, c.Target)
+	case "dns":
+		result = check.DNS(c.ID, cfg.ProbeID, c.Target)
+	default:
+		log.Printf("probe: unknown check type %q for check_id=%s, skipping", c.Type, c.ID)
+		return
+	}
+	if err := postResult(cfg.Server, cfg.Secret, result); err != nil {
+		log.Printf("failed to post result: %s", err)
 	}
 }
 
