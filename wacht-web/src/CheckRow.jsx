@@ -1,6 +1,9 @@
+import StatusBadge from './StatusBadge.jsx'
+
 export default function CheckRow({ check, statusCheck, probesUp, probesTotal, onEdit }) {
   const up = statusCheck?.status === 'up'
   const hasStatus = !!statusCheck
+  const badgeStatus = !hasStatus ? 'pending' : up ? 'up' : 'down'
 
   return (
     <div className="flex items-center justify-between py-2">
@@ -18,11 +21,7 @@ export default function CheckRow({ check, statusCheck, probesUp, probesTotal, on
         {probesTotal > 0 && (
           <span className="text-xs text-gray-500">{probesUp}/{probesTotal}</span>
         )}
-        {hasStatus && (
-          <span className={`w-16 text-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${up ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
-            {up ? 'UP' : 'DOWN'}
-          </span>
-        )}
+        <StatusBadge status={badgeStatus} />
 
       </div>
     </div>

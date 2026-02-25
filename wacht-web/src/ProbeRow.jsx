@@ -1,3 +1,5 @@
+import StatusBadge from './StatusBadge.jsx'
+
 export default function ProbeRow({ probe }) {
   return (
     <div className="flex items-center justify-between py-2">
@@ -6,9 +8,7 @@ export default function ProbeRow({ probe }) {
         <p className="text-xs text-gray-500">
           {new Date(probe.last_seen_at).toLocaleTimeString()}
         </p>
-        <span className={`w-16 text-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${probe.online ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
-          {probe.online ? 'UP' : 'DOWN'}
-        </span>
+        <StatusBadge status={probe.online ? 'up' : 'down'} />
       </div>
     </div>
   )
