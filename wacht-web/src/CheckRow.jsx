@@ -6,23 +6,19 @@ export default function CheckRow({ check, statusCheck, probesUp, probesTotal, on
   const badgeStatus = !hasStatus ? 'pending' : up ? 'up' : 'down'
 
   return (
-    <div className="flex items-center justify-between py-2">
-      <div className="min-w-0 flex items-center gap-3">
-        <div className="min-w-0 flex items-center gap-2">
-          <p className="font-mono text-sm text-gray-100">{check.Target}</p>
-          {statusCheck?.incident_since && (
-            <p className="text-xs text-red-400"> down since {new Date(statusCheck.incident_since).toLocaleString()}</p>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <button onClick={onEdit} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
-        <span className="text-xs text-gray-600 uppercase">{check.Type}</span>
-        {probesTotal > 0 && (
-          <span className="text-xs text-gray-500">{probesUp}/{probesTotal}</span>
+    <div className="flex items-center gap-4 py-2">
+      <p className="font-mono text-sm text-gray-100 w-30 shrink-0 truncate">{check.ID}</p>
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        <p className="font-mono text-xs text-gray-500 truncate">{check.Target}</p>
+        {statusCheck?.incident_since && (
+          <p className="text-xs text-red-400 shrink-0">down since {new Date(statusCheck.incident_since).toLocaleString()}</p>
         )}
+      </div>
+      <div className="flex items-center gap-4 shrink-0">
+        <span className="text-xs text-gray-600 uppercase w-8 text-center">{check.Type}</span>
+        <span className="text-xs text-gray-500 w-8 text-center">{probesTotal > 0 ? `${probesUp}/${probesTotal}` : ''}</span>
+        <button onClick={onEdit} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
         <StatusBadge status={badgeStatus} />
-
       </div>
     </div>
   )
