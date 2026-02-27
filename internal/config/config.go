@@ -9,9 +9,10 @@ import (
 )
 
 type ServerConfig struct {
-	Secret   string   `yaml:"secret"`
-	Checks   []Check  `yaml:"checks"`
-	SeedUser SeedUser `yaml:"seed_user"`
+	Secret        string   `yaml:"secret"`
+	Checks        []Check  `yaml:"checks"`
+	SeedUser      SeedUser `yaml:"seed_user"`
+	RetentionDays int      `yaml:"retention_days"` // 0 → default 30
 }
 
 type SeedUser struct {

@@ -42,6 +42,14 @@ func New(dsn string) (*Store, error) {
 	}
 
 	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_check_results_timestamp
+		ON check_results (timestamp)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS probes (
 			probe_id        TEXT PRIMARY KEY,
 			version         TEXT NOT NULL,
@@ -519,6 +527,16 @@ func (s *Store) UpdateUserPassword(userID int64, currentPassword, newPassword st
 	}
 	_, err = s.db.Exec(`UPDATE users SET password_hash=$1 WHERE id=$2`, string(newHash), userID)
 	return err == nil, err
+}
+
+// EvictOldResults deletes check_results older than the given cutoff.
+// Returns the number of rows deleted.
+func (s *Store) EvictOldResults(cutoff time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM check_results WHERE timestamp < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // Close closes the database connection.
