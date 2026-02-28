@@ -17,9 +17,8 @@ export default function App() {
   function handleLogout() {
     clearToken()
     clearEmail()
-    setTokenState(null)
-    setEmail(null)
-    setPage('dashboard')
+    const loginUrl = import.meta.env.VITE_LOGIN_URL ?? '/'
+    window.location.href = loginUrl
   }
 
   if (!token) return <LoginPage onLogin={handleLogin} />
