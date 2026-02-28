@@ -3,11 +3,13 @@ import { API_URL, REFRESH_INTERVAL_MS, authHeaders } from './api.js'
 import CheckForm from './CheckForm.jsx'
 import CheckRow from './CheckRow.jsx'
 import ProbeRow from './ProbeRow.jsx'
+import IncidentRow from './IncidentRow.jsx'
 
 export default function Dashboard({ email, onLogout, onAccount }) {
   const [checks, setChecks] = useState([])
   const [statuses, setStatuses] = useState([])
   const [probes, setProbes] = useState([])
+  const [incidents, setIncidents] = useState([])
   const [lastUpdated, setLastUpdated] = useState(null)
   const [error, setError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -15,18 +17,21 @@ export default function Dashboard({ email, onLogout, onAccount }) {
 
   async function fetchAll() {
     try {
-      const [statusRes, checksRes] = await Promise.all([
+      const [statusRes, checksRes, incidentsRes] = await Promise.all([
         fetch(`${API_URL}/status`, { headers: authHeaders() }),
         fetch(`${API_URL}/api/checks`, { headers: authHeaders() }),
+        fetch(`${API_URL}/api/incidents`, { headers: authHeaders() }),
       ])
       if (checksRes.status === 401) { onLogout(); return }
       if (!statusRes.ok) throw new Error(`status HTTP ${statusRes.status}`)
       if (!checksRes.ok) throw new Error(`checks HTTP ${checksRes.status}`)
       const statusData = await statusRes.json()
       const checksData = await checksRes.json()
+      const incidentsData = incidentsRes.ok ? await incidentsRes.json() : []
       setStatuses(statusData.checks ?? [])
       setProbes(statusData.probes ?? [])
       setChecks(checksData ?? [])
+      setIncidents(incidentsData ?? [])
       setLastUpdated(new Date())
       setError(null)
     } catch (e) {
@@ -163,11 +168,23 @@ export default function Dashboard({ email, onLogout, onAccount }) {
 
         {/* Probes section */}
         {probes.length > 0 && (
-          <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+          <div className="mb-8 rounded-lg border border-gray-700 bg-gray-800 p-4">
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Probes</h2>
             <div className="divide-y divide-gray-700">
               {probes.map(probe => (
                 <ProbeRow key={probe.probe_id} probe={probe} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Incident history section */}
+        {incidents.length > 0 && (
+          <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Incident History</h2>
+            <div className="divide-y divide-gray-700">
+              {incidents.map(inc => (
+                <IncidentRow key={inc.id} incident={inc} />
               ))}
             </div>
           </div>

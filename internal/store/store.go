@@ -529,6 +529,38 @@ func (s *Store) UpdateUserPassword(userID int64, currentPassword, newPassword st
 	return err == nil, err
 }
 
+// Incident represents a recorded outage for a check.
+type Incident struct {
+	ID         int64
+	CheckID    string
+	StartedAt  time.Time
+	ResolvedAt *time.Time
+}
+
+// ListIncidents returns the most recent limit incidents ordered newest first.
+func (s *Store) ListIncidents(limit int) ([]Incident, error) {
+	rows, err := s.db.Query(`
+		SELECT id, check_id, started_at, resolved_at
+		FROM incidents
+		ORDER BY started_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var incidents []Incident
+	for rows.Next() {
+		var inc Incident
+		if err := rows.Scan(&inc.ID, &inc.CheckID, &inc.StartedAt, &inc.ResolvedAt); err != nil {
+			return nil, err
+		}
+		incidents = append(incidents, inc)
+	}
+	return incidents, rows.Err()
+}
+
 // EvictOldResults deletes check_results older than the given cutoff.
 // Returns the number of rows deleted.
 func (s *Store) EvictOldResults(cutoff time.Time) (int64, error) {

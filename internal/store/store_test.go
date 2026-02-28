@@ -212,6 +212,73 @@ func TestEvictOldResults_DeletesOldKeepsNew(t *testing.T) {
 	}
 }
 
+func TestListIncidents_OrderAndResolved(t *testing.T) {
+	s := newTestStore(t)
+
+	// Open and resolve two incidents, then open a third (still open).
+	if _, err := s.OpenIncident("check-1"); err != nil {
+		t.Fatalf("OpenIncident check-1: %v", err)
+	}
+	if err := s.ResolveIncident("check-1"); err != nil {
+		t.Fatalf("ResolveIncident check-1: %v", err)
+	}
+
+	if _, err := s.OpenIncident("check-2"); err != nil {
+		t.Fatalf("OpenIncident check-2: %v", err)
+	}
+	if err := s.ResolveIncident("check-2"); err != nil {
+		t.Fatalf("ResolveIncident check-2: %v", err)
+	}
+
+	if _, err := s.OpenIncident("check-1"); err != nil {
+		t.Fatalf("OpenIncident check-1 (second): %v", err)
+	}
+
+	incidents, err := s.ListIncidents(10)
+	if err != nil {
+		t.Fatalf("ListIncidents: %v", err)
+	}
+	if len(incidents) != 3 {
+		t.Fatalf("expected 3 incidents, got %d", len(incidents))
+	}
+
+	// Newest first — the still-open check-1 incident was inserted last.
+	if incidents[0].CheckID != "check-1" {
+		t.Errorf("incidents[0]: expected check-1, got %s", incidents[0].CheckID)
+	}
+	if incidents[0].ResolvedAt != nil {
+		t.Errorf("incidents[0]: expected open (ResolvedAt nil), got resolved")
+	}
+
+	// The two resolved incidents should have ResolvedAt set.
+	for _, inc := range incidents[1:] {
+		if inc.ResolvedAt == nil {
+			t.Errorf("incident id=%d check_id=%s: expected resolved, got open", inc.ID, inc.CheckID)
+		}
+	}
+}
+
+func TestListIncidents_RespectsLimit(t *testing.T) {
+	s := newTestStore(t)
+
+	for i := 0; i < 5; i++ {
+		if _, err := s.OpenIncident("check-1"); err != nil {
+			t.Fatalf("OpenIncident: %v", err)
+		}
+		if err := s.ResolveIncident("check-1"); err != nil {
+			t.Fatalf("ResolveIncident: %v", err)
+		}
+	}
+
+	incidents, err := s.ListIncidents(3)
+	if err != nil {
+		t.Fatalf("ListIncidents: %v", err)
+	}
+	if len(incidents) != 3 {
+		t.Errorf("expected 3 incidents (limit), got %d", len(incidents))
+	}
+}
+
 func TestEvictOldResults_NothingToDelete(t *testing.T) {
 	s := newTestStore(t)
 

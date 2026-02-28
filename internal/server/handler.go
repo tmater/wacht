@@ -57,6 +57,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/checks/{id}", h.requireSession(h.handleUpdateCheck))
 	mux.HandleFunc("DELETE /api/checks/{id}", h.requireSession(h.handleDeleteCheck))
 	mux.HandleFunc("PUT /api/auth/change-password", h.requireSession(h.handleChangePassword))
+	mux.HandleFunc("GET /api/incidents", h.requireSession(h.handleListIncidents))
 
 	return withCORS(mux)
 }
@@ -516,6 +517,45 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListIncidents returns the most recent 50 incidents, newest first.
+func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
+	incidents, err := h.store.ListIncidents(50)
+	if err != nil {
+		log.Printf("handler: failed to list incidents: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	type incidentJSON struct {
+		ID         int64   `json:"id"`
+		CheckID    string  `json:"check_id"`
+		StartedAt  string  `json:"started_at"`
+		ResolvedAt *string `json:"resolved_at,omitempty"`
+		DurationMs *int64  `json:"duration_ms,omitempty"`
+	}
+
+	out := make([]incidentJSON, 0, len(incidents))
+	for _, inc := range incidents {
+		ij := incidentJSON{
+			ID:        inc.ID,
+			CheckID:   inc.CheckID,
+			StartedAt: inc.StartedAt.UTC().Format(time.RFC3339),
+		}
+		if inc.ResolvedAt != nil {
+			s := inc.ResolvedAt.UTC().Format(time.RFC3339)
+			ij.ResolvedAt = &s
+			ms := inc.ResolvedAt.Sub(inc.StartedAt).Milliseconds()
+			ij.DurationMs = &ms
+		}
+		out = append(out, ij)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		log.Printf("handler: failed to encode incidents: %s", err)
+	}
 }
 
 func (h *Handler) checkByID(id string) *store.Check {

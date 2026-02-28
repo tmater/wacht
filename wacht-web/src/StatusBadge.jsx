@@ -1,7 +1,9 @@
 const styles = {
-  up:      'bg-green-900 text-green-300',
-  down:    'bg-red-900 text-red-300',
-  pending: 'bg-gray-700 text-gray-400',
+  up:       'bg-green-900 text-green-300',
+  down:     'bg-red-900 text-red-300',
+  pending:  'bg-gray-700 text-gray-400',
+  open:     'bg-red-900 text-red-300',
+  resolved: 'bg-gray-700 text-gray-400',
 }
 
 export default function StatusBadge({ status }) {
