@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { API_URL, setToken, saveEmail } from './api.js'
+import * as ui from './ui.js'
 
 export default function LoginPage({ onLogin }) {
   const [email, setEmail] = useState('')
@@ -36,33 +37,29 @@ export default function LoginPage({ onLogin }) {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <h1 className="text-xl font-bold text-gray-100 mb-6">Wacht</h1>
-        <form onSubmit={handleSubmit} className="rounded-lg border border-gray-700 bg-gray-800 p-6">
+        <form onSubmit={handleSubmit} className={`${ui.card} p-6`}>
           <div className="mb-4">
-            <label className="block text-xs text-gray-400 mb-1">Email</label>
+            <label className={ui.label}>Email</label>
             <input
               type="email"
               required
               value={email}
               onChange={e => setEmail(e.target.value)}
-              className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-gray-400"
+              className={ui.input}
             />
           </div>
           <div className="mb-4">
-            <label className="block text-xs text-gray-400 mb-1">Password</label>
+            <label className={ui.label}>Password</label>
             <input
               type="password"
               required
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full rounded bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-gray-400"
+              className={ui.input}
             />
           </div>
-          {err && <p className="mb-3 text-xs text-red-400">{err}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
-          >
+          {err && <p className={`mb-3 ${ui.errorText}`}>{err}</p>}
+          <button type="submit" disabled={loading} className={`w-full ${ui.btn.primaryMd}`}>
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
           <p className="mt-4 text-xs text-gray-500 text-center">

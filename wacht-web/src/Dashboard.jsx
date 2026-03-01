@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { API_URL, REFRESH_INTERVAL_MS, authHeaders } from './api.js'
+import * as ui from './ui.js'
 import CheckForm from './CheckForm.jsx'
 import CheckRow from './CheckRow.jsx'
 import ProbeRow from './ProbeRow.jsx'
@@ -74,7 +75,7 @@ export default function Dashboard({ email, onLogout, onAccount }) {
   const probesUp = probes.filter(p => p.online).length
 
   return (
-    <div className="min-h-screen bg-gray-900 p-6">
+    <div className={ui.page}>
       <div className="mx-auto max-w-3xl">
 
         {/* Header */}
@@ -86,31 +87,17 @@ export default function Dashboard({ email, onLogout, onAccount }) {
             )}
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500">{email}</span>
-              <button
-                onClick={onAccount}
-                className="text-xs text-gray-500 hover:text-gray-300"
-              >
-                Account
-              </button>
-              <button
-                onClick={handleLogoutClick}
-                className="text-xs text-gray-500 hover:text-gray-300"
-              >
-                Sign out
-              </button>
+              <button onClick={onAccount} className={ui.btn.ghost}>Account</button>
+              <button onClick={handleLogoutClick} className={ui.btn.ghost}>Sign out</button>
             </div>
           </div>
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-lg border border-red-800 bg-red-950 p-3 text-sm text-red-400">
-            Could not reach server: {error}
-          </div>
-        )}
+        {error && <div className={`mb-4 ${ui.errorBox}`}>Could not reach server: {error}</div>}
 
         {/* Summary bar */}
         {statuses.length > 0 && (
-          <div className="mb-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
+          <div className={`mb-4 ${ui.card} p-4`}>
             <p className="text-sm text-gray-400">
               {allUp
                 ? <span className="font-semibold text-green-400">All checks passing</span>
@@ -124,11 +111,11 @@ export default function Dashboard({ email, onLogout, onAccount }) {
         {/* Checks section */}
         <div className="mb-8">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Checks</h2>
+            <h2 className={ui.sectionHeader}>Checks</h2>
             {!showAddForm && (
               <button
                 onClick={() => { setShowAddForm(true); setEditingId(null) }}
-                className="rounded bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-500"
+                className={ui.btn.primary}
               >
                 + Add check
               </button>
@@ -152,7 +139,7 @@ export default function Dashboard({ email, onLogout, onAccount }) {
             <p className="text-sm text-gray-500">No checks yet.</p>
           )}
 
-          <div className="rounded-lg border border-gray-700 bg-gray-800 px-4 divide-y divide-gray-700">
+          <div className={`${ui.card} px-4 divide-y divide-gray-700`}>
             {checks.map(check => (
               <CheckRow
                 key={check.ID}
@@ -168,8 +155,8 @@ export default function Dashboard({ email, onLogout, onAccount }) {
 
         {/* Probes section */}
         {probes.length > 0 && (
-          <div className="mb-8 rounded-lg border border-gray-700 bg-gray-800 p-4">
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Probes</h2>
+          <div className={`mb-8 ${ui.card} p-4`}>
+            <h2 className={`mb-2 ${ui.sectionHeader}`}>Probes</h2>
             <div className="divide-y divide-gray-700">
               {probes.map(probe => (
                 <ProbeRow key={probe.probe_id} probe={probe} />
@@ -180,8 +167,8 @@ export default function Dashboard({ email, onLogout, onAccount }) {
 
         {/* Incident history section */}
         {incidents.length > 0 && (
-          <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Incident History</h2>
+          <div className={`${ui.card} p-4`}>
+            <h2 className={`mb-3 ${ui.sectionHeader}`}>Incident History</h2>
             <div className="divide-y divide-gray-700">
               {incidents.map(inc => (
                 <IncidentRow key={inc.id} incident={inc} />

@@ -1,4 +1,5 @@
 import StatusBadge from './StatusBadge.jsx'
+import * as ui from './ui.js'
 
 export default function CheckRow({ check, statusCheck, probesUp, probesTotal, onEdit }) {
   const up = statusCheck?.status === 'up'
@@ -17,7 +18,7 @@ export default function CheckRow({ check, statusCheck, probesUp, probesTotal, on
       <div className="flex items-center gap-4 shrink-0">
         <span className="text-xs text-gray-600 uppercase w-8 text-center">{check.Type}</span>
         <span className="text-xs text-gray-500 w-8 text-center">{probesTotal > 0 ? `${probesUp}/${probesTotal}` : ''}</span>
-        <button onClick={onEdit} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
+        <button onClick={onEdit} className={ui.btn.ghost}>Edit</button>
         <StatusBadge status={badgeStatus} />
       </div>
     </div>
