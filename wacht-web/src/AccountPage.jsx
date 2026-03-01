@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { API_URL, authHeaders } from './api.js'
 import * as ui from './ui.js'
 
-export default function AccountPage({ email, isAdmin, onBack, onLogout }) {
+export default function AccountPage({ email, isAdmin, onLogout }) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -44,11 +44,6 @@ export default function AccountPage({ email, isAdmin, onBack, onLogout }) {
   return (
     <div className={ui.page}>
       <div className="mx-auto max-w-3xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-100">Wacht</h1>
-          <button onClick={onBack} className={ui.btn.ghost}>← Back</button>
-        </div>
-
         <h2 className={`mb-4 ${ui.sectionHeader}`}>Account</h2>
 
         <div className={`${ui.card} p-6 max-w-sm mb-8`}>

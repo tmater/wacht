@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { API_URL, setToken, saveEmail } from './api.js'
 import * as ui from './ui.js'
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage({ onLogin, appName = 'Wacht' }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState(null)
@@ -57,7 +57,7 @@ export default function LoginPage({ onLogin }) {
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
-        <h1 className="text-xl font-bold text-gray-100 mb-6">Wacht</h1>
+        <h1 className="text-xl font-bold text-gray-100 mb-6">{appName}</h1>
 
         {submitted ? (
           <div className={`${ui.card} p-6`}>

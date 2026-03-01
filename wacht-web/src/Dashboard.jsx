@@ -6,7 +6,7 @@ import CheckRow from './CheckRow.jsx'
 import ProbeRow from './ProbeRow.jsx'
 import IncidentRow from './IncidentRow.jsx'
 
-export default function Dashboard({ email, onLogout, onAccount }) {
+export default function Dashboard({ onLogout, showProbes = true }) {
   const [checks, setChecks] = useState([])
   const [statuses, setStatuses] = useState([])
   const [probes, setProbes] = useState([])
@@ -78,20 +78,7 @@ export default function Dashboard({ email, onLogout, onAccount }) {
     <div className={ui.page}>
       <div className="mx-auto max-w-3xl">
 
-        {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-100">Wacht</h1>
-          <div className="flex items-center gap-4">
-            {lastUpdated && (
-              <p className="text-xs text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</p>
-            )}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">{email}</span>
-              <button onClick={onAccount} className={ui.btn.ghost}>Account</button>
-              <button onClick={handleLogoutClick} className={ui.btn.ghost}>Sign out</button>
-            </div>
-          </div>
-        </div>
+        {lastUpdated && <p className="mb-4 text-xs text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</p>}
 
         {error && <div className={`mb-4 ${ui.errorBox}`}>Could not reach server: {error}</div>}
 
@@ -154,7 +141,7 @@ export default function Dashboard({ email, onLogout, onAccount }) {
         </div>
 
         {/* Probes section */}
-        {probes.length > 0 && (
+        {showProbes && probes.length > 0 && (
           <div className={`mb-8 ${ui.card} p-4`}>
             <h2 className={`mb-2 ${ui.sectionHeader}`}>Probes</h2>
             <div className="divide-y divide-gray-700">

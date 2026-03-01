@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { API_URL, getToken, getEmail, clearToken, clearEmail, authHeaders } from './api.js'
 import LoginPage from './LoginPage.jsx'
+import Navbar from './Navbar.jsx'
 import Dashboard from './Dashboard.jsx'
 import AccountPage from './AccountPage.jsx'
 
-export default function App() {
+export default function App({ appName = 'Wacht', navExtra = null, showProbes = true }) {
   const [token, setTokenState] = useState(getToken())
   const [email, setEmail] = useState(getEmail())
   const [isAdmin, setIsAdmin] = useState(false)
@@ -32,8 +33,14 @@ export default function App() {
     window.location.href = loginUrl
   }
 
-  if (!token) return <LoginPage onLogin={handleLogin} />
+  if (!token) return <LoginPage onLogin={handleLogin} appName={appName} />
   if (!meLoaded) return null
-  if (page === 'account') return <AccountPage email={email} isAdmin={isAdmin} onBack={() => setPage('dashboard')} onLogout={handleLogout} />
-  return <Dashboard email={email} onLogout={handleLogout} onAccount={() => setPage('account')} />
+
+  return (
+    <div className="min-h-screen bg-gray-900">
+      <Navbar email={email} page={page} onNavigate={setPage} onLogout={handleLogout} appName={appName} navExtra={navExtra} />
+      {page === 'account'   && <AccountPage email={email} isAdmin={isAdmin} onLogout={handleLogout} />}
+      {page === 'dashboard' && <Dashboard onLogout={handleLogout} showProbes={showProbes} />}
+    </div>
+  )
 }
