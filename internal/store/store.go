@@ -1,14 +1,11 @@
 package store
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"log"
 	"time"
 
 	"github.com/tmater/wacht/internal/proto"
-	"golang.org/x/crypto/bcrypt"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -109,6 +106,23 @@ func New(dsn string) (*Store, error) {
 			user_id    INTEGER NOT NULL REFERENCES users(id),
 			created_at TIMESTAMPTZ NOT NULL,
 			expires_at TIMESTAMPTZ NOT NULL
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS signup_requests (
+			id           BIGSERIAL PRIMARY KEY,
+			email        TEXT NOT NULL UNIQUE,
+			requested_at TIMESTAMPTZ NOT NULL,
+			status       TEXT NOT NULL DEFAULT 'pending'
 		)
 	`)
 	if err != nil {
@@ -416,117 +430,6 @@ func (s *Store) UpdateCheck(c Check, userID int64) error {
 func (s *Store) DeleteCheck(id string, userID int64) error {
 	_, err := s.db.Exec(`DELETE FROM checks WHERE id=$1 AND user_id=$2`, id, userID)
 	return err
-}
-
-// User represents a registered user.
-type User struct {
-	ID           int64
-	Email        string
-	PasswordHash string
-	CreatedAt    time.Time
-}
-
-// CreateUser hashes the password and inserts a new user. Returns the created user.
-func (s *Store) CreateUser(email, password string) (*User, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	var id int64
-	err = s.db.QueryRow(
-		`INSERT INTO users (email, password_hash, created_at) VALUES ($1, $2, $3) RETURNING id`,
-		email, string(hash), now,
-	).Scan(&id)
-	if err != nil {
-		return nil, err
-	}
-	return &User{ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now}, nil
-}
-
-// AuthenticateUser verifies email+password and returns the user on success.
-func (s *Store) AuthenticateUser(email, password string) (*User, error) {
-	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, created_at FROM users WHERE email=$1`, email).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-		return nil, nil // wrong password
-	}
-	return &u, nil
-}
-
-// UserExists reports whether any user exists in the database.
-func (s *Store) UserExists() (bool, error) {
-	var count int
-	err := s.db.QueryRow(`SELECT COUNT(1) FROM users`).Scan(&count)
-	return count > 0, err
-}
-
-// CreateSession generates a random token, stores it, and returns it.
-// Sessions expire after 30 days.
-func (s *Store) CreateSession(userID int64) (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	token := hex.EncodeToString(b)
-	now := time.Now().UTC()
-	_, err := s.db.Exec(`INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)`,
-		token, userID, now, now.Add(30*24*time.Hour))
-	if err != nil {
-		return "", err
-	}
-	return token, nil
-}
-
-// GetSessionUser returns the user for a valid, non-expired session token.
-// Returns nil if the token is missing or expired.
-func (s *Store) GetSessionUser(token string) (*User, error) {
-	var u User
-	err := s.db.QueryRow(`
-		SELECT u.id, u.email, u.password_hash, u.created_at
-		FROM sessions s
-		JOIN users u ON u.id = s.user_id
-		WHERE s.token = $1 AND s.expires_at > $2
-	`, token, time.Now().UTC()).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-// DeleteSession removes a session token (logout).
-func (s *Store) DeleteSession(token string) error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE token=$1`, token)
-	return err
-}
-
-// UpdateUserPassword verifies the current password and replaces it with a new one.
-// Returns false if the current password is wrong.
-func (s *Store) UpdateUserPassword(userID int64, currentPassword, newPassword string) (bool, error) {
-	var hash string
-	err := s.db.QueryRow(`SELECT password_hash FROM users WHERE id=$1`, userID).Scan(&hash)
-	if err != nil {
-		return false, err
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(currentPassword)); err != nil {
-		return false, nil // wrong current password
-	}
-	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return false, err
-	}
-	_, err = s.db.Exec(`UPDATE users SET password_hash=$1 WHERE id=$2`, string(newHash), userID)
-	return err == nil, err
 }
 
 // Incident represents a recorded outage for a check.

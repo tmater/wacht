@@ -1,12 +1,9 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
@@ -16,20 +13,22 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-type contextKey string
-
-const contextKeyUser contextKey = "user"
-
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
-	store       *store.Store
-	config      *config.ServerConfig
-	loginLimiter *rateLimiter
+	store         *store.Store
+	config        *config.ServerConfig
+	loginLimiter  *rateLimiter
+	signupLimiter *rateLimiter
 }
 
 // New creates a new Handler.
 func New(store *store.Store, cfg *config.ServerConfig) *Handler {
-	return &Handler{store: store, config: cfg, loginLimiter: newRateLimiter()}
+	return &Handler{
+		store:         store,
+		config:        cfg,
+		loginLimiter:  newRateLimiter(),
+		signupLimiter: newRateLimiter(),
+	}
 }
 
 // Routes registers all HTTP routes.
@@ -40,6 +39,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("POST /api/auth/login", h.loginLimiter.middleware(h.handleLogin))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
+	mux.HandleFunc("POST /api/auth/request-access", h.signupLimiter.middleware(h.handleRequestAccess))
 
 	// Probe routes — shared secret auth (internal, not customer-facing).
 	probe := http.NewServeMux()
@@ -50,12 +50,18 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("/api/probes/", h.requireSecret(probe))
 	mux.Handle("/api/results", h.requireSecret(probe))
 
+	// Admin routes — session auth, is_admin required.
+	mux.HandleFunc("GET /api/admin/signup-requests", h.requireAdmin(h.handleListSignupRequests))
+	mux.HandleFunc("POST /api/admin/signup-requests/{id}/approve", h.requireAdmin(h.handleApproveSignupRequest))
+	mux.HandleFunc("DELETE /api/admin/signup-requests/{id}", h.requireAdmin(h.handleDeleteSignupRequest))
+
 	// Dashboard routes — session auth.
 	mux.HandleFunc("GET /status", h.requireSession(h.handleStatus))
 	mux.HandleFunc("GET /api/checks", h.requireSession(h.handleListChecks))
 	mux.HandleFunc("POST /api/checks", h.requireSession(h.handleCreateCheck))
 	mux.HandleFunc("PUT /api/checks/{id}", h.requireSession(h.handleUpdateCheck))
 	mux.HandleFunc("DELETE /api/checks/{id}", h.requireSession(h.handleDeleteCheck))
+	mux.HandleFunc("GET /api/auth/me", h.requireSession(h.handleMe))
 	mux.HandleFunc("PUT /api/auth/change-password", h.requireSession(h.handleChangePassword))
 	mux.HandleFunc("GET /api/incidents", h.requireSession(h.handleListIncidents))
 
@@ -67,7 +73,7 @@ func (h *Handler) Routes() http.Handler {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Wacht-Secret")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -136,141 +142,6 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks, "probes": probes}); err != nil {
 		log.Printf("status: failed to encode response: %s", err)
 	}
-}
-
-// requireSecret is middleware that rejects requests missing the correct X-Wacht-Secret header.
-func (h *Handler) requireSecret(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Wacht-Secret") != h.config.Secret {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// requireSession validates the Bearer token and injects the user into context.
-// In Go, context.WithValue is the standard way to pass request-scoped values
-// through middleware — similar to ThreadLocal in Java.
-func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if token == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		user, err := h.store.GetSessionUser(token)
-		if err != nil {
-			log.Printf("auth: session lookup error: %s", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if user == nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		ctx := context.WithValue(r.Context(), contextKeyUser, user)
-		next(w, r.WithContext(ctx))
-	}
-}
-
-// sessionUser extracts the authenticated user from the request context.
-func sessionUser(r *http.Request) *store.User {
-	u, _ := r.Context().Value(contextKeyUser).(*store.User)
-	return u
-}
-
-// rateLimiter is a simple per-IP token bucket rate limiter.
-// In Java terms: a filter backed by a ConcurrentHashMap of per-IP state.
-type rateLimiter struct {
-	mu     sync.Mutex
-	tokens map[string]*tokenBucket
-}
-
-type tokenBucket struct {
-	count    int
-	resetAt  time.Time
-}
-
-const (
-	rateLimitRequests = 10
-	rateLimitWindow   = time.Minute
-)
-
-func newRateLimiter() *rateLimiter {
-	return &rateLimiter{tokens: make(map[string]*tokenBucket)}
-}
-
-func (rl *rateLimiter) allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	b, ok := rl.tokens[ip]
-	if !ok || time.Now().After(b.resetAt) {
-		rl.tokens[ip] = &tokenBucket{count: 1, resetAt: time.Now().Add(rateLimitWindow)}
-		return true
-	}
-	if b.count >= rateLimitRequests {
-		return false
-	}
-	b.count++
-	return true
-}
-
-func (rl *rateLimiter) middleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if i := strings.LastIndex(ip, ":"); i != -1 {
-			ip = ip[:i]
-		}
-		if !rl.allow(ip) {
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// handleLogin authenticates a user and returns a session token.
-func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	user, err := h.store.AuthenticateUser(req.Email, req.Password)
-	if err != nil {
-		log.Printf("auth: authenticate error email=%s: %s", req.Email, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if user == nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	token, err := h.store.CreateSession(user.ID)
-	if err != nil {
-		log.Printf("auth: failed to create session user_id=%d: %s", user.ID, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": user.Email})
-}
-
-// handleLogout deletes the session token.
-func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err := h.store.DeleteSession(token); err != nil {
-		log.Printf("auth: failed to delete session: %s", err)
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleProbeChecks returns all checks for probes to run (no user scoping).
@@ -441,8 +312,6 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("quorum: failed to query recent results for check_id=%s: %s", result.CheckID, err)
 	} else if quorum.MajorityDown(recent) {
-		// Majority vote passed — verify each down probe has consecutive failures
-		// to filter out transient blips before alerting.
 		allConsecutive := true
 		for _, r := range recent {
 			if r.Up {
@@ -482,40 +351,11 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// Majority reports up — resolve any open incident.
 		if err := h.store.ResolveIncident(result.CheckID); err != nil {
 			log.Printf("alert: failed to resolve incident check_id=%s: %s", result.CheckID, err)
 		}
 	}
 
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleChangePassword verifies the current password and sets a new one.
-func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	user := sessionUser(r)
-	var req struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if req.CurrentPassword == "" || req.NewPassword == "" {
-		http.Error(w, "current_password and new_password are required", http.StatusBadRequest)
-		return
-	}
-	ok, err := h.store.UpdateUserPassword(user.ID, req.CurrentPassword, req.NewPassword)
-	if err != nil {
-		log.Printf("auth: failed to update password user_id=%d: %s", user.ID, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if !ok {
-		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
-		return
-	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

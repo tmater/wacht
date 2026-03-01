@@ -39,7 +39,7 @@ func main() {
 			log.Fatalf("failed to check for existing users: %s", err)
 		}
 		if !exists {
-			u, err := db.CreateUser(cfg.SeedUser.Email, cfg.SeedUser.Password)
+			u, err := db.CreateAdminUser(cfg.SeedUser.Email, cfg.SeedUser.Password)
 			if err != nil {
 				log.Fatalf("failed to seed user: %s", err)
 			}

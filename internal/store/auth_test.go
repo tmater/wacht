@@ -7,7 +7,7 @@ import (
 func TestCreateUser_HashesPassword(t *testing.T) {
 	s := newTestStore(t)
 
-	user, err := s.CreateUser("alice@example.com", "secret")
+	user, err := s.CreateUser("alice@example.com", "secret", false)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -29,10 +29,10 @@ func TestCreateUser_HashesPassword(t *testing.T) {
 func TestCreateUser_DuplicateEmail(t *testing.T) {
 	s := newTestStore(t)
 
-	if _, err := s.CreateUser("bob@example.com", "pass1"); err != nil {
+	if _, err := s.CreateUser("bob@example.com", "pass1", false); err != nil {
 		t.Fatalf("first CreateUser: %v", err)
 	}
-	_, err := s.CreateUser("bob@example.com", "pass2")
+	_, err := s.CreateUser("bob@example.com", "pass2", false)
 	if err == nil {
 		t.Fatal("expected error on duplicate email, got nil")
 	}
@@ -41,7 +41,7 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 func TestAuthenticateUser_CorrectPassword(t *testing.T) {
 	s := newTestStore(t)
 
-	if _, err := s.CreateUser("carol@example.com", "correcthorsebattery"); err != nil {
+	if _, err := s.CreateUser("carol@example.com", "correcthorsebattery", false); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestAuthenticateUser_CorrectPassword(t *testing.T) {
 func TestAuthenticateUser_WrongPassword(t *testing.T) {
 	s := newTestStore(t)
 
-	if _, err := s.CreateUser("dave@example.com", "rightpassword"); err != nil {
+	if _, err := s.CreateUser("dave@example.com", "rightpassword", false); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestUserExists(t *testing.T) {
 		t.Fatal("expected false on empty store")
 	}
 
-	if _, err := s.CreateUser("eve@example.com", "pass"); err != nil {
+	if _, err := s.CreateUser("eve@example.com", "pass", false); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestUserExists(t *testing.T) {
 func TestSession_CreateAndLookup(t *testing.T) {
 	s := newTestStore(t)
 
-	user, err := s.CreateUser("frank@example.com", "pass")
+	user, err := s.CreateUser("frank@example.com", "pass", false)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestSession_InvalidToken(t *testing.T) {
 func TestSession_Delete(t *testing.T) {
 	s := newTestStore(t)
 
-	user, err := s.CreateUser("grace@example.com", "pass")
+	user, err := s.CreateUser("grace@example.com", "pass", false)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}

@@ -31,7 +31,7 @@ func TestCheckCRUD(t *testing.T) {
 	s := newTestStore(t)
 
 	// Create a user to own the checks.
-	user, err := s.CreateUser("test@example.com", "password")
+	user, err := s.CreateUser("test@example.com", "password", false)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -87,11 +87,11 @@ func TestCheckCRUD(t *testing.T) {
 func TestCheckCrossUserIsolation(t *testing.T) {
 	s := newTestStore(t)
 
-	alice, err := s.CreateUser("alice@example.com", "pass")
+	alice, err := s.CreateUser("alice@example.com", "pass", false)
 	if err != nil {
 		t.Fatalf("CreateUser alice: %v", err)
 	}
-	bob, err := s.CreateUser("bob@example.com", "pass")
+	bob, err := s.CreateUser("bob@example.com", "pass", false)
 	if err != nil {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
