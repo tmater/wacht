@@ -2,135 +2,60 @@ package store
 
 import (
 	"database/sql"
+	"embed"
 	"log"
 	"time"
 
-	"github.com/tmater/wacht/internal/proto"
+	"github.com/golang-migrate/migrate/v4"
+	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/tmater/wacht/internal/proto"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // Store handles persistence of check results.
 type Store struct {
 	db *sql.DB
 }
 
-// New opens the Postgres database and creates tables if they don't exist.
+// New opens the Postgres database and runs any pending migrations.
 func New(dsn string) (*Store, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS check_results (
-			id          BIGSERIAL PRIMARY KEY,
-			check_id    TEXT NOT NULL,
-			probe_id    TEXT NOT NULL,
-			type        TEXT NOT NULL,
-			target      TEXT NOT NULL,
-			up          BOOLEAN NOT NULL,
-			latency_ms  INTEGER NOT NULL,
-			error       TEXT,
-			timestamp   TIMESTAMPTZ NOT NULL
-		)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_check_results_timestamp
-		ON check_results (timestamp)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS probes (
-			probe_id        TEXT PRIMARY KEY,
-			version         TEXT NOT NULL,
-			registered_at   TIMESTAMPTZ NOT NULL,
-			last_seen_at    TIMESTAMPTZ NOT NULL
-		)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS incidents (
-			id              BIGSERIAL PRIMARY KEY,
-			check_id        TEXT NOT NULL,
-			started_at      TIMESTAMPTZ NOT NULL,
-			resolved_at     TIMESTAMPTZ
-		)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS checks (
-			id      TEXT PRIMARY KEY,
-			type    TEXT NOT NULL,
-			target  TEXT NOT NULL,
-			webhook TEXT NOT NULL DEFAULT '',
-			user_id INTEGER
-		)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`ALTER TABLE checks ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS users (
-			id            BIGSERIAL PRIMARY KEY,
-			email         TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
-			created_at    TIMESTAMPTZ NOT NULL
-		)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS sessions (
-			token      TEXT PRIMARY KEY,
-			user_id    INTEGER NOT NULL REFERENCES users(id),
-			created_at TIMESTAMPTZ NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL
-		)
-	`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS signup_requests (
-			id           BIGSERIAL PRIMARY KEY,
-			email        TEXT NOT NULL UNIQUE,
-			requested_at TIMESTAMPTZ NOT NULL,
-			status       TEXT NOT NULL DEFAULT 'pending'
-		)
-	`)
-	if err != nil {
+	if err := runMigrations(db, dsn); err != nil {
 		return nil, err
 	}
 
 	log.Printf("store: database ready")
 	return &Store{db: db}, nil
+}
+
+func runMigrations(db *sql.DB, dsn string) error {
+	src, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return err
+	}
+
+	driver, err := pgxmigrate.WithInstance(db, &pgxmigrate.Config{})
+	if err != nil {
+		return err
+	}
+
+	m, err := migrate.NewWithInstance("iofs", src, "pgx", driver)
+	if err != nil {
+		return err
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return err
+	}
+	return nil
 }
 
 // SaveResult persists a check result to the database.
