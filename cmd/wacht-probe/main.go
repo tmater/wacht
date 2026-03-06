@@ -36,7 +36,7 @@ func main() {
 		log.Fatalf("probe: failed to register with server: %s", err)
 	}
 
-	checks, err := fetchChecks(cfg.Server, cfg.Secret)
+	checks, err := fetchChecks(cfg.Server, cfg.Secret, cfg.ProbeID)
 	if err != nil {
 		log.Fatalf("probe: failed to fetch checks from server: %s", err)
 	}
@@ -81,7 +81,7 @@ func main() {
 	startScheduler(checks)
 
 	heartbeatLoop(cfg.Server, cfg.Secret, cfg.ProbeID, cfg.HeartbeatInterval, func() {
-		updated, err := fetchChecks(cfg.Server, cfg.Secret)
+		updated, err := fetchChecks(cfg.Server, cfg.Secret, cfg.ProbeID)
 		if err != nil {
 			log.Printf("probe: failed to refresh checks: %s", err)
 			return
@@ -109,17 +109,25 @@ func runAndPost(cfg *config.ProbeConfig, c config.Check) {
 	}
 }
 
+func setProbeHeaders(req *http.Request, probeID, secret string) {
+	req.Header.Set(probeIDHeader, probeID)
+	req.Header.Set(probeSecretHeader, secret)
+}
+
+const (
+	probeIDHeader     = "X-Wacht-Probe-ID"
+	probeSecretHeader = "X-Wacht-Probe-Secret"
+)
+
 func heartbeatLoop(serverURL, secret, probeID string, interval time.Duration, onHeartbeat func()) {
 	for {
 		time.Sleep(interval)
-		body, _ := json.Marshal(map[string]string{"probe_id": probeID})
-		req, err := http.NewRequest("POST", serverURL+"/api/probes/heartbeat", bytes.NewReader(body))
+		req, err := http.NewRequest("POST", serverURL+"/api/probes/heartbeat", nil)
 		if err != nil {
 			log.Printf("probe: heartbeat error: %s", err)
 			continue
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Wacht-Secret", secret)
+		setProbeHeaders(req, probeID, secret)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Printf("probe: heartbeat error: %s", err)
@@ -131,12 +139,12 @@ func heartbeatLoop(serverURL, secret, probeID string, interval time.Duration, on
 	}
 }
 
-func fetchChecks(serverURL, secret string) ([]config.Check, error) {
+func fetchChecks(serverURL, secret, probeID string) ([]config.Check, error) {
 	req, err := http.NewRequest("GET", serverURL+"/api/probes/checks", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Wacht-Secret", secret)
+	setProbeHeaders(req, probeID, secret)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -153,7 +161,7 @@ func fetchChecks(serverURL, secret string) ([]config.Check, error) {
 }
 
 func register(serverURL, secret, probeID string) error {
-	body, err := json.Marshal(map[string]string{"probe_id": probeID, "version": "dev"})
+	body, err := json.Marshal(map[string]string{"version": "dev"})
 	if err != nil {
 		return err
 	}
@@ -162,7 +170,7 @@ func register(serverURL, secret, probeID string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Wacht-Secret", secret)
+	setProbeHeaders(req, probeID, secret)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -186,7 +194,7 @@ func postResult(serverURL, secret string, result proto.CheckResult) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Wacht-Secret", secret)
+	setProbeHeaders(req, result.ProbeID, secret)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

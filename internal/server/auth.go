@@ -14,16 +14,38 @@ import (
 
 type contextKey string
 
-const contextKeyUser contextKey = "user"
+const (
+	contextKeyUser  contextKey = "user"
+	contextKeyProbe contextKey = "probe"
+)
 
-// requireSecret is middleware that rejects requests missing the correct X-Wacht-Secret header.
-func (h *Handler) requireSecret(next http.Handler) http.Handler {
+const (
+	probeIDHeader     = "X-Wacht-Probe-ID"
+	probeSecretHeader = "X-Wacht-Probe-Secret"
+)
+
+// requireProbeAuth authenticates an individual probe using its provisioned
+// probe_id + secret and injects that probe into the request context.
+func (h *Handler) requireProbeAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Wacht-Secret") != h.config.Secret {
+		probeID := strings.TrimSpace(r.Header.Get(probeIDHeader))
+		secret := strings.TrimSpace(r.Header.Get(probeSecretHeader))
+		if probeID == "" || secret == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		probe, err := h.store.AuthenticateProbe(probeID, secret)
+		if err != nil {
+			log.Printf("auth: probe lookup error probe_id=%s: %s", probeID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if probe == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), contextKeyProbe, probe)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -54,6 +76,11 @@ func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
 func sessionUser(r *http.Request) *store.User {
 	u, _ := r.Context().Value(contextKeyUser).(*store.User)
 	return u
+}
+
+func authenticatedProbe(r *http.Request) *store.Probe {
+	p, _ := r.Context().Value(contextKeyProbe).(*store.Probe)
+	return p
 }
 
 // requireAdmin validates the session and additionally requires is_admin=true.

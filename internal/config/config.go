@@ -9,15 +9,20 @@ import (
 )
 
 type ServerConfig struct {
-	Secret        string   `yaml:"secret"`
-	Checks        []Check  `yaml:"checks"`
-	SeedUser      SeedUser `yaml:"seed_user"`
-	RetentionDays int      `yaml:"retention_days"` // 0 → default 30
+	Probes        []ProbeAuth `yaml:"probes"`
+	Checks        []Check     `yaml:"checks"`
+	SeedUser      SeedUser    `yaml:"seed_user"`
+	RetentionDays int         `yaml:"retention_days"` // 0 → default 30
 }
 
 type SeedUser struct {
 	Email    string `yaml:"email"`
 	Password string `yaml:"password"`
+}
+
+type ProbeAuth struct {
+	ID     string `yaml:"id"`
+	Secret string `yaml:"secret"`
 }
 
 type ProbeConfig struct {
@@ -47,8 +52,18 @@ func LoadServer(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if cfg.Secret == "" {
-		return nil, fmt.Errorf("config: secret is required")
+	seen := make(map[string]struct{}, len(cfg.Probes))
+	for i, probe := range cfg.Probes {
+		if probe.ID == "" {
+			return nil, fmt.Errorf("config: probes[%d].id is required", i)
+		}
+		if probe.Secret == "" {
+			return nil, fmt.Errorf("config: probes[%d].secret is required", i)
+		}
+		if _, ok := seen[probe.ID]; ok {
+			return nil, fmt.Errorf("config: duplicate probe id %q", probe.ID)
+		}
+		seen[probe.ID] = struct{}{}
 	}
 	return &cfg, nil
 }

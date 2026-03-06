@@ -1,4 +1,10 @@
-secret: changeme
+probes:
+  - id: probe-1
+    secret: changeme-probe-1
+  - id: probe-2
+    secret: changeme-probe-2
+  - id: probe-3
+    secret: changeme-probe-3
 checks:
   - id: check-cloudflare
     type: http

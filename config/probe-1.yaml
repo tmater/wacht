@@ -1,4 +1,4 @@
-secret: changeme
+secret: changeme-probe-1
 server: http://server:8080
 probe_id: probe-1
 heartbeat_interval: 30s

@@ -15,10 +15,16 @@ git clone https://github.com/tmater/wacht.git
 cd wacht
 ```
 
-Edit `config/server.yaml` — set a strong shared secret and configure your checks:
+Edit `config/server.yaml` — provision each probe with its own secret and configure your checks:
 
 ```yaml
-secret: your-secret-here
+probes:
+  - id: probe-1
+    secret: replace-with-a-strong-secret-1
+  - id: probe-2
+    secret: replace-with-a-strong-secret-2
+  - id: probe-3
+    secret: replace-with-a-strong-secret-3
 checks:
   - id: my-site
     type: http
@@ -29,10 +35,10 @@ checks:
     target: db.example.com:5432
 ```
 
-Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — use the same secret:
+Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each probe must use the matching secret provisioned in `config/server.yaml`:
 
 ```yaml
-secret: your-secret-here
+secret: replace-with-a-strong-secret-1
 server: http://server:8080
 probe_id: probe-1
 heartbeat_interval: 30s
@@ -78,7 +84,7 @@ Webhook delivery is best-effort — if the endpoint is unreachable, the error is
 
 ## Status page
 
-`GET /status` returns the current state of all checks. No authentication required.
+`GET /status` returns the current state of all checks for the authenticated user.
 
 ```sh
 curl http://localhost:8080/status

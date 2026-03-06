@@ -32,6 +32,17 @@ func main() {
 	}
 	defer db.Close()
 
+	probes := make([]store.ProbeSeed, len(cfg.Probes))
+	for i, probe := range cfg.Probes {
+		probes[i] = store.ProbeSeed{ProbeID: probe.ID, Secret: probe.Secret}
+	}
+	if err := db.SeedProbes(probes); err != nil {
+		log.Fatalf("failed to seed probe credentials: %s", err)
+	}
+	if len(probes) == 0 {
+		log.Printf("warning: no probes configured; probe authentication will reject all requests")
+	}
+
 	var seedUserID int64
 	if cfg.SeedUser.Email != "" && cfg.SeedUser.Password != "" {
 		exists, err := db.UserExists()

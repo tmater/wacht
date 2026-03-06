@@ -1,4 +1,6 @@
-secret: ci-smoke-secret
+probes:
+  - id: probe-ci
+    secret: ci-smoke-secret
 seed_user:
   email: ci@wacht.local
   password: ci-smoke-password

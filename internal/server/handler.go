@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -41,14 +42,14 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
 	mux.HandleFunc("POST /api/auth/request-access", h.signupLimiter.middleware(h.handleRequestAccess))
 
-	// Probe routes — shared secret auth (internal, not customer-facing).
+	// Probe routes — per-probe auth.
 	probe := http.NewServeMux()
 	probe.HandleFunc("POST /api/probes/register", h.handleProbeRegister)
 	probe.HandleFunc("GET /api/probes/checks", h.handleProbeChecks)
 	probe.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
 	probe.HandleFunc("POST /api/results", h.handleResult)
-	mux.Handle("/api/probes/", h.requireSecret(probe))
-	mux.Handle("/api/results", h.requireSecret(probe))
+	mux.Handle("/api/probes/", h.requireProbeAuth(probe))
+	mux.Handle("/api/results", h.requireProbeAuth(probe))
 
 	// Admin routes — session auth, is_admin required.
 	mux.HandleFunc("GET /api/admin/signup-requests", h.requireAdmin(h.handleListSignupRequests))
@@ -73,7 +74,7 @@ func (h *Handler) Routes() http.Handler {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Wacht-Secret")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Wacht-Probe-ID, X-Wacht-Probe-Secret")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -83,7 +84,7 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// handleStatus serves the public status page as JSON.
+// handleStatus serves the authenticated status view as JSON.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	statuses, err := h.store.CheckStatuses()
 	if err != nil {
@@ -107,9 +108,9 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type probeJSON struct {
-		ProbeID    string `json:"probe_id"`
-		Online     bool   `json:"online"`
-		LastSeenAt string `json:"last_seen_at"`
+		ProbeID    string  `json:"probe_id"`
+		Online     bool    `json:"online"`
+		LastSeenAt *string `json:"last_seen_at,omitempty"`
 	}
 
 	checks := make([]checkJSON, 0, len(statuses))
@@ -131,11 +132,14 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	probes := make([]probeJSON, 0, len(probeStatuses))
 	for _, ps := range probeStatuses {
-		probes = append(probes, probeJSON{
-			ProbeID:    ps.ProbeID,
-			Online:     time.Since(ps.LastSeenAt) < 90*time.Second,
-			LastSeenAt: ps.LastSeenAt.UTC().Format(time.RFC3339),
-		})
+		var lastSeenAt *string
+		online := false
+		if ps.LastSeenAt != nil {
+			s := ps.LastSeenAt.UTC().Format(time.RFC3339)
+			lastSeenAt = &s
+			online = time.Since(*ps.LastSeenAt) < 90*time.Second
+		}
+		probes = append(probes, probeJSON{ProbeID: ps.ProbeID, Online: online, LastSeenAt: lastSeenAt})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -237,68 +241,77 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 
 // handleHeartbeat updates last_seen_at for a registered probe.
 func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	probe := authenticatedProbe(r)
 	var req struct {
 		ProbeID string `json:"probe_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.ProbeID == "" {
-		http.Error(w, "missing probe_id", http.StatusBadRequest)
+	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
+		http.Error(w, "probe_id does not match authenticated probe", http.StatusBadRequest)
 		return
 	}
-	if err := h.store.UpdateProbeHeartbeat(req.ProbeID); err != nil {
-		log.Printf("handler: failed to update heartbeat probe_id=%s: %s", req.ProbeID, err)
+	if err := h.store.UpdateProbeHeartbeat(probe.ProbeID); err != nil {
+		log.Printf("handler: failed to update heartbeat probe_id=%s: %s", probe.ProbeID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleProbeRegister registers a probe on startup.
+// handleProbeRegister records an authenticated probe startup.
 func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
+	probe := authenticatedProbe(r)
 	var req struct {
 		ProbeID string `json:"probe_id"`
 		Version string `json:"version"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.ProbeID == "" {
-		http.Error(w, "missing probe_id", http.StatusBadRequest)
+	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
+		http.Error(w, "probe_id does not match authenticated probe", http.StatusBadRequest)
 		return
 	}
-	if err := h.store.RegisterProbe(req.ProbeID, req.Version); err != nil {
-		log.Printf("handler: failed to register probe_id=%s: %s", req.ProbeID, err)
+	if err := h.store.RegisterProbe(probe.ProbeID, req.Version); err != nil {
+		log.Printf("handler: failed to register probe_id=%s: %s", probe.ProbeID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("handler: registered probe_id=%s version=%s", req.ProbeID, req.Version)
+	log.Printf("handler: registered probe_id=%s version=%s", probe.ProbeID, req.Version)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleResult receives a check result from a probe and saves it.
 func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
+	probe := authenticatedProbe(r)
 	var result proto.CheckResult
 	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
 		log.Printf("handler: failed to decode result: %s", err)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-
-	registered, err := h.store.IsProbeRegistered(result.ProbeID)
+	if result.ProbeID != "" && result.ProbeID != probe.ProbeID {
+		http.Error(w, "probe_id does not match authenticated probe", http.StatusBadRequest)
+		return
+	}
+	check, err := h.store.GetCheck(result.CheckID)
 	if err != nil {
-		log.Printf("handler: failed to check registration probe_id=%s: %s", result.ProbeID, err)
+		log.Printf("handler: failed to look up check id=%s: %s", result.CheckID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !registered {
-		log.Printf("handler: rejected result from unregistered probe_id=%s", result.ProbeID)
-		http.Error(w, "probe not registered", http.StatusForbidden)
+	if check == nil {
+		http.Error(w, "unknown check_id", http.StatusBadRequest)
 		return
 	}
+	result.ProbeID = probe.ProbeID
+	result.Type = proto.CheckType(check.Type)
+	result.Target = check.Target
+	result.Timestamp = time.Now().UTC()
 
 	log.Printf("handler: received result check_id=%s probe_id=%s up=%v", result.CheckID, result.ProbeID, result.Up)
 
@@ -334,7 +347,7 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("alert: failed to open incident check_id=%s: %s", result.CheckID, err)
 			} else if !alreadyOpen {
-				if check := h.checkByID(result.CheckID); check != nil && check.Webhook != "" {
+				if check.Webhook != "" {
 					payload := alert.AlertPayload{
 						CheckID:     result.CheckID,
 						Target:      check.Target,

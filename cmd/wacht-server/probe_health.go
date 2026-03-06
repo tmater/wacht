@@ -18,8 +18,12 @@ func staleProbeLoop(db *store.Store) {
 			continue
 		}
 		for _, ps := range statuses {
-			if time.Since(ps.LastSeenAt) > staleThreshold {
-				log.Printf("stale probe: probe_id=%s last_seen=%s ago", ps.ProbeID, time.Since(ps.LastSeenAt).Round(time.Second))
+			if ps.LastSeenAt == nil {
+				log.Printf("stale probe: probe_id=%s has never checked in", ps.ProbeID)
+				continue
+			}
+			if time.Since(*ps.LastSeenAt) > staleThreshold {
+				log.Printf("stale probe: probe_id=%s last_seen=%s ago", ps.ProbeID, time.Since(*ps.LastSeenAt).Round(time.Second))
 			}
 		}
 	}

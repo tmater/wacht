@@ -14,9 +14,12 @@ CREATE INDEX idx_check_results_timestamp ON check_results (timestamp);
 
 CREATE TABLE probes (
     probe_id      TEXT PRIMARY KEY,
-    version       TEXT NOT NULL,
+    secret_hash   TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'active',
+    version       TEXT NOT NULL DEFAULT '',
     registered_at TIMESTAMPTZ NOT NULL,
-    last_seen_at  TIMESTAMPTZ NOT NULL
+    last_seen_at  TIMESTAMPTZ,
+    CONSTRAINT probes_status_check CHECK (status IN ('active', 'revoked'))
 );
 
 CREATE TABLE incidents (
