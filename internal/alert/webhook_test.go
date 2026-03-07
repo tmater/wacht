@@ -31,7 +31,7 @@ func TestFire(t *testing.T) {
 		ProbesTotal: 3,
 	}
 
-	if err := Fire(srv.URL, payload); err != nil {
+	if err := fireWithClient(http.DefaultClient, srv.URL, payload); err != nil {
 		t.Fatalf("Fire returned error: %s", err)
 	}
 
@@ -52,8 +52,41 @@ func TestFire_NonSuccessStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := Fire(srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := fireWithClient(http.DefaultClient, srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
 	if err == nil {
 		t.Fatal("expected error for non-2xx response, got nil")
+	}
+}
+
+func TestFire_DoesNotFollowRedirects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://example.com/webhook", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	err := fireWithClient(newWebhookClient(), srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	if err == nil {
+		t.Fatal("expected redirect response to be treated as an error")
+	}
+}
+
+func TestValidateWebhookURL_RejectsLocalhost(t *testing.T) {
+	err := ValidateWebhookURL("http://localhost/webhook")
+	if err == nil {
+		t.Fatal("expected localhost webhook to be rejected")
+	}
+}
+
+func TestValidateWebhookURL_RejectsPrivateIPLiteral(t *testing.T) {
+	err := ValidateWebhookURL("http://127.0.0.1/webhook")
+	if err == nil {
+		t.Fatal("expected private IP webhook to be rejected")
+	}
+}
+
+func TestFire_RejectsPrivateAddress(t *testing.T) {
+	err := Fire("http://127.0.0.1/webhook", AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	if err == nil {
+		t.Fatal("expected private destination to be rejected")
 	}
 }

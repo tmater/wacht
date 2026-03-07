@@ -80,7 +80,9 @@ Webhook payload:
 }
 ```
 
-Webhook delivery is best-effort — if the endpoint is unreachable, the error is logged and no retry is attempted.
+Webhook delivery is best-effort. Webhook URLs must be public HTTP(S)
+endpoints; loopback, private, and link-local destinations are rejected.
+Delivery is timed out after 5 seconds, and no retry is attempted.
 
 ## Status page
 

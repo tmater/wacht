@@ -12,7 +12,6 @@ checks:
   - id: check-up
     type: http
     target: http://mock:9090/up
-    webhook: http://localhost/webhook-placeholder
   - id: check-down
     type: http
     target: http://mock:9090/down

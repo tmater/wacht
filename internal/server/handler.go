@@ -193,6 +193,10 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "interval must be between 0 and 86400 seconds", http.StatusBadRequest)
 		return
 	}
+	if err := alert.ValidateWebhookURL(c.Webhook); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.store.CreateCheck(c, user.ID); err != nil {
 		log.Printf("handler: failed to create check id=%s: %s", c.ID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -217,6 +221,10 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Interval < 0 || c.Interval > 86400 {
 		http.Error(w, "interval must be between 0 and 86400 seconds", http.StatusBadRequest)
+		return
+	}
+	if err := alert.ValidateWebhookURL(c.Webhook); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := h.store.UpdateCheck(c, user.ID); err != nil {
