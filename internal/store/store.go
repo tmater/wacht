@@ -187,7 +187,10 @@ func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
 	if count > 0 {
 		return true, nil
 	}
-	_, err = s.db.Exec(`INSERT INTO incidents (check_id, started_at) VALUES ($1, $2)`, checkID, time.Now().UTC())
+	_, err = s.db.Exec(`
+		INSERT INTO incidents (check_id, user_id, started_at)
+		VALUES ($1, (SELECT user_id FROM checks WHERE id = $1), $2)
+	`, checkID, time.Now().UTC())
 	return false, err
 }
 
@@ -316,14 +319,16 @@ type Incident struct {
 	ResolvedAt *time.Time
 }
 
-// ListIncidents returns the most recent limit incidents ordered newest first.
-func (s *Store) ListIncidents(limit int) ([]Incident, error) {
+// ListIncidents returns the most recent limit incidents for userID ordered
+// newest first.
+func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 	rows, err := s.db.Query(`
 		SELECT id, check_id, started_at, resolved_at
 		FROM incidents
+		WHERE user_id = $1
 		ORDER BY started_at DESC
-		LIMIT $1
-	`, limit)
+		LIMIT $2
+	`, userID, limit)
 	if err != nil {
 		return nil, err
 	}

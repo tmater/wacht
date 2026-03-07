@@ -372,9 +372,11 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListIncidents returns the most recent 50 incidents, newest first.
+// handleListIncidents returns the most recent 50 incidents for the
+// authenticated user, newest first.
 func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
-	incidents, err := h.store.ListIncidents(50)
+	user := sessionUser(r)
+	incidents, err := h.store.ListIncidents(user.ID, 50)
 	if err != nil {
 		log.Printf("handler: failed to list incidents: %s", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

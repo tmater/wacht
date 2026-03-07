@@ -215,6 +215,17 @@ func TestEvictOldResults_DeletesOldKeepsNew(t *testing.T) {
 func TestListIncidents_OrderAndResolved(t *testing.T) {
 	s := newTestStore(t)
 
+	user, err := s.CreateUser("incidents@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+		t.Fatalf("CreateCheck check-1: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "check-2", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+		t.Fatalf("CreateCheck check-2: %v", err)
+	}
+
 	// Open and resolve two incidents, then open a third (still open).
 	if _, err := s.OpenIncident("check-1"); err != nil {
 		t.Fatalf("OpenIncident check-1: %v", err)
@@ -234,7 +245,7 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 		t.Fatalf("OpenIncident check-1 (second): %v", err)
 	}
 
-	incidents, err := s.ListIncidents(10)
+	incidents, err := s.ListIncidents(user.ID, 10)
 	if err != nil {
 		t.Fatalf("ListIncidents: %v", err)
 	}
@@ -261,6 +272,14 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 func TestListIncidents_RespectsLimit(t *testing.T) {
 	s := newTestStore(t)
 
+	user, err := s.CreateUser("limits@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
 	for i := 0; i < 5; i++ {
 		if _, err := s.OpenIncident("check-1"); err != nil {
 			t.Fatalf("OpenIncident: %v", err)
@@ -270,12 +289,61 @@ func TestListIncidents_RespectsLimit(t *testing.T) {
 		}
 	}
 
-	incidents, err := s.ListIncidents(3)
+	incidents, err := s.ListIncidents(user.ID, 3)
 	if err != nil {
 		t.Fatalf("ListIncidents: %v", err)
 	}
 	if len(incidents) != 3 {
 		t.Errorf("expected 3 incidents (limit), got %d", len(incidents))
+	}
+}
+
+func TestListIncidents_ScopedToUser(t *testing.T) {
+	s := newTestStore(t)
+
+	alice, err := s.CreateUser("alice-incidents@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser alice: %v", err)
+	}
+	bob, err := s.CreateUser("bob-incidents@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser bob: %v", err)
+	}
+
+	if err := s.CreateCheck(Check{ID: "alice-check", Type: "http", Target: "https://alice.example.com"}, alice.ID); err != nil {
+		t.Fatalf("CreateCheck alice: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "bob-check", Type: "http", Target: "https://bob.example.com"}, bob.ID); err != nil {
+		t.Fatalf("CreateCheck bob: %v", err)
+	}
+
+	if _, err := s.OpenIncident("alice-check"); err != nil {
+		t.Fatalf("OpenIncident alice: %v", err)
+	}
+	if _, err := s.OpenIncident("bob-check"); err != nil {
+		t.Fatalf("OpenIncident bob: %v", err)
+	}
+
+	aliceIncidents, err := s.ListIncidents(alice.ID, 10)
+	if err != nil {
+		t.Fatalf("ListIncidents alice: %v", err)
+	}
+	if len(aliceIncidents) != 1 {
+		t.Fatalf("expected 1 alice incident, got %d", len(aliceIncidents))
+	}
+	if aliceIncidents[0].CheckID != "alice-check" {
+		t.Fatalf("expected alice-check, got %s", aliceIncidents[0].CheckID)
+	}
+
+	bobIncidents, err := s.ListIncidents(bob.ID, 10)
+	if err != nil {
+		t.Fatalf("ListIncidents bob: %v", err)
+	}
+	if len(bobIncidents) != 1 {
+		t.Fatalf("expected 1 bob incident, got %d", len(bobIncidents))
+	}
+	if bobIncidents[0].CheckID != "bob-check" {
+		t.Fatalf("expected bob-check, got %s", bobIncidents[0].CheckID)
 	}
 }
 

@@ -25,9 +25,12 @@ CREATE TABLE probes (
 CREATE TABLE incidents (
     id          BIGSERIAL PRIMARY KEY,
     check_id    TEXT NOT NULL,
+    user_id     INTEGER,
     started_at  TIMESTAMPTZ NOT NULL,
     resolved_at TIMESTAMPTZ
 );
+
+CREATE INDEX idx_incidents_user_started_at ON incidents (user_id, started_at DESC);
 
 CREATE TABLE users (
     id            BIGSERIAL PRIMARY KEY,
