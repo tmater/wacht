@@ -18,6 +18,7 @@ import (
 type Handler struct {
 	store         *store.Store
 	config        *config.ServerConfig
+	webhooks      *alert.Sender
 	loginLimiter  *rateLimiter
 	signupLimiter *rateLimiter
 }
@@ -27,9 +28,18 @@ func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 	return &Handler{
 		store:         store,
 		config:        cfg,
+		webhooks:      alert.NewSender(),
 		loginLimiter:  newRateLimiter(),
 		signupLimiter: newRateLimiter(),
 	}
+}
+
+// Close stops background workers owned by the handler.
+func (h *Handler) Close() {
+	if h == nil {
+		return
+	}
+	h.webhooks.Close()
 }
 
 // Routes registers all HTTP routes.
@@ -363,10 +373,8 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 						ProbesDown:  countDown(recent),
 						ProbesTotal: len(recent),
 					}
-					if err := alert.Fire(check.Webhook, payload); err != nil {
-						log.Printf("alert: webhook failed check_id=%s: %s", result.CheckID, err)
-					} else {
-						log.Printf("alert: webhook fired check_id=%s url=%s", result.CheckID, check.Webhook)
+					if ok := h.webhooks.Enqueue(check.Webhook, payload); !ok {
+						log.Printf("alert: webhook queue full, dropping check_id=%s url=%s", result.CheckID, check.Webhook)
 					}
 				}
 			}

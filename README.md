@@ -82,7 +82,9 @@ Webhook payload:
 
 Webhook delivery is best-effort. Webhook URLs must be public HTTP(S)
 endpoints; loopback, private, and link-local destinations are rejected.
-Delivery is timed out after 5 seconds, and no retry is attempted.
+Alerts are queued for background delivery so result ingestion is not
+blocked by slow destinations. Delivery is timed out after 5 seconds, and
+no retry is attempted.
 
 ## Status page
 

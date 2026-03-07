@@ -76,6 +76,7 @@ func main() {
 	}
 
 	h := server.New(db, cfg)
+	defer h.Close()
 
 	go staleProbeLoop(db)
 	go evictionLoop(db, cfg.RetentionDays)
