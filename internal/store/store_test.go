@@ -206,7 +206,7 @@ func TestCheckStatuses_UsesIncidentStateInsteadOfLatestSingleResult(t *testing.T
 	saveResult(t, s, "check-1", "probe-a", true)
 	saveResult(t, s, "check-1", "probe-b", false)
 
-	statuses, err := s.CheckStatuses()
+	statuses, err := s.CheckStatuses(user.ID)
 	if err != nil {
 		t.Fatalf("CheckStatuses: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestCheckStatuses_UsesOpenIncidentAsDownTruth(t *testing.T) {
 	}
 	saveResult(t, s, "check-1", "probe-b", true)
 
-	statuses, err := s.CheckStatuses()
+	statuses, err := s.CheckStatuses(user.ID)
 	if err != nil {
 		t.Fatalf("CheckStatuses: %v", err)
 	}
@@ -305,6 +305,57 @@ func TestRecentResultsByProbe_OrderAndLimit(t *testing.T) {
 	}
 	if results[1].Up != true {
 		t.Errorf("results[1]: expected up, got down")
+	}
+}
+
+func TestCheckStatuses_ScopedToUser(t *testing.T) {
+	s := newTestStore(t)
+
+	alice, err := s.CreateUser("alice-statuses@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser alice: %v", err)
+	}
+	bob, err := s.CreateUser("bob-statuses@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser bob: %v", err)
+	}
+
+	if err := s.CreateCheck(Check{ID: "alice-check", Type: "http", Target: "https://alice.example.com"}, alice.ID); err != nil {
+		t.Fatalf("CreateCheck alice: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "bob-check", Type: "http", Target: "https://bob.example.com"}, bob.ID); err != nil {
+		t.Fatalf("CreateCheck bob: %v", err)
+	}
+
+	saveResult(t, s, "alice-check", "probe-a", true)
+	saveResult(t, s, "bob-check", "probe-b", true)
+	if _, err := s.OpenIncident("bob-check"); err != nil {
+		t.Fatalf("OpenIncident bob: %v", err)
+	}
+
+	aliceStatuses, err := s.CheckStatuses(alice.ID)
+	if err != nil {
+		t.Fatalf("CheckStatuses alice: %v", err)
+	}
+	if len(aliceStatuses) != 1 {
+		t.Fatalf("expected 1 alice status, got %d", len(aliceStatuses))
+	}
+	if aliceStatuses[0].CheckID != "alice-check" {
+		t.Fatalf("expected alice-check, got %s", aliceStatuses[0].CheckID)
+	}
+
+	bobStatuses, err := s.CheckStatuses(bob.ID)
+	if err != nil {
+		t.Fatalf("CheckStatuses bob: %v", err)
+	}
+	if len(bobStatuses) != 1 {
+		t.Fatalf("expected 1 bob status, got %d", len(bobStatuses))
+	}
+	if bobStatuses[0].CheckID != "bob-check" {
+		t.Fatalf("expected bob-check, got %s", bobStatuses[0].CheckID)
+	}
+	if bobStatuses[0].IncidentSince == nil {
+		t.Fatal("expected bob status to include the open incident timestamp")
 	}
 }
 
