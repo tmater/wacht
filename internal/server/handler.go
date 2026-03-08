@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/tmater/wacht/internal/alert"
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/quorum"
 	"github.com/tmater/wacht/internal/store"
@@ -207,6 +209,12 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := network.ValidateCheckTarget(ctx, c.Type, c.Target, h.targetPolicy()); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.store.CreateCheck(c, user.ID); err != nil {
 		log.Printf("handler: failed to create check id=%s: %s", c.ID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -237,12 +245,22 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := network.ValidateCheckTarget(ctx, c.Type, c.Target, h.targetPolicy()); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.store.UpdateCheck(c, user.ID); err != nil {
 		log.Printf("handler: failed to update check id=%s: %s", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) targetPolicy() network.Policy {
+	return network.Policy{AllowPrivateTargets: h.config.AllowPrivateTargets}
 }
 
 // handleDeleteCheck removes a check owned by the authenticated user.

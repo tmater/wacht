@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/server"
 	"github.com/tmater/wacht/internal/store"
 )
@@ -68,7 +71,14 @@ func main() {
 	}
 
 	seed := make([]store.Check, len(cfg.Checks))
+	policy := network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}
 	for i, c := range cfg.Checks {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := network.ValidateCheckTarget(ctx, c.Type, c.Target, policy); err != nil {
+			cancel()
+			log.Fatalf("invalid configured check %q: %s", c.ID, err)
+		}
+		cancel()
 		seed[i] = store.Check{ID: c.ID, Type: c.Type, Target: c.Target, Webhook: c.Webhook}
 	}
 	if err := db.SeedChecks(seed, seedUserID); err != nil {

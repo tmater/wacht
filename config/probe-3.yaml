@@ -1,3 +1,6 @@
+# Enable this when the probe is expected to monitor private RFC1918, Docker,
+# VPN, or otherwise internal targets. Turn it off for hosted/managed probes.
+allow_private_targets: true
 secret: changeme-probe-3
 server: http://server:8080
 probe_id: probe-3

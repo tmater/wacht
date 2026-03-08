@@ -1,3 +1,7 @@
+# Self-hosted installs often monitor Docker, VPN, or RFC1918 targets.
+# Keep this enabled for private/internal monitoring. Disable it for hosted
+# or managed-probe deployments that must not reach internal networks.
+allow_private_targets: true
 probes:
   - id: probe-1
     secret: changeme-probe-1

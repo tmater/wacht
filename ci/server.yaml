@@ -1,3 +1,4 @@
+allow_private_targets: true
 probes:
   - id: probe-ci
     secret: ci-smoke-secret

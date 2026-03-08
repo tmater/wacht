@@ -9,10 +9,11 @@ import (
 )
 
 type ServerConfig struct {
-	Probes        []ProbeAuth `yaml:"probes"`
-	Checks        []Check     `yaml:"checks"`
-	SeedUser      SeedUser    `yaml:"seed_user"`
-	RetentionDays int         `yaml:"retention_days"` // 0 → default 30
+	Probes              []ProbeAuth `yaml:"probes"`
+	Checks              []Check     `yaml:"checks"`
+	SeedUser            SeedUser    `yaml:"seed_user"`
+	RetentionDays       int         `yaml:"retention_days"`        // 0 → default 30
+	AllowPrivateTargets bool        `yaml:"allow_private_targets"` // false by default
 }
 
 type SeedUser struct {
@@ -26,10 +27,11 @@ type ProbeAuth struct {
 }
 
 type ProbeConfig struct {
-	Secret            string        `yaml:"secret"`
-	Server            string        `yaml:"server"`
-	ProbeID           string        `yaml:"probe_id"`
-	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
+	Secret              string        `yaml:"secret"`
+	Server              string        `yaml:"server"`
+	ProbeID             string        `yaml:"probe_id"`
+	HeartbeatInterval   time.Duration `yaml:"heartbeat_interval"`
+	AllowPrivateTargets bool          `yaml:"allow_private_targets"` // false by default
 }
 
 type Check struct {

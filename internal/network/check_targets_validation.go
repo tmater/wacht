@@ -1,0 +1,91 @@
+package network
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/tmater/wacht/internal/proto"
+)
+
+// ValidateCheckTarget checks target syntax and rejects disallowed destinations.
+func ValidateCheckTarget(ctx context.Context, checkType, target string, policy Policy) error {
+	switch NormalizeCheckType(checkType) {
+	case proto.CheckHTTP:
+		u, err := ParseHTTPURLTarget(target)
+		if err != nil {
+			return err
+		}
+		return policy.ValidateHost(ctx, u.Hostname())
+	case proto.CheckTCP:
+		host, _, err := ParseTCPAddressTarget(target)
+		if err != nil {
+			return err
+		}
+		return policy.ValidateHost(ctx, host)
+	case proto.CheckDNS:
+		host, err := ParseDNSHostnameTarget(target)
+		if err != nil {
+			return err
+		}
+		return policy.ValidateHost(ctx, host)
+	default:
+		return fmt.Errorf("unsupported check type %q", checkType)
+	}
+}
+
+func NormalizeCheckType(checkType string) proto.CheckType {
+	if strings.TrimSpace(checkType) == "" {
+		return proto.CheckHTTP
+	}
+	return proto.CheckType(strings.ToLower(strings.TrimSpace(checkType)))
+}
+
+func ParseHTTPURLTarget(target string) (*url.URL, error) {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil, fmt.Errorf("http target: invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("http target: unsupported URL scheme %q", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return nil, fmt.Errorf("http target: host is required")
+	}
+	return u, nil
+}
+
+func ParseTCPAddressTarget(target string) (string, string, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", "", fmt.Errorf("tcp target: must be host:port: %w", err)
+	}
+	if host == "" {
+		return "", "", fmt.Errorf("tcp target: host is required")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", "", fmt.Errorf("tcp target: invalid port %q", port)
+	}
+	return host, port, nil
+}
+
+func ParseDNSHostnameTarget(target string) (string, error) {
+	host := strings.TrimSpace(strings.TrimSuffix(target, "."))
+	if host == "" {
+		return "", fmt.Errorf("dns target: hostname is required")
+	}
+	if strings.Contains(host, "://") || strings.Contains(host, "/") {
+		return "", fmt.Errorf("dns target: bare hostname required")
+	}
+	if strings.Contains(host, ":") {
+		return "", fmt.Errorf("dns target: bare hostname required")
+	}
+	if net.ParseIP(host) != nil {
+		return "", fmt.Errorf("dns target: hostname required")
+	}
+	return host, nil
+}

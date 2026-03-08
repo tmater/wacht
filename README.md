@@ -35,6 +35,12 @@ checks:
     target: db.example.com:5432
 ```
 
+The code default is to block private and internal targets. The shipped
+self-host sample configs set `allow_private_targets: true`, because
+monitoring Docker, VPN, and RFC1918 services is a common self-hosted use
+case. For hosted or managed-probe deployments, keep that setting disabled on
+both the server and the matching probe config.
+
 Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each probe must use the matching secret provisioned in `config/server.yaml`:
 
 ```yaml
@@ -59,6 +65,9 @@ The server listens on port `8080`. The dashboard is available at `http://localho
 | `http` | URL           | `https://example.com`  | Checks for a 2xx response                     |
 | `tcp`  | `host:port`   | `db.example.com:5432`  | Checks that a TCP connection can be opened    |
 | `dns`  | hostname      | `example.com`          | Checks that the hostname resolves to at least one address |
+
+Private, loopback, and link-local targets are blocked unless
+`allow_private_targets: true` is enabled on both the server and the probe.
 
 ## How alerting works
 

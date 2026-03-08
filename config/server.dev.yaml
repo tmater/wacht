@@ -1,3 +1,6 @@
+# Local dev probes Docker service names like "mock", so private targets must
+# be allowed here. Hosted/managed probes should keep this disabled.
+allow_private_targets: true
 probes:
   - id: probe-1
     secret: changeme-probe-1

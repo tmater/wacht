@@ -8,6 +8,12 @@ import (
 )
 
 func TestFire(t *testing.T) {
+	oldClient := webhookClient
+	webhookClient = http.DefaultClient
+	t.Cleanup(func() {
+		webhookClient = oldClient
+	})
+
 	var received AlertPayload
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -31,7 +37,7 @@ func TestFire(t *testing.T) {
 		ProbesTotal: 3,
 	}
 
-	if err := fireWithClient(http.DefaultClient, srv.URL, payload); err != nil {
+	if err := Fire(srv.URL, payload); err != nil {
 		t.Fatalf("Fire returned error: %s", err)
 	}
 
@@ -47,24 +53,36 @@ func TestFire(t *testing.T) {
 }
 
 func TestFire_NonSuccessStatus(t *testing.T) {
+	oldClient := webhookClient
+	webhookClient = http.DefaultClient
+	t.Cleanup(func() {
+		webhookClient = oldClient
+	})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	err := fireWithClient(http.DefaultClient, srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
 	if err == nil {
 		t.Fatal("expected error for non-2xx response, got nil")
 	}
 }
 
 func TestFire_DoesNotFollowRedirects(t *testing.T) {
+	oldClient := webhookClient
+	webhookClient = newWebhookClient()
+	t.Cleanup(func() {
+		webhookClient = oldClient
+	})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://example.com/webhook", http.StatusFound)
 	}))
 	defer srv.Close()
 
-	err := fireWithClient(newWebhookClient(), srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
 	if err == nil {
 		t.Fatal("expected redirect response to be treated as an error")
 	}

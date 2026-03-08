@@ -2,3 +2,4 @@ secret: ci-smoke-secret
 server: http://server:8080
 probe_id: probe-ci
 heartbeat_interval: 30s
+allow_private_targets: true

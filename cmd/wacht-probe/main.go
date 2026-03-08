@@ -13,6 +13,7 @@ import (
 
 	"github.com/tmater/wacht/internal/check"
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 )
 
@@ -42,6 +43,8 @@ func main() {
 	}
 	log.Printf("probe: fetched %d checks from server", len(checks))
 
+	policy := network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}
+
 	var (
 		mu       sync.Mutex
 		cancelFn context.CancelFunc
@@ -63,13 +66,13 @@ func main() {
 				interval = 30 * time.Second
 			}
 			go func() {
-				runAndPost(cfg, c)
+				runAndPost(cfg, policy, c)
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
 				for {
 					select {
 					case <-ticker.C:
-						runAndPost(cfg, c)
+						runAndPost(cfg, policy, c)
 					case <-ctx.Done():
 						return
 					}
@@ -91,15 +94,15 @@ func main() {
 	})
 }
 
-func runAndPost(cfg *config.ProbeConfig, c config.Check) {
+func runAndPost(cfg *config.ProbeConfig, policy network.Policy, c config.Check) {
 	var result proto.CheckResult
 	switch c.Type {
 	case "http", "":
-		result = check.HTTP(c.ID, cfg.ProbeID, c.Target)
+		result = check.HTTP(c.ID, cfg.ProbeID, c.Target, policy)
 	case "tcp":
-		result = check.TCP(c.ID, cfg.ProbeID, c.Target)
+		result = check.TCP(c.ID, cfg.ProbeID, c.Target, policy)
 	case "dns":
-		result = check.DNS(c.ID, cfg.ProbeID, c.Target)
+		result = check.DNS(c.ID, cfg.ProbeID, c.Target, policy)
 	default:
 		log.Printf("probe: unknown check type %q for check_id=%s, skipping", c.Type, c.ID)
 		return
