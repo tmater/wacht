@@ -179,19 +179,20 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 // OpenIncident records a new incident for checkID. Returns true if an incident
 // was already open (caller should skip alerting to avoid duplicate notifications).
 func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
-	var count int
-	err = s.db.QueryRow(`SELECT COUNT(1) FROM incidents WHERE check_id=$1 AND resolved_at IS NULL`, checkID).Scan(&count)
+	var incidentID int64
+	err = s.db.QueryRow(`
+		INSERT INTO incidents (check_id, user_id, started_at)
+		VALUES ($1, (SELECT user_id FROM checks WHERE id = $1), $2)
+		ON CONFLICT (check_id) WHERE resolved_at IS NULL DO NOTHING
+		RETURNING id
+	`, checkID, time.Now().UTC()).Scan(&incidentID)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	if count > 0 {
-		return true, nil
-	}
-	_, err = s.db.Exec(`
-		INSERT INTO incidents (check_id, user_id, started_at)
-		VALUES ($1, (SELECT user_id FROM checks WHERE id = $1), $2)
-	`, checkID, time.Now().UTC())
-	return false, err
+	return false, nil
 }
 
 // ResolveIncident marks the open incident for checkID as resolved.

@@ -31,6 +31,7 @@ CREATE TABLE incidents (
 );
 
 CREATE INDEX idx_incidents_user_started_at ON incidents (user_id, started_at DESC);
+CREATE UNIQUE INDEX idx_incidents_open_check ON incidents (check_id) WHERE resolved_at IS NULL;
 
 CREATE TABLE users (
     id            BIGSERIAL PRIMARY KEY,

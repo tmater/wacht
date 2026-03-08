@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +90,70 @@ func TestOpenIncident_Deduplication(t *testing.T) {
 	}
 	if !alreadyOpen {
 		t.Fatal("expected alreadyOpen=true on second call, got false")
+	}
+}
+
+func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("concurrency@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	const workers = 12
+
+	var wg sync.WaitGroup
+	results := make(chan bool, workers)
+	errs := make(chan error, workers)
+
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			alreadyOpen, err := s.OpenIncident("check-1")
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- alreadyOpen
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("OpenIncident: %v", err)
+	}
+
+	opened := 0
+	duplicates := 0
+	for alreadyOpen := range results {
+		if alreadyOpen {
+			duplicates++
+			continue
+		}
+		opened++
+	}
+
+	if opened != 1 {
+		t.Fatalf("expected exactly one incident opener, got %d", opened)
+	}
+	if duplicates != workers-1 {
+		t.Fatalf("expected %d duplicate opens, got %d", workers-1, duplicates)
+	}
+
+	var openCount int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM incidents WHERE check_id = $1 AND resolved_at IS NULL`, "check-1").Scan(&openCount); err != nil {
+		t.Fatalf("count open incidents: %v", err)
+	}
+	if openCount != 1 {
+		t.Fatalf("expected exactly 1 open incident row, got %d", openCount)
 	}
 }
 
