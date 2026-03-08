@@ -98,14 +98,16 @@ func withCORS(next http.Handler) http.Handler {
 
 // handleStatus serves the authenticated status view as JSON.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	statuses, err := h.store.CheckStatuses()
+	user := sessionUser(r)
+
+	statuses, err := h.store.CheckStatuses(user.ID)
 	if err != nil {
 		log.Printf("status: failed to query check statuses: %s", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	probeStatuses, err := h.store.AllProbeStatuses()
+	probeStatuses, err := h.store.ProbeStatuses(user.ID)
 	if err != nil {
 		log.Printf("status: failed to query probe statuses: %s", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -459,15 +461,6 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		log.Printf("handler: failed to encode incidents: %s", err)
 	}
-}
-
-func (h *Handler) checkByID(id string) *store.Check {
-	c, err := h.store.GetCheck(id)
-	if err != nil {
-		log.Printf("handler: failed to look up check id=%s: %s", id, err)
-		return nil
-	}
-	return c
 }
 
 func countDown(results []proto.CheckResult) int {

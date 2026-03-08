@@ -139,9 +139,9 @@ type CheckStatus struct {
 	IncidentSince *time.Time // non-nil when an incident is open
 }
 
-// CheckStatuses returns the current status for each check that has received
-// at least one result, joined with any open incident.
-func (s *Store) CheckStatuses() ([]CheckStatus, error) {
+// CheckStatuses returns the current status for each reported check owned by
+// userID, joined with any open incident.
+func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
 	rows, err := s.db.Query(`
 		SELECT c.id, c.target, i.started_at
 		FROM checks c
@@ -151,8 +151,9 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 		) reported ON reported.check_id = c.id
 		LEFT JOIN incidents i
 			ON i.check_id = c.id AND i.resolved_at IS NULL
+		WHERE c.user_id = $1
 		ORDER BY c.id
-	`)
+	`, userID)
 	if err != nil {
 		return nil, err
 	}

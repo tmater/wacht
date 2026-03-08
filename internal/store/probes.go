@@ -140,7 +140,8 @@ type ProbeStatus struct {
 	LastSeenAt *time.Time
 }
 
-// AllProbeStatuses returns the last_seen_at for all active probes.
+// AllProbeStatuses returns the last_seen_at for all active probes. Internal
+// server maintenance code uses this global view.
 func (s *Store) AllProbeStatuses() ([]ProbeStatus, error) {
 	rows, err := s.db.Query(`
 		SELECT probe_id, last_seen_at
@@ -153,6 +154,34 @@ func (s *Store) AllProbeStatuses() ([]ProbeStatus, error) {
 	}
 	defer rows.Close()
 
+	return scanProbeStatuses(rows)
+}
+
+// ProbeStatuses returns the last_seen_at for active probes that have reported
+// on checks owned by userID.
+func (s *Store) ProbeStatuses(userID int64) ([]ProbeStatus, error) {
+	rows, err := s.db.Query(`
+		SELECT probe_id, last_seen_at
+		FROM probes
+		WHERE status = 'active'
+		  AND EXISTS (
+			SELECT 1
+			FROM check_results cr
+			INNER JOIN checks c ON c.id = cr.check_id
+			WHERE cr.probe_id = probes.probe_id
+			  AND c.user_id = $1
+		  )
+		ORDER BY probe_id
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanProbeStatuses(rows)
+}
+
+func scanProbeStatuses(rows *sql.Rows) ([]ProbeStatus, error) {
 	var statuses []ProbeStatus
 	for rows.Next() {
 		var (
