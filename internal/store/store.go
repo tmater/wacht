@@ -143,20 +143,15 @@ type CheckStatus struct {
 // at least one result, joined with any open incident.
 func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 	rows, err := s.db.Query(`
-		SELECT cr.check_id, cr.target, cr.up, i.started_at
-		FROM check_results cr
+		SELECT c.id, c.target, i.started_at
+		FROM checks c
 		INNER JOIN (
-			SELECT check_id, MAX(id) AS max_id
+			SELECT DISTINCT check_id
 			FROM check_results
-			GROUP BY check_id
-		) latest ON cr.id = latest.max_id
-		LEFT JOIN (
-			SELECT check_id, MIN(started_at) AS started_at
-			FROM incidents
-			WHERE resolved_at IS NULL
-			GROUP BY check_id
-		) i ON cr.check_id = i.check_id
-		ORDER BY cr.check_id
+		) reported ON reported.check_id = c.id
+		LEFT JOIN incidents i
+			ON i.check_id = c.id AND i.resolved_at IS NULL
+		ORDER BY c.id
 	`)
 	if err != nil {
 		return nil, err
@@ -167,9 +162,10 @@ func (s *Store) CheckStatuses() ([]CheckStatus, error) {
 	for rows.Next() {
 		var cs CheckStatus
 		var startedAt *time.Time
-		if err := rows.Scan(&cs.CheckID, &cs.Target, &cs.Up, &startedAt); err != nil {
+		if err := rows.Scan(&cs.CheckID, &cs.Target, &startedAt); err != nil {
 			return nil, err
 		}
+		cs.Up = startedAt == nil
 		cs.IncidentSince = startedAt
 		statuses = append(statuses, cs)
 	}

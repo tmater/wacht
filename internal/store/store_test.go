@@ -192,6 +192,67 @@ func TestResolveIncident_NoOpenIncident(t *testing.T) {
 	}
 }
 
+func TestCheckStatuses_UsesIncidentStateInsteadOfLatestSingleResult(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("statuses@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	saveResult(t, s, "check-1", "probe-a", true)
+	saveResult(t, s, "check-1", "probe-b", false)
+
+	statuses, err := s.CheckStatuses()
+	if err != nil {
+		t.Fatalf("CheckStatuses: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	if !statuses[0].Up {
+		t.Fatal("expected check to remain up without an open incident")
+	}
+	if statuses[0].IncidentSince != nil {
+		t.Fatal("expected no incident timestamp for a healthy check")
+	}
+}
+
+func TestCheckStatuses_UsesOpenIncidentAsDownTruth(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("incident-status@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	saveResult(t, s, "check-1", "probe-a", true)
+	if _, err := s.OpenIncident("check-1"); err != nil {
+		t.Fatalf("OpenIncident: %v", err)
+	}
+	saveResult(t, s, "check-1", "probe-b", true)
+
+	statuses, err := s.CheckStatuses()
+	if err != nil {
+		t.Fatalf("CheckStatuses: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	if statuses[0].Up {
+		t.Fatal("expected open incident to keep status down")
+	}
+	if statuses[0].IncidentSince == nil {
+		t.Fatal("expected incident timestamp for an open incident")
+	}
+}
+
 func TestRecentResultsPerProbe_LatestPerProbe(t *testing.T) {
 	s := newTestStore(t)
 

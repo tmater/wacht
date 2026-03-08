@@ -132,7 +132,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Target:  cs.Target,
 			Status:  "up",
 		}
-		if !cs.Up || cs.IncidentSince != nil {
+		if !cs.Up {
 			cj.Status = "down"
 		}
 		if cs.IncidentSince != nil {
