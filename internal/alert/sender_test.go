@@ -39,7 +39,10 @@ func TestSender_EnqueueDeliversInBackground(t *testing.T) {
 
 func TestSender_EnqueueDropsWhenQueueFull(t *testing.T) {
 	block := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
 	sender := newSender(1, 1, func(url string, payload AlertPayload) error {
+		once.Do(func() { close(started) })
 		<-block
 		return nil
 	})
@@ -51,6 +54,7 @@ func TestSender_EnqueueDropsWhenQueueFull(t *testing.T) {
 	if !sender.Enqueue("https://hooks.example.com/a", AlertPayload{CheckID: "check-1"}) {
 		t.Fatal("expected first enqueue to succeed")
 	}
+	<-started
 	if !sender.Enqueue("https://hooks.example.com/b", AlertPayload{CheckID: "check-2"}) {
 		t.Fatal("expected second enqueue to fill queue")
 	}

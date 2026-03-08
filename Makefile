@@ -12,7 +12,7 @@ down:
 	$(DEV_COMPOSE) down -v
 
 # Rebuild everything from scratch (wipes DB volume)
-rebuild:
+rebuild: test
 	$(DEV_COMPOSE) down -v
 	$(DEV_COMPOSE) up -d --build
 
