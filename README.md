@@ -89,6 +89,8 @@ Webhook payload:
 }
 ```
 
+Recovery notifications use the same payload with `status` set to `up`.
+
 Webhook delivery is best-effort. Webhook URLs must be public HTTP(S)
 endpoints; loopback, private, and link-local destinations are rejected.
 Alerts are queued for background delivery so result ingestion is not

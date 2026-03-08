@@ -398,8 +398,22 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		if err := h.store.ResolveIncident(result.CheckID); err != nil {
+		resolved, err := h.store.ResolveIncident(result.CheckID)
+		if err != nil {
 			log.Printf("alert: failed to resolve incident check_id=%s: %s", result.CheckID, err)
+		} else if resolved {
+			if check.Webhook != "" {
+				payload := alert.AlertPayload{
+					CheckID:     result.CheckID,
+					Target:      check.Target,
+					Status:      "up",
+					ProbesDown:  countDown(recent),
+					ProbesTotal: len(recent),
+				}
+				if ok := h.webhooks.Enqueue(check.Webhook, payload); !ok {
+					log.Printf("alert: webhook queue full, dropping check_id=%s url=%s", result.CheckID, check.Webhook)
+				}
+			}
 		}
 	}
 

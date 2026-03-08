@@ -163,8 +163,12 @@ func TestResolveIncident_AllowsReopening(t *testing.T) {
 	if _, err := s.OpenIncident("check-1"); err != nil {
 		t.Fatalf("OpenIncident: %v", err)
 	}
-	if err := s.ResolveIncident("check-1"); err != nil {
+	resolved, err := s.ResolveIncident("check-1")
+	if err != nil {
 		t.Fatalf("ResolveIncident: %v", err)
+	}
+	if !resolved {
+		t.Fatal("expected ResolveIncident to report a resolved incident")
 	}
 
 	alreadyOpen, err := s.OpenIncident("check-1")
@@ -173,6 +177,18 @@ func TestResolveIncident_AllowsReopening(t *testing.T) {
 	}
 	if alreadyOpen {
 		t.Fatal("expected alreadyOpen=false after resolve, got true")
+	}
+}
+
+func TestResolveIncident_NoOpenIncident(t *testing.T) {
+	s := newTestStore(t)
+
+	resolved, err := s.ResolveIncident("check-1")
+	if err != nil {
+		t.Fatalf("ResolveIncident: %v", err)
+	}
+	if resolved {
+		t.Fatal("expected ResolveIncident to report no-op when nothing was open")
 	}
 }
 
@@ -295,14 +311,14 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 	if _, err := s.OpenIncident("check-1"); err != nil {
 		t.Fatalf("OpenIncident check-1: %v", err)
 	}
-	if err := s.ResolveIncident("check-1"); err != nil {
+	if _, err := s.ResolveIncident("check-1"); err != nil {
 		t.Fatalf("ResolveIncident check-1: %v", err)
 	}
 
 	if _, err := s.OpenIncident("check-2"); err != nil {
 		t.Fatalf("OpenIncident check-2: %v", err)
 	}
-	if err := s.ResolveIncident("check-2"); err != nil {
+	if _, err := s.ResolveIncident("check-2"); err != nil {
 		t.Fatalf("ResolveIncident check-2: %v", err)
 	}
 
@@ -349,7 +365,7 @@ func TestListIncidents_RespectsLimit(t *testing.T) {
 		if _, err := s.OpenIncident("check-1"); err != nil {
 			t.Fatalf("OpenIncident: %v", err)
 		}
-		if err := s.ResolveIncident("check-1"); err != nil {
+		if _, err := s.ResolveIncident("check-1"); err != nil {
 			t.Fatalf("ResolveIncident: %v", err)
 		}
 	}

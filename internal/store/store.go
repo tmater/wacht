@@ -195,10 +195,18 @@ func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
 	return false, nil
 }
 
-// ResolveIncident marks the open incident for checkID as resolved.
-func (s *Store) ResolveIncident(checkID string) error {
-	_, err := s.db.Exec(`UPDATE incidents SET resolved_at=$1 WHERE check_id=$2 AND resolved_at IS NULL`, time.Now().UTC(), checkID)
-	return err
+// ResolveIncident marks the open incident for checkID as resolved. It returns
+// true when an open incident was actually closed.
+func (s *Store) ResolveIncident(checkID string) (resolved bool, err error) {
+	res, err := s.db.Exec(`UPDATE incidents SET resolved_at=$1 WHERE check_id=$2 AND resolved_at IS NULL`, time.Now().UTC(), checkID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
 }
 
 // Check represents a monitored endpoint stored in the database.
