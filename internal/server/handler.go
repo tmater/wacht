@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
+	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
@@ -196,31 +197,13 @@ func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request) {
 // handleCreateCheck creates a new check owned by the authenticated user.
 func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
-	var c store.Check
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if c.ID == "" || c.Type == "" || c.Target == "" {
-		http.Error(w, "id, type, and target are required", http.StatusBadRequest)
-		return
-	}
-	if c.Interval < 0 || c.Interval > 86400 {
-		http.Error(w, "interval must be between 0 and 86400 seconds", http.StatusBadRequest)
-		return
-	}
-	if err := alert.ValidateWebhookURL(c.Webhook); err != nil {
+	check, err := h.decodeCheck(r, "")
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	if err := network.ValidateCheckTarget(ctx, c.Type, c.Target, h.targetPolicy()); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := h.store.CreateCheck(c, user.ID); err != nil {
-		log.Printf("handler: failed to create check id=%s: %s", c.ID, err)
+	if err := h.store.CreateCheck(check, user.ID); err != nil {
+		log.Printf("handler: failed to create check id=%s: %s", check.ID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -231,36 +214,34 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	id := r.PathValue("id")
-	var c store.Check
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	c.ID = id
-	if c.Type == "" || c.Target == "" {
-		http.Error(w, "type and target are required", http.StatusBadRequest)
-		return
-	}
-	if c.Interval < 0 || c.Interval > 86400 {
-		http.Error(w, "interval must be between 0 and 86400 seconds", http.StatusBadRequest)
-		return
-	}
-	if err := alert.ValidateWebhookURL(c.Webhook); err != nil {
+	check, err := h.decodeCheck(r, id)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	if err := network.ValidateCheckTarget(ctx, c.Type, c.Target, h.targetPolicy()); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := h.store.UpdateCheck(c, user.ID); err != nil {
+	if err := h.store.UpdateCheck(check, user.ID); err != nil {
 		log.Printf("handler: failed to update check id=%s: %s", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) decodeCheck(r *http.Request, id string) (checks.Check, error) {
+	var check checks.Check
+	if err := json.NewDecoder(r.Body).Decode(&check); err != nil {
+		return checks.Check{}, &badRequestError{message: "bad request"}
+	}
+	if id != "" {
+		check.ID = id
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	check, err := check.NormalizeAndValidate(ctx, h.targetPolicy(), true)
+	if err != nil {
+		return checks.Check{}, &badRequestError{message: err.Error()}
+	}
+	return check, nil
 }
 
 func (h *Handler) targetPolicy() network.Policy {

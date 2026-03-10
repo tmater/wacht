@@ -7,26 +7,24 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/tmater/wacht/internal/proto"
 )
 
 // ValidateCheckTarget checks target syntax and rejects disallowed destinations.
 func ValidateCheckTarget(ctx context.Context, checkType, target string, policy Policy) error {
 	switch NormalizeCheckType(checkType) {
-	case proto.CheckHTTP:
+	case "http":
 		u, err := ParseHTTPURLTarget(target)
 		if err != nil {
 			return err
 		}
 		return policy.ValidateHost(ctx, u.Hostname())
-	case proto.CheckTCP:
+	case "tcp":
 		host, _, err := ParseTCPAddressTarget(target)
 		if err != nil {
 			return err
 		}
 		return policy.ValidateHost(ctx, host)
-	case proto.CheckDNS:
+	case "dns":
 		host, err := ParseDNSHostnameTarget(target)
 		if err != nil {
 			return err
@@ -37,11 +35,11 @@ func ValidateCheckTarget(ctx context.Context, checkType, target string, policy P
 	}
 }
 
-func NormalizeCheckType(checkType string) proto.CheckType {
+func NormalizeCheckType(checkType string) string {
 	if strings.TrimSpace(checkType) == "" {
-		return proto.CheckHTTP
+		return "http"
 	}
-	return proto.CheckType(strings.ToLower(strings.TrimSpace(checkType)))
+	return strings.ToLower(strings.TrimSpace(checkType))
 }
 
 func ParseHTTPURLTarget(target string) (*url.URL, error) {

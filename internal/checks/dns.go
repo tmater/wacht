@@ -1,4 +1,4 @@
-package check
+package checks
 
 import (
 	"context"
@@ -20,7 +20,7 @@ func DNS(checkID, probeID, target string, policy network.Policy) proto.CheckResu
 	result := proto.CheckResult{
 		CheckID:   checkID,
 		ProbeID:   probeID,
-		Type:      proto.CheckDNS,
+		Type:      string(CheckDNS),
 		Target:    target,
 		Timestamp: time.Now().UTC(),
 	}

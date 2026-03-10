@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tmater/wacht/internal/check"
+	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
@@ -37,11 +37,11 @@ func main() {
 		log.Fatalf("probe: failed to register with server: %s", err)
 	}
 
-	checks, err := fetchChecks(cfg.Server, cfg.Secret, cfg.ProbeID)
+	checkList, err := fetchChecks(cfg.Server, cfg.Secret, cfg.ProbeID)
 	if err != nil {
 		log.Fatalf("probe: failed to fetch checks from server: %s", err)
 	}
-	log.Printf("probe: fetched %d checks from server", len(checks))
+	log.Printf("probe: fetched %d checks from server", len(checkList))
 
 	policy := network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}
 
@@ -50,7 +50,7 @@ func main() {
 		cancelFn context.CancelFunc
 	)
 
-	startScheduler := func(cs []config.Check) {
+	startScheduler := func(cs []checks.Check) {
 		mu.Lock()
 		if cancelFn != nil {
 			cancelFn()
@@ -60,19 +60,16 @@ func main() {
 		mu.Unlock()
 
 		for _, c := range cs {
-			c := c
-			interval := time.Duration(c.Interval) * time.Second
-			if interval <= 0 {
-				interval = 30 * time.Second
-			}
+			check := c
+			interval := time.Duration(check.Interval) * time.Second
 			go func() {
-				runAndPost(cfg, policy, c)
+				runAndPost(cfg, policy, check)
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
 				for {
 					select {
 					case <-ticker.C:
-						runAndPost(cfg, policy, c)
+						runAndPost(cfg, policy, check)
 					case <-ctx.Done():
 						return
 					}
@@ -81,7 +78,7 @@ func main() {
 		}
 	}
 
-	startScheduler(checks)
+	startScheduler(checkList)
 
 	heartbeatLoop(cfg.Server, cfg.Secret, cfg.ProbeID, cfg.HeartbeatInterval, func() {
 		updated, err := fetchChecks(cfg.Server, cfg.Secret, cfg.ProbeID)
@@ -94,17 +91,17 @@ func main() {
 	})
 }
 
-func runAndPost(cfg *config.ProbeConfig, policy network.Policy, c config.Check) {
+func runAndPost(cfg *config.ProbeConfig, policy network.Policy, check checks.Check) {
 	var result proto.CheckResult
-	switch c.Type {
-	case "http", "":
-		result = check.HTTP(c.ID, cfg.ProbeID, c.Target, policy)
-	case "tcp":
-		result = check.TCP(c.ID, cfg.ProbeID, c.Target, policy)
-	case "dns":
-		result = check.DNS(c.ID, cfg.ProbeID, c.Target, policy)
+	switch check.Type {
+	case checks.CheckHTTP:
+		result = checks.HTTP(check.ID, cfg.ProbeID, check.Target, policy)
+	case checks.CheckTCP:
+		result = checks.TCP(check.ID, cfg.ProbeID, check.Target, policy)
+	case checks.CheckDNS:
+		result = checks.DNS(check.ID, cfg.ProbeID, check.Target, policy)
 	default:
-		log.Printf("probe: unknown check type %q for check_id=%s, skipping", c.Type, c.ID)
+		log.Printf("probe: unknown check type %q for check_id=%s, skipping", check.Type, check.ID)
 		return
 	}
 	if err := postResult(cfg.Server, cfg.Secret, result); err != nil {
@@ -142,7 +139,7 @@ func heartbeatLoop(serverURL, secret, probeID string, interval time.Duration, on
 	}
 }
 
-func fetchChecks(serverURL, secret, probeID string) ([]config.Check, error) {
+func fetchChecks(serverURL, secret, probeID string) ([]checks.Check, error) {
 	req, err := http.NewRequest("GET", serverURL+"/api/probes/checks", nil)
 	if err != nil {
 		return nil, err
@@ -156,7 +153,7 @@ func fetchChecks(serverURL, secret, probeID string) ([]config.Check, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	var checks []config.Check
+	var checks []checks.Check
 	if err := json.NewDecoder(resp.Body).Decode(&checks); err != nil {
 		return nil, err
 	}

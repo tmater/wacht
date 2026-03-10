@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/server"
@@ -70,16 +71,17 @@ func main() {
 		}
 	}
 
-	seed := make([]store.Check, len(cfg.Checks))
+	seed := make([]checks.Check, len(cfg.Checks))
 	policy := network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}
 	for i, c := range cfg.Checks {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := network.ValidateCheckTarget(ctx, c.Type, c.Target, policy); err != nil {
+		check, err := c.NormalizeAndValidate(ctx, policy, true)
+		if err != nil {
 			cancel()
 			log.Fatalf("invalid configured check %q: %s", c.ID, err)
 		}
 		cancel()
-		seed[i] = store.Check{ID: c.ID, Type: c.Type, Target: c.Target, Webhook: c.Webhook}
+		seed[i] = check
 	}
 	if err := db.SeedChecks(seed, seedUserID); err != nil {
 		log.Fatalf("failed to seed checks: %s", err)

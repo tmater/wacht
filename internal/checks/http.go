@@ -1,4 +1,4 @@
-package check
+package checks
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func HTTP(checkID, probeID, target string, policy network.Policy) proto.CheckRes
 	result := proto.CheckResult{
 		CheckID:   checkID,
 		ProbeID:   probeID,
-		Type:      proto.CheckHTTP,
+		Type:      string(CheckHTTP),
 		Target:    target,
 		Timestamp: time.Now().UTC(),
 	}

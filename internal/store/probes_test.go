@@ -118,10 +118,10 @@ func TestProbeStatuses_ScopedToUser(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	if err := s.CreateCheck(Check{ID: "alice-check", Type: "http", Target: "https://alice.example.com"}, alice.ID); err != nil {
+	if err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "bob-check", Type: "http", Target: "https://bob.example.com"}, bob.ID); err != nil {
+	if err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
 

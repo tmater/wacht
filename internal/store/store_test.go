@@ -8,10 +8,19 @@ import (
 	"time"
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/proto"
 )
 
 var testDSN string
+
+func testCheck(id, checkType, target string) checks.Check {
+	return checks.NewCheck(id, checkType, target, "", 0)
+}
+
+func testCheckWithWebhook(id, checkType, target, webhook string, intervalSeconds int) checks.Check {
+	return checks.NewCheck(id, checkType, target, webhook, intervalSeconds)
+}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -63,7 +72,7 @@ func saveResult(t *testing.T, s *Store, checkID, probeID string, up bool) {
 	err := s.SaveResult(proto.CheckResult{
 		CheckID:   checkID,
 		ProbeID:   probeID,
-		Type:      proto.CheckHTTP,
+		Type:      string(checks.CheckHTTP),
 		Target:    "https://example.com",
 		Up:        up,
 		Timestamp: time.Now(),
@@ -100,7 +109,7 @@ func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -199,7 +208,7 @@ func TestCheckStatuses_UsesIncidentStateInsteadOfLatestSingleResult(t *testing.T
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -228,7 +237,7 @@ func TestCheckStatuses_UsesOpenIncidentAsDownTruth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -320,10 +329,10 @@ func TestCheckStatuses_ScopedToUser(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	if err := s.CreateCheck(Check{ID: "alice-check", Type: "http", Target: "https://alice.example.com"}, alice.ID); err != nil {
+	if err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "bob-check", Type: "http", Target: "https://bob.example.com"}, bob.ID); err != nil {
+	if err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
 
@@ -366,7 +375,7 @@ func TestEvictOldResults_DeletesOldKeepsNew(t *testing.T) {
 	old := proto.CheckResult{
 		CheckID:   "check-1",
 		ProbeID:   "probe-a",
-		Type:      proto.CheckHTTP,
+		Type:      string(checks.CheckHTTP),
 		Target:    "https://example.com",
 		Up:        true,
 		Timestamp: time.Now().Add(-40 * 24 * time.Hour), // 40 days ago
@@ -374,7 +383,7 @@ func TestEvictOldResults_DeletesOldKeepsNew(t *testing.T) {
 	recent := proto.CheckResult{
 		CheckID:   "check-1",
 		ProbeID:   "probe-a",
-		Type:      proto.CheckHTTP,
+		Type:      string(checks.CheckHTTP),
 		Target:    "https://example.com",
 		Up:        true,
 		Timestamp: time.Now().Add(-1 * time.Hour), // 1 hour ago
@@ -412,10 +421,10 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck check-1: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "check-2", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+	if err := s.CreateCheck(testCheck("check-2", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck check-2: %v", err)
 	}
 
@@ -469,7 +478,7 @@ func TestListIncidents_RespectsLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "check-1", Type: "http", Target: "https://example.com"}, user.ID); err != nil {
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -503,10 +512,10 @@ func TestListIncidents_ScopedToUser(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	if err := s.CreateCheck(Check{ID: "alice-check", Type: "http", Target: "https://alice.example.com"}, alice.ID); err != nil {
+	if err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
-	if err := s.CreateCheck(Check{ID: "bob-check", Type: "http", Target: "https://bob.example.com"}, bob.ID); err != nil {
+	if err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
 
