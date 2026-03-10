@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -12,27 +13,28 @@ import (
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
-	"github.com/tmater/wacht/internal/quorum"
 	"github.com/tmater/wacht/internal/store"
 )
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
-	store         *store.Store
-	config        *config.ServerConfig
-	webhooks      *alert.Sender
-	loginLimiter  *rateLimiter
-	signupLimiter *rateLimiter
+	store           *store.Store
+	config          *config.ServerConfig
+	webhooks        *alert.Sender
+	resultProcessor probeResultProcessor
+	loginLimiter    *rateLimiter
+	signupLimiter   *rateLimiter
 }
 
 // New creates a new Handler.
 func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 	return &Handler{
-		store:         store,
-		config:        cfg,
-		webhooks:      alert.NewSender(),
-		loginLimiter:  newRateLimiter(),
-		signupLimiter: newRateLimiter(),
+		store:           store,
+		config:          cfg,
+		webhooks:        alert.NewSender(),
+		resultProcessor: NewProbeResultProcessor(store),
+		loginLimiter:    newRateLimiter(),
+		signupLimiter:   newRateLimiter(),
 	}
 }
 
@@ -332,90 +334,21 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if result.ProbeID != "" && result.ProbeID != probe.ProbeID {
-		http.Error(w, "probe_id does not match authenticated probe", http.StatusBadRequest)
-		return
-	}
-	check, err := h.store.GetCheck(result.CheckID)
+	outcome, err := h.resultProcessor.Process(probe, result)
 	if err != nil {
-		log.Printf("handler: failed to look up check id=%s: %s", result.CheckID, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if check == nil {
-		http.Error(w, "unknown check_id", http.StatusBadRequest)
-		return
-	}
-	result.ProbeID = probe.ProbeID
-	result.Type = proto.CheckType(check.Type)
-	result.Target = check.Target
-	result.Timestamp = time.Now().UTC()
-
-	log.Printf("handler: received result check_id=%s probe_id=%s up=%v", result.CheckID, result.ProbeID, result.Up)
-
-	if err := h.store.SaveResult(result); err != nil {
-		log.Printf("handler: failed to save result: %s", err)
+		var badRequest *badRequestError
+		if errors.As(err, &badRequest) {
+			http.Error(w, badRequest.Error(), http.StatusBadRequest)
+			return
+		}
+		log.Printf("handler: failed to process result check_id=%s probe_id=%s: %s", result.CheckID, probe.ProbeID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	recent, err := h.store.RecentResultsPerProbe(result.CheckID)
-	if err != nil {
-		log.Printf("quorum: failed to query recent results for check_id=%s: %s", result.CheckID, err)
-	} else if quorum.MajorityDown(recent) {
-		allConsecutive := true
-		for _, r := range recent {
-			if r.Up {
-				continue
-			}
-			history, err := h.store.RecentResultsByProbe(result.CheckID, r.ProbeID, 2)
-			if err != nil {
-				log.Printf("quorum: failed to query history probe_id=%s check_id=%s: %s", r.ProbeID, result.CheckID, err)
-				allConsecutive = false
-				break
-			}
-			if !quorum.AllConsecutivelyDown(history) {
-				allConsecutive = false
-				break
-			}
-		}
-		if allConsecutive {
-			log.Printf("quorum: ALERT check_id=%s down on %d/%d probes (consecutive)", result.CheckID, countDown(recent), len(recent))
-			alreadyOpen, err := h.store.OpenIncident(result.CheckID)
-			if err != nil {
-				log.Printf("alert: failed to open incident check_id=%s: %s", result.CheckID, err)
-			} else if !alreadyOpen {
-				if check.Webhook != "" {
-					payload := alert.AlertPayload{
-						CheckID:     result.CheckID,
-						Target:      check.Target,
-						Status:      "down",
-						ProbesDown:  countDown(recent),
-						ProbesTotal: len(recent),
-					}
-					if ok := h.webhooks.Enqueue(check.Webhook, payload); !ok {
-						log.Printf("alert: webhook queue full, dropping check_id=%s url=%s", result.CheckID, check.Webhook)
-					}
-				}
-			}
-		}
-	} else {
-		resolved, err := h.store.ResolveIncident(result.CheckID)
-		if err != nil {
-			log.Printf("alert: failed to resolve incident check_id=%s: %s", result.CheckID, err)
-		} else if resolved {
-			if check.Webhook != "" {
-				payload := alert.AlertPayload{
-					CheckID:     result.CheckID,
-					Target:      check.Target,
-					Status:      "up",
-					ProbesDown:  countDown(recent),
-					ProbesTotal: len(recent),
-				}
-				if ok := h.webhooks.Enqueue(check.Webhook, payload); !ok {
-					log.Printf("alert: webhook queue full, dropping check_id=%s url=%s", result.CheckID, check.Webhook)
-				}
-			}
+	if outcome.Alert != nil {
+		if ok := h.webhooks.Enqueue(outcome.WebhookURL, *outcome.Alert); !ok {
+			log.Printf("alert: webhook queue full, dropping check_id=%s url=%s", outcome.Alert.CheckID, outcome.WebhookURL)
 		}
 	}
 
@@ -461,14 +394,4 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		log.Printf("handler: failed to encode incidents: %s", err)
 	}
-}
-
-func countDown(results []proto.CheckResult) int {
-	n := 0
-	for _, r := range results {
-		if !r.Up {
-			n++
-		}
-	}
-	return n
 }
