@@ -1,4 +1,4 @@
-package check
+package checks
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func TCP(checkID, probeID, target string, policy network.Policy) proto.CheckResu
 	result := proto.CheckResult{
 		CheckID:   checkID,
 		ProbeID:   probeID,
-		Type:      proto.CheckTCP,
+		Type:      string(CheckTCP),
 		Target:    target,
 		Timestamp: time.Now().UTC(),
 	}

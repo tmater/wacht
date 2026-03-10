@@ -5,12 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/store"
 )
 
 type fakeResultStore struct {
-	getCheckFn              func(id string) (*store.Check, error)
+	getCheckFn              func(id string) (*checks.Check, error)
 	saveResultFn            func(r proto.CheckResult) error
 	recentResultsPerProbeFn func(checkID string) ([]proto.CheckResult, error)
 	recentResultsByProbeFn  func(checkID, probeID string, n int) ([]proto.CheckResult, error)
@@ -21,7 +22,7 @@ type fakeResultStore struct {
 	resolveIncidentCalls    int
 }
 
-func (f *fakeResultStore) GetCheck(id string) (*store.Check, error) {
+func (f *fakeResultStore) GetCheck(id string) (*checks.Check, error) {
 	if f.getCheckFn != nil {
 		return f.getCheckFn(id)
 	}
@@ -68,13 +69,9 @@ func (f *fakeResultStore) ResolveIncident(checkID string) (bool, error) {
 
 func TestProbeResultProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{
-				ID:      id,
-				Type:    "http",
-				Target:  "https://example.com",
-				Webhook: "https://hooks.example.com/wacht",
-			}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
+			return &check, nil
 		},
 		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
 			return []proto.CheckResult{
@@ -119,8 +116,8 @@ func TestProbeResultProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 	if saved.ProbeID != "probe-1" {
 		t.Fatalf("saved ProbeID = %q, want probe-1", saved.ProbeID)
 	}
-	if saved.Type != proto.CheckHTTP {
-		t.Fatalf("saved Type = %q, want %q", saved.Type, proto.CheckHTTP)
+	if saved.Type != string(checks.CheckHTTP) {
+		t.Fatalf("saved Type = %q, want %q", saved.Type, checks.CheckHTTP)
 	}
 	if saved.Target != "https://example.com" {
 		t.Fatalf("saved Target = %q, want normalized target", saved.Target)
@@ -135,13 +132,9 @@ func TestProbeResultProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 
 func TestProbeResultProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{
-				ID:      id,
-				Type:    "tcp",
-				Target:  "db.example.com:5432",
-				Webhook: "https://hooks.example.com/wacht",
-			}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "tcp", "db.example.com:5432", "https://hooks.example.com/wacht", 0)
+			return &check, nil
 		},
 		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
 			return []proto.CheckResult{
@@ -176,13 +169,9 @@ func TestProbeResultProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T
 
 func TestProbeResultProcessorProcessReturnsNoAlertWhenIncidentAlreadyOpen(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{
-				ID:      id,
-				Type:    "http",
-				Target:  "https://example.com",
-				Webhook: "https://hooks.example.com/wacht",
-			}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
+			return &check, nil
 		},
 		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
 			return []proto.CheckResult{
@@ -220,8 +209,9 @@ func TestProbeResultProcessorProcessReturnsNoAlertWhenIncidentAlreadyOpen(t *tes
 
 func TestProbeResultProcessorProcessIgnoresQuorumQueryErrorAfterSave(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{ID: id, Type: "dns", Target: "example.com"}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "dns", "example.com", "", 0)
+			return &check, nil
 		},
 		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
 			return nil, errors.New("db unavailable")
@@ -277,8 +267,9 @@ func TestProbeResultProcessorProcessRejectsUnknownCheckID(t *testing.T) {
 
 func TestProbeResultProcessorProcessPropagatesSaveError(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{ID: id, Type: "http", Target: "https://example.com"}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
+			return &check, nil
 		},
 		saveResultFn: func(r proto.CheckResult) error {
 			return errors.New("write failed")
@@ -300,13 +291,9 @@ func TestProbeResultProcessorProcessPropagatesSaveError(t *testing.T) {
 
 func TestProbeResultProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailures(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{
-				ID:      id,
-				Type:    "http",
-				Target:  "https://example.com",
-				Webhook: "https://hooks.example.com/wacht",
-			}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
+			return &check, nil
 		},
 		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
 			return []proto.CheckResult{
@@ -340,12 +327,9 @@ func TestProbeResultProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailure
 
 func TestProbeResultProcessorProcessOpensIncidentWithoutWebhookAlert(t *testing.T) {
 	s := &fakeResultStore{
-		getCheckFn: func(id string) (*store.Check, error) {
-			return &store.Check{
-				ID:     id,
-				Type:   "http",
-				Target: "https://example.com",
-			}, nil
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
+			return &check, nil
 		},
 		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
 			return []proto.CheckResult{

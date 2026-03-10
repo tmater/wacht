@@ -2,12 +2,14 @@ package store
 
 import (
 	"testing"
+
+	"github.com/tmater/wacht/internal/checks"
 )
 
 func TestSeedChecks_SkipsExisting(t *testing.T) {
 	s := newTestStore(t)
 
-	checks := []Check{{ID: "c1", Type: "http", Target: "https://a.com", Webhook: ""}}
+	checks := []checks.Check{testCheck("c1", "http", "https://a.com")}
 	if err := s.SeedChecks(checks, 0); err != nil {
 		t.Fatalf("SeedChecks: %v", err)
 	}
@@ -37,7 +39,7 @@ func TestCheckCRUD(t *testing.T) {
 	}
 
 	// Create
-	c := Check{ID: "c1", Type: "http", Target: "https://example.com", Webhook: ""}
+	c := testCheck("c1", "http", "https://example.com")
 	if err := s.CreateCheck(c, user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
@@ -96,7 +98,7 @@ func TestCheckCrossUserIsolation(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	aliceCheck := Check{ID: "alice-check", Type: "http", Target: "https://alice.com"}
+	aliceCheck := testCheck("alice-check", "http", "https://alice.com")
 	if err := s.CreateCheck(aliceCheck, alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
@@ -121,5 +123,30 @@ func TestCheckCrossUserIsolation(t *testing.T) {
 	}
 	if got == nil {
 		t.Error("alice's check was deleted by bob")
+	}
+}
+
+func TestCheckCRUD_PersistsCanonicalDefinition(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("normalize@example.com", "password", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	c := testCheckWithWebhook("c1", "http", "https://example.com", "https://hooks.example.com", 30)
+	if err := s.CreateCheck(c, user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	got, err := s.GetCheck("c1")
+	if err != nil {
+		t.Fatalf("GetCheck: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetCheck: expected check, got nil")
+	}
+	if *got != c {
+		t.Fatalf("GetCheck = %+v, want %+v", *got, c)
 	}
 }

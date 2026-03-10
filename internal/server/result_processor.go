@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
+	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/quorum"
 	"github.com/tmater/wacht/internal/store"
 )
 
 type resultStore interface {
-	GetCheck(id string) (*store.Check, error)
+	GetCheck(id string) (*checks.Check, error)
 	SaveResult(r proto.CheckResult) error
 	RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error)
 	RecentResultsByProbe(checkID, probeID string, n int) ([]proto.CheckResult, error)
@@ -75,7 +76,7 @@ func (p *ProbeResultProcessor) Process(probe *store.Probe, incoming proto.CheckR
 	return p.resolveIncidentIfNeeded(check, recent)
 }
 
-func (p *ProbeResultProcessor) normalize(probe *store.Probe, incoming proto.CheckResult) (*store.Check, proto.CheckResult, error) {
+func (p *ProbeResultProcessor) normalize(probe *store.Probe, incoming proto.CheckResult) (*checks.Check, proto.CheckResult, error) {
 	if incoming.ProbeID != "" && incoming.ProbeID != probe.ProbeID {
 		return nil, proto.CheckResult{}, &badRequestError{message: "probe_id does not match authenticated probe"}
 	}
@@ -90,13 +91,13 @@ func (p *ProbeResultProcessor) normalize(probe *store.Probe, incoming proto.Chec
 
 	result := incoming
 	result.ProbeID = probe.ProbeID
-	result.Type = proto.CheckType(check.Type)
+	result.Type = string(check.Type)
 	result.Target = check.Target
 	result.Timestamp = time.Now().UTC()
 	return check, result, nil
 }
 
-func (p *ProbeResultProcessor) openIncidentIfNeeded(check *store.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
+func (p *ProbeResultProcessor) openIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
 	for _, result := range recent {
 		if result.Up {
 			continue
@@ -136,7 +137,7 @@ func (p *ProbeResultProcessor) openIncidentIfNeeded(check *store.Check, recent [
 	}, nil
 }
 
-func (p *ProbeResultProcessor) resolveIncidentIfNeeded(check *store.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
+func (p *ProbeResultProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
 	resolved, err := p.store.ResolveIncident(check.ID)
 	if err != nil {
 		log.Printf("alert: failed to resolve incident check_id=%s: %s", check.ID, err)

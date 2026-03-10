@@ -115,7 +115,7 @@ export default function Dashboard({ onLogout, showProbes = true }) {
 
           {editingId && (
             <CheckForm
-              initial={checks.find(c => c.ID === editingId)}
+              initial={checks.find(c => c.id === editingId)}
               onSave={handleSaved}
               onCancel={() => setEditingId(null)}
               onDelete={() => handleDelete(editingId)}
@@ -129,12 +129,12 @@ export default function Dashboard({ onLogout, showProbes = true }) {
           <div className={`${ui.card} px-4 divide-y divide-gray-700`}>
             {checks.map(check => (
               <CheckRow
-                key={check.ID}
+                key={check.id}
                 check={check}
-                statusCheck={statusByID[check.ID]}
+                statusCheck={statusByID[check.id]}
                 probesUp={probesUp}
                 probesTotal={probesTotal}
-                onEdit={() => { setEditingId(check.ID); setShowAddForm(false) }}
+                onEdit={() => { setEditingId(check.id); setShowAddForm(false) }}
               />
             ))}
           </div>

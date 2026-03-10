@@ -5,15 +5,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/tmater/wacht/internal/checks"
 	"gopkg.in/yaml.v3"
 )
 
 type ServerConfig struct {
-	Probes              []ProbeAuth `yaml:"probes"`
-	Checks              []Check     `yaml:"checks"`
-	SeedUser            SeedUser    `yaml:"seed_user"`
-	RetentionDays       int         `yaml:"retention_days"`        // 0 → default 30
-	AllowPrivateTargets bool        `yaml:"allow_private_targets"` // false by default
+	Probes              []ProbeAuth    `yaml:"probes"`
+	Checks              []checks.Check `yaml:"checks"`
+	SeedUser            SeedUser       `yaml:"seed_user"`
+	RetentionDays       int            `yaml:"retention_days"`        // 0 → default 30
+	AllowPrivateTargets bool           `yaml:"allow_private_targets"` // false by default
 }
 
 type SeedUser struct {
@@ -32,14 +33,6 @@ type ProbeConfig struct {
 	ProbeID             string        `yaml:"probe_id"`
 	HeartbeatInterval   time.Duration `yaml:"heartbeat_interval"`
 	AllowPrivateTargets bool          `yaml:"allow_private_targets"` // false by default
-}
-
-type Check struct {
-	ID       string `yaml:"id"`
-	Type     string `yaml:"type"`
-	Target   string `yaml:"target"`
-	Webhook  string `yaml:"webhook"`
-	Interval int    `yaml:"interval"`
 }
 
 // LoadServer reads and parses a server.yaml config file.

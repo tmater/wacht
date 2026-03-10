@@ -4,11 +4,11 @@ import * as ui from './ui.js'
 
 export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
   const isNew = !initial
-  const [id, setId] = useState(initial?.ID ?? '')
-  const [type, setType] = useState(initial?.Type ?? 'http')
-  const [target, setTarget] = useState(initial?.Target ?? '')
-  const [webhook, setWebhook] = useState(initial?.Webhook ?? '')
-  const [interval, setInterval] = useState(initial?.Interval ?? 30)
+  const [id, setId] = useState(initial?.id ?? '')
+  const [type, setType] = useState(initial?.type ?? 'http')
+  const [target, setTarget] = useState(initial?.target ?? '')
+  const [webhook, setWebhook] = useState(initial?.webhook ?? '')
+  const [interval, setInterval] = useState(initial?.interval ?? 30)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -17,10 +17,10 @@ export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
     setErr(null)
     setSaving(true)
     try {
-      const body = JSON.stringify({ ID: id, Type: type, Target: target, Webhook: webhook, Interval: parseInt(interval, 10) })
+      const body = JSON.stringify({ id, type, target, webhook, interval: parseInt(interval, 10) })
       const res = isNew
         ? await fetch(`${API_URL}/api/checks`, { method: 'POST', headers: authHeaders(), body })
-        : await fetch(`${API_URL}/api/checks/${initial.ID}`, { method: 'PUT', headers: authHeaders(), body })
+        : await fetch(`${API_URL}/api/checks/${initial.id}`, { method: 'PUT', headers: authHeaders(), body })
       if (!res.ok) {
         const text = await res.text()
         throw new Error(text.trim() || `HTTP ${res.status}`)
