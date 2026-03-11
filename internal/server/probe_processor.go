@@ -12,7 +12,9 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-type resultStore interface {
+type probeStore interface {
+	RegisterProbe(probeID, version string) error
+	UpdateProbeHeartbeat(probeID string) error
 	GetCheck(id string) (*checks.Check, error)
 	SaveResult(r proto.CheckResult) error
 	RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error)
@@ -21,34 +23,55 @@ type resultStore interface {
 	ResolveIncident(checkID string) (bool, error)
 }
 
+type ProbeHeartbeatRequest struct {
+	ProbeID string `json:"probe_id"`
+}
+
+type ProbeRegistrationRequest struct {
+	ProbeID string `json:"probe_id"`
+	Version string `json:"version"`
+}
+
 type ProbeResultOutcome struct {
 	WebhookURL string
 	Alert      *alert.AlertPayload
 }
 
-type probeResultProcessor interface {
+type probeProcessor interface {
+	Heartbeat(probe *store.Probe, req ProbeHeartbeatRequest) error
+	Register(probe *store.Probe, req ProbeRegistrationRequest) error
 	Process(probe *store.Probe, incoming proto.CheckResult) (ProbeResultOutcome, error)
 }
 
-// ProbeResultProcessor applies a single authenticated probe result to the
-// current monitoring state and reports any resulting alert transition.
-type ProbeResultProcessor struct {
-	store resultStore
+type ProbeProcessor struct {
+	store probeStore
 }
 
-func NewProbeResultProcessor(store resultStore) *ProbeResultProcessor {
-	return &ProbeResultProcessor{store: store}
+func NewProbeProcessor(store probeStore) *ProbeProcessor {
+	return &ProbeProcessor{store: store}
 }
 
-type badRequestError struct {
-	message string
+func (p *ProbeProcessor) Heartbeat(probe *store.Probe, req ProbeHeartbeatRequest) error {
+	if probe == nil {
+		return fmt.Errorf("probe is required")
+	}
+	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
+		return &badRequestError{message: "probe_id does not match authenticated probe"}
+	}
+	return p.store.UpdateProbeHeartbeat(probe.ProbeID)
 }
 
-func (e *badRequestError) Error() string {
-	return e.message
+func (p *ProbeProcessor) Register(probe *store.Probe, req ProbeRegistrationRequest) error {
+	if probe == nil {
+		return fmt.Errorf("probe is required")
+	}
+	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
+		return &badRequestError{message: "probe_id does not match authenticated probe"}
+	}
+	return p.store.RegisterProbe(probe.ProbeID, req.Version)
 }
 
-func (p *ProbeResultProcessor) Process(probe *store.Probe, incoming proto.CheckResult) (ProbeResultOutcome, error) {
+func (p *ProbeProcessor) Process(probe *store.Probe, incoming proto.CheckResult) (ProbeResultOutcome, error) {
 	if probe == nil {
 		return ProbeResultOutcome{}, fmt.Errorf("probe is required")
 	}
@@ -76,7 +99,7 @@ func (p *ProbeResultProcessor) Process(probe *store.Probe, incoming proto.CheckR
 	return p.resolveIncidentIfNeeded(check, recent)
 }
 
-func (p *ProbeResultProcessor) normalize(probe *store.Probe, incoming proto.CheckResult) (*checks.Check, proto.CheckResult, error) {
+func (p *ProbeProcessor) normalize(probe *store.Probe, incoming proto.CheckResult) (*checks.Check, proto.CheckResult, error) {
 	if incoming.ProbeID != "" && incoming.ProbeID != probe.ProbeID {
 		return nil, proto.CheckResult{}, &badRequestError{message: "probe_id does not match authenticated probe"}
 	}
@@ -97,7 +120,7 @@ func (p *ProbeResultProcessor) normalize(probe *store.Probe, incoming proto.Chec
 	return check, result, nil
 }
 
-func (p *ProbeResultProcessor) openIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
+func (p *ProbeProcessor) openIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
 	for _, result := range recent {
 		if result.Up {
 			continue
@@ -137,7 +160,7 @@ func (p *ProbeResultProcessor) openIncidentIfNeeded(check *checks.Check, recent 
 	}, nil
 }
 
-func (p *ProbeResultProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
+func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
 	resolved, err := p.store.ResolveIncident(check.ID)
 	if err != nil {
 		log.Printf("alert: failed to resolve incident check_id=%s: %s", check.ID, err)
