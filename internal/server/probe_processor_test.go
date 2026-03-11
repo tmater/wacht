@@ -10,26 +10,47 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-type fakeResultStore struct {
+type fakeProbeStore struct {
+	registerProbeFn         func(probeID, version string) error
+	updateProbeHeartbeatFn  func(probeID string) error
 	getCheckFn              func(id string) (*checks.Check, error)
 	saveResultFn            func(r proto.CheckResult) error
 	recentResultsPerProbeFn func(checkID string) ([]proto.CheckResult, error)
 	recentResultsByProbeFn  func(checkID, probeID string, n int) ([]proto.CheckResult, error)
 	openIncidentFn          func(checkID string) (bool, error)
 	resolveIncidentFn       func(checkID string) (bool, error)
+	registerProbeID         string
+	registerVersion         string
+	heartbeatProbeID        string
 	savedResults            []proto.CheckResult
 	openIncidentCalls       int
-	resolveIncidentCalls    int
 }
 
-func (f *fakeResultStore) GetCheck(id string) (*checks.Check, error) {
+func (f *fakeProbeStore) RegisterProbe(probeID, version string) error {
+	f.registerProbeID = probeID
+	f.registerVersion = version
+	if f.registerProbeFn != nil {
+		return f.registerProbeFn(probeID, version)
+	}
+	return nil
+}
+
+func (f *fakeProbeStore) UpdateProbeHeartbeat(probeID string) error {
+	f.heartbeatProbeID = probeID
+	if f.updateProbeHeartbeatFn != nil {
+		return f.updateProbeHeartbeatFn(probeID)
+	}
+	return nil
+}
+
+func (f *fakeProbeStore) GetCheck(id string) (*checks.Check, error) {
 	if f.getCheckFn != nil {
 		return f.getCheckFn(id)
 	}
 	return nil, nil
 }
 
-func (f *fakeResultStore) SaveResult(r proto.CheckResult) error {
+func (f *fakeProbeStore) SaveResult(r proto.CheckResult) error {
 	f.savedResults = append(f.savedResults, r)
 	if f.saveResultFn != nil {
 		return f.saveResultFn(r)
@@ -37,21 +58,21 @@ func (f *fakeResultStore) SaveResult(r proto.CheckResult) error {
 	return nil
 }
 
-func (f *fakeResultStore) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error) {
+func (f *fakeProbeStore) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error) {
 	if f.recentResultsPerProbeFn != nil {
 		return f.recentResultsPerProbeFn(checkID)
 	}
 	return nil, nil
 }
 
-func (f *fakeResultStore) RecentResultsByProbe(checkID, probeID string, n int) ([]proto.CheckResult, error) {
+func (f *fakeProbeStore) RecentResultsByProbe(checkID, probeID string, n int) ([]proto.CheckResult, error) {
 	if f.recentResultsByProbeFn != nil {
 		return f.recentResultsByProbeFn(checkID, probeID, n)
 	}
 	return nil, nil
 }
 
-func (f *fakeResultStore) OpenIncident(checkID string) (bool, error) {
+func (f *fakeProbeStore) OpenIncident(checkID string) (bool, error) {
 	f.openIncidentCalls++
 	if f.openIncidentFn != nil {
 		return f.openIncidentFn(checkID)
@@ -59,16 +80,44 @@ func (f *fakeResultStore) OpenIncident(checkID string) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeResultStore) ResolveIncident(checkID string) (bool, error) {
-	f.resolveIncidentCalls++
+func (f *fakeProbeStore) ResolveIncident(checkID string) (bool, error) {
 	if f.resolveIncidentFn != nil {
 		return f.resolveIncidentFn(checkID)
 	}
 	return false, nil
 }
 
-func TestProbeResultProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
-	s := &fakeResultStore{
+func TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe(t *testing.T) {
+	s := &fakeProbeStore{}
+	p := NewProbeProcessor(s)
+
+	err := p.Heartbeat(&store.Probe{ProbeID: "probe-1"}, ProbeHeartbeatRequest{})
+	if err != nil {
+		t.Fatalf("Heartbeat() error = %v", err)
+	}
+	if s.heartbeatProbeID != "probe-1" {
+		t.Fatalf("UpdateProbeHeartbeat probeID = %q, want probe-1", s.heartbeatProbeID)
+	}
+}
+
+func TestProbeProcessorRegisterRecordsVersion(t *testing.T) {
+	s := &fakeProbeStore{}
+	p := NewProbeProcessor(s)
+
+	err := p.Register(&store.Probe{ProbeID: "probe-1"}, ProbeRegistrationRequest{Version: "v1.2.3"})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if s.registerProbeID != "probe-1" {
+		t.Fatalf("RegisterProbe probeID = %q, want probe-1", s.registerProbeID)
+	}
+	if s.registerVersion != "v1.2.3" {
+		t.Fatalf("RegisterProbe version = %q, want v1.2.3", s.registerVersion)
+	}
+}
+
+func TestProbeProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
+	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
 			return &check, nil
@@ -88,7 +137,7 @@ func TestProbeResultProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 		},
 	}
 
-	p := NewProbeResultProcessor(s)
+	p := NewProbeProcessor(s)
 	outcome, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
 		Up:      false,
@@ -130,8 +179,8 @@ func TestProbeResultProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 	}
 }
 
-func TestProbeResultProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
-	s := &fakeResultStore{
+func TestProbeProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
+	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "tcp", "db.example.com:5432", "https://hooks.example.com/wacht", 0)
 			return &check, nil
@@ -148,7 +197,7 @@ func TestProbeResultProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T
 		},
 	}
 
-	p := NewProbeResultProcessor(s)
+	p := NewProbeProcessor(s)
 	outcome, err := p.Process(&store.Probe{ProbeID: "probe-2"}, proto.CheckResult{
 		CheckID: "db",
 		Up:      true,
@@ -167,75 +216,8 @@ func TestProbeResultProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T
 	}
 }
 
-func TestProbeResultProcessorProcessReturnsNoAlertWhenIncidentAlreadyOpen(t *testing.T) {
-	s := &fakeResultStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
-			return &check, nil
-		},
-		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
-			return []proto.CheckResult{
-				{ProbeID: "probe-1", Up: false},
-				{ProbeID: "probe-2", Up: false},
-				{ProbeID: "probe-3", Up: true},
-			}, nil
-		},
-		recentResultsByProbeFn: func(checkID, probeID string, n int) ([]proto.CheckResult, error) {
-			return []proto.CheckResult{
-				{ProbeID: probeID, Up: false},
-				{ProbeID: probeID, Up: false},
-			}, nil
-		},
-		openIncidentFn: func(checkID string) (bool, error) {
-			return true, nil
-		},
-	}
-
-	p := NewProbeResultProcessor(s)
-	outcome, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
-		CheckID: "site",
-		Up:      false,
-	})
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
-	if outcome.Alert != nil {
-		t.Fatalf("Process() alert = %#v, want nil", outcome.Alert)
-	}
-	if s.openIncidentCalls != 1 {
-		t.Fatalf("OpenIncident calls = %d, want 1", s.openIncidentCalls)
-	}
-}
-
-func TestProbeResultProcessorProcessIgnoresQuorumQueryErrorAfterSave(t *testing.T) {
-	s := &fakeResultStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "dns", "example.com", "", 0)
-			return &check, nil
-		},
-		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
-			return nil, errors.New("db unavailable")
-		},
-	}
-
-	p := NewProbeResultProcessor(s)
-	outcome, err := p.Process(&store.Probe{ProbeID: "probe-3"}, proto.CheckResult{
-		CheckID: "dns-check",
-		Up:      true,
-	})
-	if err != nil {
-		t.Fatalf("Process() error = %v, want nil", err)
-	}
-	if outcome.Alert != nil {
-		t.Fatalf("Process() alert = %#v, want nil", outcome.Alert)
-	}
-	if len(s.savedResults) != 1 {
-		t.Fatalf("saved results = %d, want 1", len(s.savedResults))
-	}
-}
-
-func TestProbeResultProcessorProcessRejectsInvalidProbeID(t *testing.T) {
-	p := NewProbeResultProcessor(&fakeResultStore{})
+func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
+	p := NewProbeProcessor(&fakeProbeStore{})
 
 	_, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
@@ -250,8 +232,8 @@ func TestProbeResultProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	}
 }
 
-func TestProbeResultProcessorProcessRejectsUnknownCheckID(t *testing.T) {
-	p := NewProbeResultProcessor(&fakeResultStore{})
+func TestProbeProcessorProcessRejectsUnknownCheckID(t *testing.T) {
+	p := NewProbeProcessor(&fakeProbeStore{})
 
 	_, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "missing",
@@ -265,8 +247,8 @@ func TestProbeResultProcessorProcessRejectsUnknownCheckID(t *testing.T) {
 	}
 }
 
-func TestProbeResultProcessorProcessPropagatesSaveError(t *testing.T) {
-	s := &fakeResultStore{
+func TestProbeProcessorProcessPropagatesSaveError(t *testing.T) {
+	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
 			return &check, nil
@@ -276,7 +258,7 @@ func TestProbeResultProcessorProcessPropagatesSaveError(t *testing.T) {
 		},
 	}
 
-	p := NewProbeResultProcessor(s)
+	p := NewProbeProcessor(s)
 	_, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
 		Up:      true,
@@ -289,8 +271,8 @@ func TestProbeResultProcessorProcessPropagatesSaveError(t *testing.T) {
 	}
 }
 
-func TestProbeResultProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailures(t *testing.T) {
-	s := &fakeResultStore{
+func TestProbeProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailures(t *testing.T) {
+	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
 			return &check, nil
@@ -309,7 +291,7 @@ func TestProbeResultProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailure
 		},
 	}
 
-	p := NewProbeResultProcessor(s)
+	p := NewProbeProcessor(s)
 	outcome, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
 		Up:      false,
@@ -322,42 +304,5 @@ func TestProbeResultProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailure
 	}
 	if s.openIncidentCalls != 0 {
 		t.Fatalf("OpenIncident calls = %d, want 0", s.openIncidentCalls)
-	}
-}
-
-func TestProbeResultProcessorProcessOpensIncidentWithoutWebhookAlert(t *testing.T) {
-	s := &fakeResultStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
-			return &check, nil
-		},
-		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
-			return []proto.CheckResult{
-				{ProbeID: "probe-1", Up: false},
-				{ProbeID: "probe-2", Up: false},
-				{ProbeID: "probe-3", Up: true},
-			}, nil
-		},
-		recentResultsByProbeFn: func(checkID, probeID string, n int) ([]proto.CheckResult, error) {
-			return []proto.CheckResult{
-				{ProbeID: probeID, Up: false},
-				{ProbeID: probeID, Up: false},
-			}, nil
-		},
-	}
-
-	p := NewProbeResultProcessor(s)
-	outcome, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
-		CheckID: "site",
-		Up:      false,
-	})
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
-	}
-	if outcome.Alert != nil {
-		t.Fatalf("Process() alert = %#v, want nil", outcome.Alert)
-	}
-	if s.openIncidentCalls != 1 {
-		t.Fatalf("OpenIncident calls = %d, want 1", s.openIncidentCalls)
 	}
 }

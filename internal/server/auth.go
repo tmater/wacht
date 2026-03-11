@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -152,32 +153,22 @@ func (rl *rateLimiter) middleware(next http.HandlerFunc) http.HandlerFunc {
 
 // handleLogin authenticates a user and returns a session token.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
+	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	user, err := h.store.AuthenticateUser(req.Email, req.Password)
+	outcome, err := h.authProcessor.Login(req)
 	if err != nil {
-		log.Printf("auth: authenticate error email=%s: %s", req.Email, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if user == nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	token, err := h.store.CreateSession(user.ID)
-	if err != nil {
-		log.Printf("auth: failed to create session user_id=%d: %s", user.ID, err)
+		if writeProcessorError(w, err) {
+			return
+		}
+		log.Printf("auth: login failed email=%s: %s", req.Email, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token, "email": user.Email})
+	json.NewEncoder(w).Encode(map[string]string{"token": outcome.Token, "email": outcome.Email})
 }
 
 // handleLogout deletes the session token.
@@ -196,27 +187,121 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 // handleChangePassword verifies the current password and sets a new one.
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
-	var req struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
-	}
+	var req ChangePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.CurrentPassword == "" || req.NewPassword == "" {
-		http.Error(w, "current_password and new_password are required", http.StatusBadRequest)
-		return
-	}
-	ok, err := h.store.UpdateUserPassword(user.ID, req.CurrentPassword, req.NewPassword)
-	if err != nil {
+	if err := h.authProcessor.ChangePassword(user, req); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
 		log.Printf("auth: failed to update password user_id=%d: %s", user.ID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !ok {
-		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRequestAccess accepts a public email submission for signup.
+// Always returns 200 OK to prevent email enumeration.
+func (h *Handler) handleRequestAccess(w http.ResponseWriter, r *http.Request) {
+	var req RequestAccessRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if err := h.authProcessor.RequestAccess(req); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		log.Printf("signup: failed to create request email=%s: %s", req.Email, err)
+	} else {
+		log.Printf("signup: request received email=%s", req.Email)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleListSignupRequests returns all pending signup requests. Protected by requireAdmin.
+func (h *Handler) handleListSignupRequests(w http.ResponseWriter, r *http.Request) {
+	reqs, err := h.authProcessor.ListPendingSignupRequests()
+	if err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		log.Printf("admin: failed to list signup requests: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	type requestJSON struct {
+		ID          int64  `json:"id"`
+		Email       string `json:"email"`
+		RequestedAt string `json:"requested_at"`
+	}
+
+	out := make([]requestJSON, 0, len(reqs))
+	for _, sr := range reqs {
+		out = append(out, requestJSON{
+			ID:          sr.ID,
+			Email:       sr.Email,
+			RequestedAt: sr.RequestedAt.UTC().Format(time.RFC3339),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		log.Printf("admin: failed to encode signup requests: %s", err)
+	}
+}
+
+// handleApproveSignupRequest approves a pending request and returns the generated
+// temporary password. Protected by requireAdmin.
+func (h *Handler) handleApproveSignupRequest(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	outcome, err := h.authProcessor.ApproveSignupRequest(id)
+	if err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		log.Printf("admin: failed to approve signup request id=%d: %s", id, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("admin: approved signup request id=%d email=%s", id, outcome.Email)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]string{
+		"email":         outcome.Email,
+		"temp_password": outcome.TempPassword,
+	}); err != nil {
+		log.Printf("admin: failed to encode approved signup request id=%d: %s", id, err)
+	}
+}
+
+// handleDeleteSignupRequest rejects and removes a pending signup request.
+// Protected by requireAdmin.
+func (h *Handler) handleDeleteSignupRequest(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.authProcessor.DeleteSignupRequest(id); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		log.Printf("admin: failed to delete signup request id=%d: %s", id, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("admin: rejected signup request id=%d", id)
 	w.WriteHeader(http.StatusNoContent)
 }

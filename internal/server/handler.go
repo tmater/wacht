@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -19,23 +18,25 @@ import (
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
-	store           *store.Store
-	config          *config.ServerConfig
-	webhooks        *alert.Sender
-	resultProcessor probeResultProcessor
-	loginLimiter    *rateLimiter
-	signupLimiter   *rateLimiter
+	store          *store.Store
+	config         *config.ServerConfig
+	webhooks       *alert.Sender
+	authProcessor  authProcessor
+	probeProcessor probeProcessor
+	loginLimiter   *rateLimiter
+	signupLimiter  *rateLimiter
 }
 
 // New creates a new Handler.
 func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 	return &Handler{
-		store:           store,
-		config:          cfg,
-		webhooks:        alert.NewSender(),
-		resultProcessor: NewProbeResultProcessor(store),
-		loginLimiter:    newRateLimiter(),
-		signupLimiter:   newRateLimiter(),
+		store:          store,
+		config:         cfg,
+		webhooks:       alert.NewSender(),
+		authProcessor:  NewAuthProcessor(store),
+		probeProcessor: NewProbeProcessor(store),
+		loginLimiter:   newRateLimiter(),
+		signupLimiter:  newRateLimiter(),
 	}
 }
 
@@ -263,18 +264,15 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 // handleHeartbeat updates last_seen_at for a registered probe.
 func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
-	var req struct {
-		ProbeID string `json:"probe_id"`
-	}
+	var req ProbeHeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
-		http.Error(w, "probe_id does not match authenticated probe", http.StatusBadRequest)
-		return
-	}
-	if err := h.store.UpdateProbeHeartbeat(probe.ProbeID); err != nil {
+	if err := h.probeProcessor.Heartbeat(probe, req); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
 		log.Printf("handler: failed to update heartbeat probe_id=%s: %s", probe.ProbeID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -285,19 +283,15 @@ func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 // handleProbeRegister records an authenticated probe startup.
 func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
-	var req struct {
-		ProbeID string `json:"probe_id"`
-		Version string `json:"version"`
-	}
+	var req ProbeRegistrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
-		http.Error(w, "probe_id does not match authenticated probe", http.StatusBadRequest)
-		return
-	}
-	if err := h.store.RegisterProbe(probe.ProbeID, req.Version); err != nil {
+	if err := h.probeProcessor.Register(probe, req); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
 		log.Printf("handler: failed to register probe_id=%s: %s", probe.ProbeID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -315,11 +309,9 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	outcome, err := h.resultProcessor.Process(probe, result)
+	outcome, err := h.probeProcessor.Process(probe, result)
 	if err != nil {
-		var badRequest *badRequestError
-		if errors.As(err, &badRequest) {
-			http.Error(w, badRequest.Error(), http.StatusBadRequest)
+		if writeProcessorError(w, err) {
 			return
 		}
 		log.Printf("handler: failed to process result check_id=%s probe_id=%s: %s", result.CheckID, probe.ProbeID, err)
