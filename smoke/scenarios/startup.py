@@ -8,21 +8,22 @@ from client import SmokeError, wait_for
 
 # Prove the packaged stack can boot, accept auth, and show a real probe-driven
 # result in the authenticated status view.
-def run(client):
-    client.wait_for_health()
-    token = client.login()
+def run(server, mock):
+    server.wait_for_health()
+    mock.set_state("up")
+    token = server.login()
     check_id = f"smoke-startup-{uuid.uuid4().hex[:8]}"
     payload = {
         "id": check_id,
         "type": "http",
-        "target": "http://mock:9090/up",
+        "target": "http://mock:9090/state",
         "interval": 1,
     }
-    client.create_check(token, payload)
+    server.create_check(token, payload)
 
     try:
         def ready():
-            status = client.get_status(token)
+            status = server.get_status(token)
             checks = {check["check_id"]: check for check in status.get("checks", [])}
             probes = {probe["probe_id"]: probe for probe in status.get("probes", [])}
 
@@ -56,4 +57,4 @@ def run(client):
         if check_id not in checks:
             raise SmokeError(f"created startup check {check_id} is missing from /status")
     finally:
-        client.delete_check_if_present(token, check_id)
+        server.delete_check_if_present(token, check_id)

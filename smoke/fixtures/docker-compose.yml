@@ -74,6 +74,8 @@ services:
       context: ../..
       args:
         BINARY: wacht-mock
+    ports:
+      - "${SMOKE_MOCK_PORT:-19090}:9090"
     restart: unless-stopped
 
 volumes:
