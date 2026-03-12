@@ -1,11 +1,11 @@
 allow_private_targets: true
 probes:
-  - id: probe-smoke
-    secret: smoke-secret
+  - id: probe-1
+    secret: smoke-secret-1
+  - id: probe-2
+    secret: smoke-secret-2
+  - id: probe-3
+    secret: smoke-secret-3
 seed_user:
   email: smoke@wacht.local
   password: smoke-password
-checks:
-  - id: check-self
-    type: http
-    target: http://server:8080/healthz
