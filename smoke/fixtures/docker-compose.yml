@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wacht
+      POSTGRES_PASSWORD: wacht
+      POSTGRES_DB: wacht
+    volumes:
+      - wacht-smoke-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wacht"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: ../..
+      args:
+        BINARY: wacht-server
+    command: ["--config=/etc/wacht/server.yaml", "--dsn=postgres://wacht:wacht@postgres/wacht?sslmode=disable"]
+    volumes:
+      - ./server.yaml:/etc/wacht/server.yaml:ro
+    ports:
+      - "${SMOKE_HTTP_PORT:-18080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  probe:
+    build:
+      context: ../..
+      args:
+        BINARY: wacht-probe
+    command: ["--config=/etc/wacht/probe.yaml"]
+    volumes:
+      - ./probe.yaml:/etc/wacht/probe.yaml:ro
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  wacht-smoke-data:

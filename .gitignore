@@ -10,6 +10,8 @@ CLAUDE.md
 *.db-shm
 bin/
 logs/
+__pycache__/
+*.py[cod]
 
 # OS
 .DS_Store
