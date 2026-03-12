@@ -2,6 +2,15 @@
 
 This directory contains black-box smoke tests for the packaged Wacht stack.
 
+The smoke stack is intentionally realistic:
+- Postgres
+- Wacht server
+- 3 real probes
+- the mock target service
+
+Scenarios create and clean up their own checks so they can all run against the
+same shared topology.
+
 
 ## Run locally
 

@@ -15,22 +15,24 @@ def run(client):
     payload = {
         "id": check_id,
         "type": "http",
-        "target": "http://server:8080/healthz",
-        "interval": 30,
+        "target": "http://mock:9090/up",
+        "interval": 1,
     }
 
     client.create_check(token, payload)
-    checks = client.list_checks(token)
+    try:
+        checks = client.list_checks(token)
 
-    created = next((check for check in checks if check.get("id") == check_id), None)
-    if created is None:
-        raise SmokeError(f"created check {check_id} not returned by GET /api/checks")
-    if created.get("type") != "http":
-        raise SmokeError(f"created check {check_id} has unexpected type {created.get('type')!r}")
-    if created.get("target") != payload["target"]:
-        raise SmokeError(f"created check {check_id} has unexpected target {created.get('target')!r}")
+        created = next((check for check in checks if check.get("id") == check_id), None)
+        if created is None:
+            raise SmokeError(f"created check {check_id} not returned by GET /api/checks")
+        if created.get("type") != "http":
+            raise SmokeError(f"created check {check_id} has unexpected type {created.get('type')!r}")
+        if created.get("target") != payload["target"]:
+            raise SmokeError(f"created check {check_id} has unexpected target {created.get('target')!r}")
+    finally:
+        client.delete_check_if_present(token, check_id)
 
-    client.delete_check(token, check_id)
     checks = client.list_checks(token)
     if any(check.get("id") == check_id for check in checks):
         raise SmokeError(f"deleted check {check_id} is still returned by GET /api/checks")

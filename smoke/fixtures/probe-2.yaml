@@ -1,0 +1,5 @@
+secret: smoke-secret-2
+server: http://server:8080
+probe_id: probe-2
+heartbeat_interval: 2s
+allow_private_targets: true
