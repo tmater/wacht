@@ -71,7 +71,7 @@ Private, loopback, and link-local targets are blocked unless
 
 ## How alerting works
 
-A webhook fires when a **strict majority of probes** each report a check as down for **2 consecutive failures**. It fires once on transition (up → down and down → up), deduplicated via an incidents table.
+A webhook fires when a **strict majority of probes** each report a check as down for **2 consecutive failures**. Recovery requires a non-down majority with **2 consecutive healthy results** from the probes that observed recovery. It fires once on transition (up → down and down → up), deduplicated via an incidents table.
 
 Minimum recommended probe count is 3 — quorum works with 2 but leaves no room for a probe going offline.
 
