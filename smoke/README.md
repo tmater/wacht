@@ -37,5 +37,3 @@ Override the host port if needed:
 ```sh
 SMOKE_HTTP_PORT=28080 python3 smoke/run.py
 ```
-
-The harness uses [fixtures/docker-compose.yml](/Users/tmater/Projects/wacht/smoke/fixtures/docker-compose.yml) and the seeded credentials from [fixtures/server.yaml](/Users/tmater/Projects/wacht/smoke/fixtures/server.yaml).

@@ -64,11 +64,15 @@ def main():
     stack = ComposeStack(Path(args.compose_file).resolve(), repo_root)
     client = SmokeClient(base_url=args.base_url, email=args.email, password=args.password)
     started_stack = False
+    stack_ready = False
 
     try:
         if not args.skip_stack:
-            stack.up()
+            # Mark the stack as started before `up()` so partial Compose startup
+            # still tears down any containers or volumes created before failure.
             started_stack = True
+            stack.up()
+            stack_ready = True
 
         for name, scenario in selected_scenarios(args):
             print(f"[scenario] {name}")
@@ -83,7 +87,7 @@ def main():
             stack.logs()
         return 1
     finally:
-        if started_stack and not args.keep_up:
+        if started_stack and (not args.keep_up or not stack_ready):
             stack.down()
 
 
