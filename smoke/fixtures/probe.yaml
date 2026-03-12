@@ -1,0 +1,5 @@
+secret: smoke-secret
+server: http://server:8080
+probe_id: probe-smoke
+heartbeat_interval: 30s
+allow_private_targets: true

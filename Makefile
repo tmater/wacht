@@ -1,7 +1,7 @@
 DOCKER ?= docker
 DEV_COMPOSE = $(DOCKER) compose -f docker-compose.yml -f docker-compose.dev.yml
 
-.PHONY: up down rebuild restart logs test
+.PHONY: up down rebuild restart logs test smoke
 
 # Start full dev stack (server + 3 probes + mock)
 up:
@@ -27,3 +27,7 @@ logs:
 # Run tests
 test:
 	go test ./...
+
+# Run black-box smoke tests against the packaged stack
+smoke:
+	python3 smoke/run.py
