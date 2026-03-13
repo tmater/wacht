@@ -13,7 +13,7 @@ if str(SMOKE_DIR) not in sys.path:
     sys.path.insert(0, str(SMOKE_DIR))
 
 from client import MockClient, SmokeClient, SmokeError  # noqa: E402
-from scenarios import crud, flapping, quorum, startup, webhook  # noqa: E402
+from scenarios import auth_guard, bad_auth, crud, flapping, probe_rejection, quorum, startup, update, webhook  # noqa: E402
 from stack import ComposeStack  # noqa: E402
 
 
@@ -21,8 +21,12 @@ from stack import ComposeStack  # noqa: E402
 # stack lifecycle plus shared client configuration.
 SCENARIOS = {
     "startup": startup.run,
+    "auth_guard": auth_guard.run,
+    "bad_auth": bad_auth.run,
+    "update": update.run,
     "crud": crud.run,
     "flapping": flapping.run,
+    "probe_rejection": probe_rejection.run,
     "quorum": quorum.run,
     "webhook": webhook.run,
 }
