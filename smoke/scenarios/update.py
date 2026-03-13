@@ -17,7 +17,7 @@ def run(server, mock):
     initial = {
         "id": check_id,
         "type": "http",
-        "target": "http://mock:9090/state",
+        "target": "http://mock:9090/http/state",
         "interval": 1,
     }
     updated = {

@@ -36,7 +36,7 @@ def run(server, mock):
         payload={
             "id": invalid_webhook_id,
             "type": "http",
-            "target": "http://mock:9090/state",
+            "target": "http://mock:9090/http/state",
             "webhook": "http://user:pass@example.com/webhook",
             "interval": 1,
         },

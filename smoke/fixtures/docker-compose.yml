@@ -12,6 +12,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      smoke:
 
   server:
     build:
@@ -24,6 +26,8 @@ services:
     ports:
       - "${SMOKE_HTTP_PORT:-18080}:8080"
     depends_on:
+      mock:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
@@ -32,6 +36,10 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+    dns:
+      - 172.29.0.53
+    networks:
+      smoke:
 
   probe-1:
     build:
@@ -42,8 +50,14 @@ services:
     volumes:
       - ./probe-1.yaml:/etc/wacht/probe.yaml:ro
     depends_on:
+      mock:
+        condition: service_healthy
       server:
         condition: service_healthy
+    dns:
+      - 172.29.0.53
+    networks:
+      smoke:
 
   probe-2:
     build:
@@ -54,8 +68,14 @@ services:
     volumes:
       - ./probe-2.yaml:/etc/wacht/probe.yaml:ro
     depends_on:
+      mock:
+        condition: service_healthy
       server:
         condition: service_healthy
+    dns:
+      - 172.29.0.53
+    networks:
+      smoke:
 
   probe-3:
     build:
@@ -66,8 +86,14 @@ services:
     volumes:
       - ./probe-3.yaml:/etc/wacht/probe.yaml:ro
     depends_on:
+      mock:
+        condition: service_healthy
       server:
         condition: service_healthy
+    dns:
+      - 172.29.0.53
+    networks:
+      smoke:
 
   mock:
     build:
@@ -77,6 +103,21 @@ services:
     ports:
       - "${SMOKE_MOCK_PORT:-19090}:9090"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/up || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      smoke:
+        ipv4_address: 172.29.0.53
 
 volumes:
   wacht-smoke-data:
+
+networks:
+  smoke:
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24

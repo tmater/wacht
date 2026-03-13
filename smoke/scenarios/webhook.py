@@ -19,7 +19,7 @@ def run(server, mock):
     payload = {
         "id": check_id,
         "type": "http",
-        "target": "http://mock:9090/state",
+        "target": "http://mock:9090/http/state",
         "webhook": webhook_url,
         "interval": 1,
     }
@@ -123,7 +123,7 @@ def assert_delivery_payloads(deliveries, check_id):
     for payload in deliveries:
         if payload.get("check_id") != check_id:
             raise SmokeError(f"expected webhook check_id {check_id}, got {payload}")
-        if payload.get("target") != "http://mock:9090/state":
+        if payload.get("target") != "http://mock:9090/http/state":
             raise SmokeError(f"expected webhook target to be the smoke mock state endpoint, got {payload}")
         if payload.get("probes_total") != 3:
             raise SmokeError(f"expected webhook probes_total=3 for {check_id}, got {payload}")
