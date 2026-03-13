@@ -29,14 +29,15 @@ type Handler struct {
 
 // New creates a new Handler.
 func New(store *store.Store, cfg *config.ServerConfig) *Handler {
+	authRateLimit := cfg.AuthRateLimit
 	return &Handler{
 		store:          store,
 		config:         cfg,
 		webhooks:       alert.NewSender(network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
 		authProcessor:  NewAuthProcessor(store),
 		probeProcessor: NewProbeProcessor(store),
-		loginLimiter:   newRateLimiter(),
-		signupLimiter:  newRateLimiter(),
+		loginLimiter:   newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
+		signupLimiter:  newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
 	}
 }
 

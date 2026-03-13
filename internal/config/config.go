@@ -15,6 +15,7 @@ type ServerConfig struct {
 	SeedUser            SeedUser       `yaml:"seed_user"`
 	RetentionDays       int            `yaml:"retention_days"`        // 0 → default 30
 	AllowPrivateTargets bool           `yaml:"allow_private_targets"` // false by default
+	AuthRateLimit       RateLimit      `yaml:"auth_rate_limit"`
 }
 
 type SeedUser struct {
@@ -25,6 +26,11 @@ type SeedUser struct {
 type ProbeAuth struct {
 	ID     string `yaml:"id"`
 	Secret string `yaml:"secret"`
+}
+
+type RateLimit struct {
+	Requests int           `yaml:"requests"`
+	Window   time.Duration `yaml:"window"`
 }
 
 type ProbeConfig struct {

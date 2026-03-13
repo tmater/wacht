@@ -106,6 +106,8 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 type rateLimiter struct {
 	mu     sync.Mutex
 	tokens map[string]*tokenBucket
+	limit  int
+	window time.Duration
 }
 
 type tokenBucket struct {
@@ -114,12 +116,22 @@ type tokenBucket struct {
 }
 
 const (
-	rateLimitRequests = 10
-	rateLimitWindow   = time.Minute
+	defaultRateLimitRequests = 10
+	defaultRateLimitWindow   = time.Minute
 )
 
-func newRateLimiter() *rateLimiter {
-	return &rateLimiter{tokens: make(map[string]*tokenBucket)}
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	if limit <= 0 {
+		limit = defaultRateLimitRequests
+	}
+	if window <= 0 {
+		window = defaultRateLimitWindow
+	}
+	return &rateLimiter{
+		tokens: make(map[string]*tokenBucket),
+		limit:  limit,
+		window: window,
+	}
 }
 
 func (rl *rateLimiter) allow(ip string) bool {
@@ -127,10 +139,10 @@ func (rl *rateLimiter) allow(ip string) bool {
 	defer rl.mu.Unlock()
 	b, ok := rl.tokens[ip]
 	if !ok || time.Now().After(b.resetAt) {
-		rl.tokens[ip] = &tokenBucket{count: 1, resetAt: time.Now().Add(rateLimitWindow)}
+		rl.tokens[ip] = &tokenBucket{count: 1, resetAt: time.Now().Add(rl.window)}
 		return true
 	}
-	if b.count >= rateLimitRequests {
+	if b.count >= rl.limit {
 		return false
 	}
 	b.count++

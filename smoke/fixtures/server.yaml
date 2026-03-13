@@ -1,4 +1,7 @@
 allow_private_targets: true
+auth_rate_limit:
+  requests: 100
+  window: 1m
 probes:
   - id: probe-1
     secret: smoke-secret-1
