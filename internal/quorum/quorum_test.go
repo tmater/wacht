@@ -64,3 +64,28 @@ func TestAllConsecutivelyDown(t *testing.T) {
 		})
 	}
 }
+
+func TestAllConsecutivelyUp(t *testing.T) {
+	tests := []struct {
+		name string
+		ups  []bool
+		want bool
+	}{
+		{"empty", []bool{}, false},
+		{"one up - below threshold", []bool{true}, false},
+		{"two up - meets threshold", []bool{true, true}, true},
+		{"three up", []bool{true, true, true}, true},
+		{"two up one down", []bool{true, true, false}, false},
+		{"one down then two up - down breaks streak", []bool{true, false, true}, false},
+		{"all down", []bool{false, false}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := AllConsecutivelyUp(results(tt.ups...))
+			if got != tt.want {
+				t.Errorf("AllConsecutivelyUp(%v) = %v, want %v", tt.ups, got, tt.want)
+			}
+		})
+	}
+}

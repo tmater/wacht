@@ -24,6 +24,7 @@ type fakeProbeStore struct {
 	heartbeatProbeID        string
 	savedResults            []proto.CheckResult
 	openIncidentCalls       int
+	resolveIncidentCalls    int
 }
 
 func (f *fakeProbeStore) RegisterProbe(probeID, version string) error {
@@ -81,6 +82,7 @@ func (f *fakeProbeStore) OpenIncident(checkID string) (bool, error) {
 }
 
 func (f *fakeProbeStore) ResolveIncident(checkID string) (bool, error) {
+	f.resolveIncidentCalls++
 	if f.resolveIncidentFn != nil {
 		return f.resolveIncidentFn(checkID)
 	}
@@ -192,6 +194,15 @@ func TestProbeProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
 				{ProbeID: "probe-3", Up: false},
 			}, nil
 		},
+		recentResultsByProbeFn: func(checkID, probeID string, n int) ([]proto.CheckResult, error) {
+			if probeID == "probe-3" {
+				t.Fatalf("RecentResultsByProbe should not be called for down probe %s", probeID)
+			}
+			return []proto.CheckResult{
+				{ProbeID: probeID, Up: true},
+				{ProbeID: probeID, Up: true},
+			}, nil
+		},
 		resolveIncidentFn: func(checkID string) (bool, error) {
 			return true, nil
 		},
@@ -213,6 +224,42 @@ func TestProbeProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
 	}
 	if outcome.Alert.ProbesDown != 1 || outcome.Alert.ProbesTotal != 3 {
 		t.Fatalf("alert counts = %d/%d, want 1/3", outcome.Alert.ProbesDown, outcome.Alert.ProbesTotal)
+	}
+}
+
+func TestProbeProcessorProcessDoesNotResolveIncidentWithoutConsecutiveSuccesses(t *testing.T) {
+	s := &fakeProbeStore{
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "tcp", "db.example.com:5432", "https://hooks.example.com/wacht", 0)
+			return &check, nil
+		},
+		recentResultsPerProbeFn: func(checkID string) ([]proto.CheckResult, error) {
+			return []proto.CheckResult{
+				{ProbeID: "probe-1", Up: true},
+				{ProbeID: "probe-2", Up: true},
+				{ProbeID: "probe-3", Up: false},
+			}, nil
+		},
+		recentResultsByProbeFn: func(checkID, probeID string, n int) ([]proto.CheckResult, error) {
+			return []proto.CheckResult{
+				{ProbeID: probeID, Up: true},
+			}, nil
+		},
+	}
+
+	p := NewProbeProcessor(s)
+	outcome, err := p.Process(&store.Probe{ProbeID: "probe-2"}, proto.CheckResult{
+		CheckID: "db",
+		Up:      true,
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if outcome.Alert != nil {
+		t.Fatalf("Process() returned recovery alert = %#v, want nil", outcome.Alert)
+	}
+	if s.resolveIncidentCalls != 0 {
+		t.Fatalf("ResolveIncident calls = %d, want 0", s.resolveIncidentCalls)
 	}
 }
 

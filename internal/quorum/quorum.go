@@ -2,9 +2,9 @@ package quorum
 
 import "github.com/tmater/wacht/internal/proto"
 
-// consecutiveFailureThreshold is the number of consecutive down results required
-// from a single probe before it is considered to be observing a real outage.
-const consecutiveFailureThreshold = 2
+// consecutiveResultThreshold is the number of consecutive same-direction
+// results required from a single probe before a state transition is trusted.
+const consecutiveResultThreshold = 2
 
 // MajorityDown returns true if a strict majority of probes report the check as down.
 // Each result in results should be the most recent result for a distinct probe.
@@ -23,13 +23,28 @@ func MajorityDown(results []proto.CheckResult) bool {
 
 // AllConsecutivelyDown returns true if every result in the slice is down.
 // Pass the last N results for a single probe, newest first.
-// Returns false if fewer than consecutiveFailureThreshold results are provided.
+// Returns false if fewer than consecutiveResultThreshold results are provided.
 func AllConsecutivelyDown(results []proto.CheckResult) bool {
-	if len(results) < consecutiveFailureThreshold {
+	if len(results) < consecutiveResultThreshold {
 		return false
 	}
 	for _, r := range results {
 		if r.Up {
+			return false
+		}
+	}
+	return true
+}
+
+// AllConsecutivelyUp returns true if every result in the slice is up.
+// Pass the last N results for a single probe, newest first.
+// Returns false if fewer than consecutiveResultThreshold results are provided.
+func AllConsecutivelyUp(results []proto.CheckResult) bool {
+	if len(results) < consecutiveResultThreshold {
+		return false
+	}
+	for _, r := range results {
+		if !r.Up {
 			return false
 		}
 	}

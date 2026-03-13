@@ -6,22 +6,23 @@ from client import SmokeError
 
 
 # Prove the authenticated check management API works against the packaged stack.
-def run(client):
-    client.wait_for_health()
-    token = client.login()
+def run(server, mock):
+    server.wait_for_health()
+    mock.set_state("up")
+    token = server.login()
 
     # Use a unique ID so reruns against a reused stack do not collide.
     check_id = f"smoke-crud-{uuid.uuid4().hex[:8]}"
     payload = {
         "id": check_id,
         "type": "http",
-        "target": "http://mock:9090/up",
+        "target": "http://mock:9090/state",
         "interval": 1,
     }
 
-    client.create_check(token, payload)
+    server.create_check(token, payload)
     try:
-        checks = client.list_checks(token)
+        checks = server.list_checks(token)
 
         created = next((check for check in checks if check.get("id") == check_id), None)
         if created is None:
@@ -31,8 +32,8 @@ def run(client):
         if created.get("target") != payload["target"]:
             raise SmokeError(f"created check {check_id} has unexpected target {created.get('target')!r}")
     finally:
-        client.delete_check_if_present(token, check_id)
+        server.delete_check_if_present(token, check_id)
 
-    checks = client.list_checks(token)
+    checks = server.list_checks(token)
     if any(check.get("id") == check_id for check in checks):
         raise SmokeError(f"deleted check {check_id} is still returned by GET /api/checks")

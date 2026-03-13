@@ -12,8 +12,8 @@ SMOKE_DIR = Path(__file__).resolve().parent
 if str(SMOKE_DIR) not in sys.path:
     sys.path.insert(0, str(SMOKE_DIR))
 
-from client import SmokeClient, SmokeError  # noqa: E402
-from scenarios import crud, startup  # noqa: E402
+from client import MockClient, SmokeClient, SmokeError  # noqa: E402
+from scenarios import crud, quorum, startup  # noqa: E402
 from stack import ComposeStack  # noqa: E402
 
 
@@ -22,11 +22,13 @@ from stack import ComposeStack  # noqa: E402
 SCENARIOS = {
     "startup": startup.run,
     "crud": crud.run,
+    "quorum": quorum.run,
 }
 
 
 def parse_args():
     default_port = os.environ.get("SMOKE_HTTP_PORT", "18080")
+    default_mock_port = os.environ.get("SMOKE_MOCK_PORT", "19090")
     parser = argparse.ArgumentParser(description="Run Wacht smoke tests.")
     parser.add_argument(
         "--scenario",
@@ -43,6 +45,11 @@ def parse_args():
         "--base-url",
         default=f"http://localhost:{default_port}",
         help="Base URL for the Wacht server.",
+    )
+    parser.add_argument(
+        "--mock-base-url",
+        default=f"http://localhost:{default_mock_port}",
+        help="Base URL for the controllable mock target.",
     )
     parser.add_argument("--email", default="smoke@wacht.local", help="Seeded smoke test user email.")
     parser.add_argument("--password", default="smoke-password", help="Seeded smoke test user password.")
@@ -62,7 +69,8 @@ def main():
     args = parse_args()
     repo_root = SMOKE_DIR.parent
     stack = ComposeStack(Path(args.compose_file).resolve(), repo_root)
-    client = SmokeClient(base_url=args.base_url, email=args.email, password=args.password)
+    server = SmokeClient(base_url=args.base_url, email=args.email, password=args.password)
+    mock = MockClient(base_url=args.mock_base_url)
     started_stack = False
     stack_ready = False
 
@@ -76,7 +84,7 @@ def main():
 
         for name, scenario in selected_scenarios(args):
             print(f"[scenario] {name}")
-            scenario(client)
+            scenario(server, mock)
             print(f"[scenario] {name} passed")
         return 0
     except SmokeError as exc:

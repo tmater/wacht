@@ -161,6 +161,21 @@ func (p *ProbeProcessor) openIncidentIfNeeded(check *checks.Check, recent []prot
 }
 
 func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
+	for _, result := range recent {
+		if !result.Up {
+			continue
+		}
+
+		history, err := p.store.RecentResultsByProbe(check.ID, result.ProbeID, 2)
+		if err != nil {
+			log.Printf("quorum: failed to query recovery history probe_id=%s check_id=%s: %s", result.ProbeID, check.ID, err)
+			return ProbeResultOutcome{}, nil
+		}
+		if !quorum.AllConsecutivelyUp(history) {
+			return ProbeResultOutcome{}, nil
+		}
+	}
+
 	resolved, err := p.store.ResolveIncident(check.ID)
 	if err != nil {
 		log.Printf("alert: failed to resolve incident check_id=%s: %s", check.ID, err)

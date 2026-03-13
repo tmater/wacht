@@ -12,6 +12,43 @@ class SmokeError(RuntimeError):
     pass
 
 
+def http_request(base_url, method, path, *, payload=None, headers=None, expected_status=(200,), timeout_seconds=10):
+    url = urllib.parse.urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    body = None
+    request_headers = {"Accept": "application/json"}
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    if headers:
+        request_headers.update(headers)
+
+    req = urllib.request.Request(url, data=body, headers=request_headers, method=method)
+
+    try:
+        # Treat expected non-2xx responses the same as success paths so the
+        # caller only has to reason about status codes in one place.
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            status = resp.status
+            raw = resp.read()
+            content_type = resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        raw = exc.read()
+        content_type = exc.headers.get("Content-Type", "")
+    except urllib.error.URLError as exc:
+        raise SmokeError(f"{method} {path} failed: {exc.reason}") from exc
+
+    if status not in expected_status:
+        body_text = raw.decode("utf-8", errors="replace").strip()
+        raise SmokeError(f"{method} {path} returned {status}, expected {expected_status}: {body_text}")
+
+    if not raw:
+        return None
+    if "application/json" in content_type:
+        return json.loads(raw)
+    return raw.decode("utf-8", errors="replace")
+
+
 # Poll until a condition becomes truthy while preserving the last useful error
 # for the final timeout message.
 def wait_for(description, timeout_seconds, interval_seconds, fn):
@@ -44,40 +81,15 @@ class SmokeClient:
     timeout_seconds: int = 10
 
     def request(self, method, path, payload=None, headers=None, expected_status=(200,)):
-        url = urllib.parse.urljoin(self.base_url.rstrip("/") + "/", path.lstrip("/"))
-        body = None
-        request_headers = {"Accept": "application/json"}
-        if payload is not None:
-            body = json.dumps(payload).encode("utf-8")
-            request_headers["Content-Type"] = "application/json"
-        if headers:
-            request_headers.update(headers)
-
-        req = urllib.request.Request(url, data=body, headers=request_headers, method=method)
-
-        try:
-            # Treat expected non-2xx responses the same as success paths so the
-            # caller only has to reason about status codes in one place.
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
-                status = resp.status
-                raw = resp.read()
-                content_type = resp.headers.get("Content-Type", "")
-        except urllib.error.HTTPError as exc:
-            status = exc.code
-            raw = exc.read()
-            content_type = exc.headers.get("Content-Type", "")
-        except urllib.error.URLError as exc:
-            raise SmokeError(f"{method} {path} failed: {exc.reason}") from exc
-
-        if status not in expected_status:
-            body_text = raw.decode("utf-8", errors="replace").strip()
-            raise SmokeError(f"{method} {path} returned {status}, expected {expected_status}: {body_text}")
-
-        if not raw:
-            return None
-        if "application/json" in content_type:
-            return json.loads(raw)
-        return raw.decode("utf-8", errors="replace")
+        return http_request(
+            self.base_url,
+            method,
+            path,
+            payload=payload,
+            headers=headers,
+            expected_status=expected_status,
+            timeout_seconds=self.timeout_seconds,
+        )
 
     def login(self):
         response = self.request(
@@ -102,6 +114,12 @@ class SmokeClient:
     def get_status(self, token):
         return self.request("GET", "/status", headers=self.auth_headers(token), expected_status=(200,))
 
+    def list_incidents(self, token):
+        incidents = self.request("GET", "/api/incidents", headers=self.auth_headers(token), expected_status=(200,))
+        if incidents is None:
+            return []
+        return incidents
+
     def list_checks(self, token):
         checks = self.request("GET", "/api/checks", headers=self.auth_headers(token), expected_status=(200,))
         if checks is None:
@@ -123,3 +141,28 @@ class SmokeClient:
     @staticmethod
     def auth_headers(token):
         return {"Authorization": f"Bearer {token}"}
+
+
+# MockClient drives the controllable target service used by the E2E quorum
+# smoke scenario.
+@dataclass
+class MockClient:
+    base_url: str
+    timeout_seconds: int = 10
+
+    def request(self, method, path, payload=None, headers=None, expected_status=(200,)):
+        return http_request(
+            self.base_url,
+            method,
+            path,
+            payload=payload,
+            headers=headers,
+            expected_status=expected_status,
+            timeout_seconds=self.timeout_seconds,
+        )
+
+    def get_state(self):
+        return self.request("GET", "/state", expected_status=(200, 503))
+
+    def set_state(self, status):
+        self.request("POST", "/state", payload={"status": status}, expected_status=(204,))
