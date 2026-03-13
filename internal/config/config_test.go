@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadServer_ParsesAllowPrivateTargets(t *testing.T) {
@@ -35,5 +36,24 @@ func TestLoadProbe_ParsesAllowPrivateTargets(t *testing.T) {
 	}
 	if !cfg.AllowPrivateTargets {
 		t.Fatal("expected allow_private_targets to be true")
+	}
+}
+
+func TestLoadServer_ParsesAuthRateLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	data := []byte("auth_rate_limit:\n  requests: 42\n  window: 2m\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := LoadServer(path)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if cfg.AuthRateLimit.Requests != 42 {
+		t.Fatalf("AuthRateLimit.Requests = %d, want 42", cfg.AuthRateLimit.Requests)
+	}
+	if cfg.AuthRateLimit.Window != 2*time.Minute {
+		t.Fatalf("AuthRateLimit.Window = %s, want 2m", cfg.AuthRateLimit.Window)
 	}
 }
