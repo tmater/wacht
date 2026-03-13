@@ -143,8 +143,8 @@ class SmokeClient:
         return {"Authorization": f"Bearer {token}"}
 
 
-# MockClient drives the controllable target service used by the E2E quorum
-# smoke scenario.
+# MockClient drives the controllable target service used by the smoke
+# scenarios.
 @dataclass
 class MockClient:
     base_url: str
@@ -162,10 +162,13 @@ class MockClient:
         )
 
     def get_state(self):
-        return self.request("GET", "/state", expected_status=(200, 503))
+        return self.request("GET", "/http/state", expected_status=(200, 503))
 
     def set_state(self, status):
-        self.request("POST", "/state", payload={"status": status}, expected_status=(204,))
+        self.request("POST", "/http/state", payload={"status": status}, expected_status=(204,))
+
+    def set_tcp_state(self, status):
+        self.request("POST", "/tcp/state", payload={"status": status}, expected_status=(204,))
 
     def list_webhooks(self):
         payloads = self.request("GET", "/webhook", expected_status=(200,))
