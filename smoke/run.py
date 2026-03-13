@@ -13,7 +13,7 @@ if str(SMOKE_DIR) not in sys.path:
     sys.path.insert(0, str(SMOKE_DIR))
 
 from client import MockClient, SmokeClient, SmokeError  # noqa: E402
-from scenarios import crud, quorum, startup  # noqa: E402
+from scenarios import crud, flapping, quorum, startup, webhook  # noqa: E402
 from stack import ComposeStack  # noqa: E402
 
 
@@ -22,9 +22,10 @@ from stack import ComposeStack  # noqa: E402
 SCENARIOS = {
     "startup": startup.run,
     "crud": crud.run,
+    "flapping": flapping.run,
     "quorum": quorum.run,
+    "webhook": webhook.run,
 }
-
 
 def parse_args():
     default_port = os.environ.get("SMOKE_HTTP_PORT", "18080")

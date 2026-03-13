@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tmater/wacht/internal/alert"
+	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/store"
 )
@@ -87,7 +88,7 @@ func TestHandleProbeRegisterMapsInternalError(t *testing.T) {
 
 func TestHandleResultMapsBadRequestError(t *testing.T) {
 	h := &Handler{
-		webhooks: alert.NewSender(),
+		webhooks: alert.NewSender(network.Policy{}),
 		probeProcessor: fakeProbeProcessor{
 			heartbeatFn: func(probe *store.Probe, req ProbeHeartbeatRequest) error { return nil },
 			registerFn:  func(probe *store.Probe, req ProbeRegistrationRequest) error { return nil },
@@ -114,7 +115,7 @@ func TestHandleResultMapsBadRequestError(t *testing.T) {
 
 func TestHandleResultReturnsNoContentOnProcessorSuccess(t *testing.T) {
 	h := &Handler{
-		webhooks: alert.NewSender(),
+		webhooks: alert.NewSender(network.Policy{}),
 		probeProcessor: fakeProbeProcessor{
 			heartbeatFn: func(probe *store.Probe, req ProbeHeartbeatRequest) error { return nil },
 			registerFn:  func(probe *store.Probe, req ProbeRegistrationRequest) error { return nil },

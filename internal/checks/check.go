@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tmater/wacht/internal/alert"
 	"github.com/tmater/wacht/internal/network"
 )
 
@@ -68,7 +67,7 @@ func (c Check) NormalizeAndValidate(ctx context.Context, policy network.Policy, 
 	if c.Interval < 1 || c.Interval > MaxInterval {
 		return Check{}, fmt.Errorf("interval must be between 0 and 86400 seconds")
 	}
-	if err := alert.ValidateWebhookURL(c.Webhook); err != nil {
+	if err := network.ValidateWebhookURL(c.Webhook, policy); err != nil {
 		return Check{}, err
 	}
 	if err := network.ValidateCheckTarget(ctx, string(c.Type), c.Target, policy); err != nil {

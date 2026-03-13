@@ -5,15 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/tmater/wacht/internal/network"
 )
 
 func TestFire(t *testing.T) {
-	oldClient := webhookClient
-	webhookClient = http.DefaultClient
-	t.Cleanup(func() {
-		webhookClient = oldClient
-	})
-
 	var received AlertPayload
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -37,7 +34,7 @@ func TestFire(t *testing.T) {
 		ProbesTotal: 3,
 	}
 
-	if err := Fire(srv.URL, payload); err != nil {
+	if err := Fire(http.DefaultClient, srv.URL, payload); err != nil {
 		t.Fatalf("Fire returned error: %s", err)
 	}
 
@@ -53,57 +50,39 @@ func TestFire(t *testing.T) {
 }
 
 func TestFire_NonSuccessStatus(t *testing.T) {
-	oldClient := webhookClient
-	webhookClient = http.DefaultClient
-	t.Cleanup(func() {
-		webhookClient = oldClient
-	})
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	err := Fire(srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(http.DefaultClient, srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
 	if err == nil {
 		t.Fatal("expected error for non-2xx response, got nil")
 	}
 }
 
 func TestFire_DoesNotFollowRedirects(t *testing.T) {
-	oldClient := webhookClient
-	webhookClient = newWebhookClient()
-	t.Cleanup(func() {
-		webhookClient = oldClient
-	})
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://example.com/webhook", http.StatusFound)
 	}))
 	defer srv.Close()
 
-	err := Fire(srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	client := &http.Client{
+		Transport: http.DefaultTransport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	err := Fire(client, srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
 	if err == nil {
 		t.Fatal("expected redirect response to be treated as an error")
 	}
 }
 
-func TestValidateWebhookURL_RejectsLocalhost(t *testing.T) {
-	err := ValidateWebhookURL("http://localhost/webhook")
-	if err == nil {
-		t.Fatal("expected localhost webhook to be rejected")
-	}
-}
+func TestFire_RejectsPrivateAddressWithGuardedClient(t *testing.T) {
+	client := network.Policy{}.NewHTTPClient(webhookTimeout, 3*time.Second, false)
 
-func TestValidateWebhookURL_RejectsPrivateIPLiteral(t *testing.T) {
-	err := ValidateWebhookURL("http://127.0.0.1/webhook")
-	if err == nil {
-		t.Fatal("expected private IP webhook to be rejected")
-	}
-}
-
-func TestFire_RejectsPrivateAddress(t *testing.T) {
-	err := Fire("http://127.0.0.1/webhook", AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(client, "http://127.0.0.1/webhook", AlertPayload{CheckID: "x", Target: "y", Status: "down"})
 	if err == nil {
 		t.Fatal("expected private destination to be rejected")
 	}

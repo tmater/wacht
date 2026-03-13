@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tmater/wacht/internal/alert"
 )
 
 // flapCounter is used by /flap to alternate between up and down responses.
@@ -25,6 +28,7 @@ type controlState struct {
 func main() {
 	var currentState atomic.Int32
 	currentState.Store(stateUp)
+	var webhooks webhookStore
 
 	mux := http.NewServeMux()
 
@@ -88,12 +92,65 @@ func main() {
 		}
 	})
 
+	// /webhook stores received webhook payloads so smoke scenarios can assert
+	// real end-to-end delivery through the server's alert sender.
+	mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(webhooks.list()); err != nil {
+				http.Error(w, "encode error", http.StatusInternalServerError)
+			}
+		case http.MethodPost:
+			var payload alert.AlertPayload
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			webhooks.add(payload)
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodDelete:
+			webhooks.clear()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
 	addr := ":9090"
 	log.Printf("wacht-mock listening on %s", addr)
-	log.Printf("endpoints: /up /down /slow /flap /state")
+	log.Printf("endpoints: /up /down /slow /flap /state /webhook")
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("mock server error: %s", err)
 	}
+}
+
+type webhookStore struct {
+	mu       sync.Mutex
+	payloads []alert.AlertPayload
+}
+
+func (s *webhookStore) add(payload alert.AlertPayload) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.payloads = append(s.payloads, payload)
+}
+
+func (s *webhookStore) list() []alert.AlertPayload {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	payloads := make([]alert.AlertPayload, len(s.payloads))
+	copy(payloads, s.payloads)
+	return payloads
+}
+
+func (s *webhookStore) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.payloads = nil
 }
 
 func writeState(w http.ResponseWriter, state int32) {

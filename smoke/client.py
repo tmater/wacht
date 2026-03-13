@@ -166,3 +166,12 @@ class MockClient:
 
     def set_state(self, status):
         self.request("POST", "/state", payload={"status": status}, expected_status=(204,))
+
+    def list_webhooks(self):
+        payloads = self.request("GET", "/webhook", expected_status=(200,))
+        if payloads is None:
+            return []
+        return payloads
+
+    def clear_webhooks(self):
+        self.request("DELETE", "/webhook", expected_status=(204,))
