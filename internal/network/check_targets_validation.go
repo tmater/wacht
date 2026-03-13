@@ -56,6 +56,35 @@ func ParseHTTPURLTarget(target string) (*url.URL, error) {
 	return u, nil
 }
 
+// ValidateWebhookURL checks webhook syntax and rejects destinations disallowed
+// by the provided outbound policy.
+func ValidateWebhookURL(rawURL string, policy Policy) error {
+	if rawURL == "" {
+		return nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("webhook: invalid URL: %w", err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("webhook: unsupported URL scheme %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("webhook: host is required")
+	}
+	if u.User != nil {
+		return fmt.Errorf("webhook: userinfo is not allowed")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("webhook: host is required")
+	}
+	if err := policy.ValidateLiteralHost(host); err != nil {
+		return fmt.Errorf("webhook: %w", err)
+	}
+	return nil
+}
+
 func ParseTCPAddressTarget(target string) (string, string, error) {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {

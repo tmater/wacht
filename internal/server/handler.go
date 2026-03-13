@@ -32,7 +32,7 @@ func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 	return &Handler{
 		store:          store,
 		config:         cfg,
-		webhooks:       alert.NewSender(),
+		webhooks:       alert.NewSender(network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
 		authProcessor:  NewAuthProcessor(store),
 		probeProcessor: NewProbeProcessor(store),
 		loginLimiter:   newRateLimiter(),

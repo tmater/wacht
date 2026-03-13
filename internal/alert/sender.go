@@ -3,6 +3,9 @@ package alert
 import (
 	"log"
 	"sync"
+	"time"
+
+	"github.com/tmater/wacht/internal/network"
 )
 
 const (
@@ -27,8 +30,11 @@ type Sender struct {
 }
 
 // NewSender creates a webhook sender with a small bounded queue.
-func NewSender() *Sender {
-	return newSender(defaultWebhookWorkers, defaultWebhookQueueSize, Fire)
+func NewSender(policy network.Policy) *Sender {
+	client := policy.NewHTTPClient(webhookTimeout, 3*time.Second, false)
+	return newSender(defaultWebhookWorkers, defaultWebhookQueueSize, func(url string, payload AlertPayload) error {
+		return Fire(client, url, payload)
+	})
 }
 
 func newSender(workers, queueSize int, send sendFunc) *Sender {
@@ -39,7 +45,10 @@ func newSender(workers, queueSize int, send sendFunc) *Sender {
 		queueSize = 1
 	}
 	if send == nil {
-		send = Fire
+		client := network.Policy{}.NewHTTPClient(webhookTimeout, 3*time.Second, false)
+		send = func(url string, payload AlertPayload) error {
+			return Fire(client, url, payload)
+		}
 	}
 
 	s := &Sender{
