@@ -1,4 +1,5 @@
 allow_private_targets: true
+probe_offline_after: 8s
 auth_rate_limit:
   requests: 100
   window: 1m

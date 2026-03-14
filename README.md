@@ -77,6 +77,10 @@ Minimum recommended probe count is 3 — quorum works with 2 but leaves no room 
 
 Checks run every **30 seconds** per probe.
 
+`/status` marks a probe offline after **90 seconds** without heartbeats by
+default. Override that with `probe_offline_after` in `server.yaml` if you want
+a shorter or longer UI timeout.
+
 Webhook payload:
 
 ```json
