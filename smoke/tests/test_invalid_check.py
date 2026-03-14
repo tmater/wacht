@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import uuid
 
-from client import SmokeError
+from smoke.client import SmokeError
 
 
 # Prove representative validation failures are rejected before they can create
 # persisted checks.
-def run(server, mock):
-    del mock  # This scenario only exercises the server's check validation API.
+def test_invalid_check(server):
     server.wait_for_health()
     token = server.login()
 

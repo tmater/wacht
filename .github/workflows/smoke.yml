@@ -18,5 +18,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Run smoke harness
-        run: python3 smoke/run.py
+      - name: Install smoke test dependencies
+        run: python3 -m pip install -r smoke/requirements.txt
+
+      - name: Run smoke tests
+        run: python3 -m pytest smoke/tests -x -s

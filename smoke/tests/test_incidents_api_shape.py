@@ -4,8 +4,9 @@ import json
 import uuid
 from datetime import datetime
 
-from client import SmokeError, wait_for
-from scenarios.quorum import healthy_status, open_incident, resolved_incident, status_for_check
+from smoke.client import SmokeError, wait_for
+from smoke.support.cleanup import CleanupScope
+from smoke.support.quorum import healthy_status, open_incident, resolved_incident, status_for_check
 
 
 HTTP_TARGET = "http://mock:9090/http/state"
@@ -14,7 +15,7 @@ TCP_TARGET = "mock:9091"
 
 # Prove /api/incidents keeps incidents linked to the right check, returns
 # resolved fields only after recovery, and stays ordered newest-first.
-def run(server, mock):
+def test_incidents_api_shape(server, mock):
     server.wait_for_health()
     mock.set_state("up")
     mock.set_tcp_state("up")
@@ -22,6 +23,7 @@ def run(server, mock):
     suffix = uuid.uuid4().hex[:8]
     http_check_id = f"smoke-incidents-http-{suffix}"
     tcp_check_id = f"smoke-incidents-tcp-{suffix}"
+    cleanup = CleanupScope()
 
     server.create_check(
         token,
@@ -43,101 +45,105 @@ def run(server, mock):
     )
 
     try:
-        wait_for(
-            "http incident-shape check to become healthy",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: healthy_status(server, token, http_check_id),
-        )
-        wait_for(
-            "tcp incident-shape check to become healthy",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: healthy_status(server, token, tcp_check_id),
-        )
-
-        if incidents_for_checks(server, token, http_check_id, tcp_check_id):
-            raise SmokeError("expected no incident rows before either target goes down")
-
-        mock.set_state("down")
-
-        http_opened = wait_for(
-            "http outage to open the first incident row",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: open_incident(server, token, http_check_id),
-        )
-        http_open = http_opened["incidents"][0]
-        assert_open_incident(http_open, http_check_id)
-        assert_open_status(http_opened["status"], http_open, http_check_id)
-        assert_check_up(server, token, tcp_check_id)
-
-        history = incidents_for_checks(server, token, http_check_id, tcp_check_id)
-        assert_history(history, [(http_check_id, False)])
-
-        mock.set_state("up")
-
-        http_resolved = wait_for(
-            "http recovery to resolve the first incident row",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: resolved_incident(server, token, http_check_id),
-        )
-        resolved_http_incident = http_resolved["incidents"][0]
-        assert_resolved_incident(resolved_http_incident, http_check_id)
-        assert_cleared_status(http_resolved["status"], http_check_id)
-        assert_check_up(server, token, tcp_check_id)
-
-        mock.set_tcp_state("down")
-
-        tcp_opened = wait_for(
-            "tcp outage to open the second incident row",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: open_incident(server, token, tcp_check_id),
-        )
-        tcp_open = tcp_opened["incidents"][0]
-        assert_open_incident(tcp_open, tcp_check_id)
-        assert_open_status(tcp_opened["status"], tcp_open, tcp_check_id)
-        assert_check_up(server, token, http_check_id)
-
-        history = incidents_for_checks(server, token, http_check_id, tcp_check_id)
-        assert_history(history, [(tcp_check_id, False), (http_check_id, True)])
-
-        if history[0].get("id") == history[1].get("id"):
-            raise SmokeError(f"expected distinct incident ids for {tcp_check_id} and {http_check_id}, got {history}")
-
-        mock.set_tcp_state("up")
-
-        tcp_resolved = wait_for(
-            "tcp recovery to resolve the second incident row",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: resolved_incident(server, token, tcp_check_id),
-        )
-        resolved_tcp_incident = tcp_resolved["incidents"][0]
-        assert_resolved_incident(resolved_tcp_incident, tcp_check_id)
-        assert_cleared_status(tcp_resolved["status"], tcp_check_id)
-        assert_check_up(server, token, http_check_id)
-
-        history = incidents_for_checks(server, token, http_check_id, tcp_check_id)
-        assert_history(history, [(tcp_check_id, True), (http_check_id, True)])
-
-        print(
-            json.dumps(
-                {
-                    "history": history,
-                    "http_incident": resolved_http_incident,
-                    "tcp_incident": resolved_tcp_incident,
-                },
-                indent=2,
+        with cleanup.preserve_primary_error():
+            wait_for(
+                "http incident-shape check to become healthy",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: healthy_status(server, token, http_check_id),
             )
-        )
+            wait_for(
+                "tcp incident-shape check to become healthy",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: healthy_status(server, token, tcp_check_id),
+            )
+
+            if incidents_for_checks(server, token, http_check_id, tcp_check_id):
+                raise SmokeError("expected no incident rows before either target goes down")
+
+            mock.set_state("down")
+
+            http_opened = wait_for(
+                "http outage to open the first incident row",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: open_incident(server, token, http_check_id),
+            )
+            http_open = http_opened["incidents"][0]
+            assert_open_incident(http_open, http_check_id)
+            assert_open_status(http_opened["status"], http_open, http_check_id)
+            assert_check_up(server, token, tcp_check_id)
+
+            history = incidents_for_checks(server, token, http_check_id, tcp_check_id)
+            assert_history(history, [(http_check_id, False)])
+
+            mock.set_state("up")
+
+            http_resolved = wait_for(
+                "http recovery to resolve the first incident row",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: resolved_incident(server, token, http_check_id),
+            )
+            resolved_http_incident = http_resolved["incidents"][0]
+            assert_resolved_incident(resolved_http_incident, http_check_id)
+            assert_cleared_status(http_resolved["status"], http_check_id)
+            assert_check_up(server, token, tcp_check_id)
+
+            mock.set_tcp_state("down")
+
+            tcp_opened = wait_for(
+                "tcp outage to open the second incident row",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: open_incident(server, token, tcp_check_id),
+            )
+            tcp_open = tcp_opened["incidents"][0]
+            assert_open_incident(tcp_open, tcp_check_id)
+            assert_open_status(tcp_opened["status"], tcp_open, tcp_check_id)
+            assert_check_up(server, token, http_check_id)
+
+            history = incidents_for_checks(server, token, http_check_id, tcp_check_id)
+            assert_history(history, [(tcp_check_id, False), (http_check_id, True)])
+
+            if history[0].get("id") == history[1].get("id"):
+                raise SmokeError(
+                    f"expected distinct incident ids for {tcp_check_id} and {http_check_id}, got {history}"
+                )
+
+            mock.set_tcp_state("up")
+
+            tcp_resolved = wait_for(
+                "tcp recovery to resolve the second incident row",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: resolved_incident(server, token, tcp_check_id),
+            )
+            resolved_tcp_incident = tcp_resolved["incidents"][0]
+            assert_resolved_incident(resolved_tcp_incident, tcp_check_id)
+            assert_cleared_status(tcp_resolved["status"], tcp_check_id)
+            assert_check_up(server, token, http_check_id)
+
+            history = incidents_for_checks(server, token, http_check_id, tcp_check_id)
+            assert_history(history, [(tcp_check_id, True), (http_check_id, True)])
+
+            print(
+                json.dumps(
+                    {
+                        "history": history,
+                        "http_incident": resolved_http_incident,
+                        "tcp_incident": resolved_tcp_incident,
+                    },
+                    indent=2,
+                )
+            )
     finally:
-        mock.set_state("up")
-        mock.set_tcp_state("up")
-        server.delete_check_if_present(token, http_check_id)
-        server.delete_check_if_present(token, tcp_check_id)
+        cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
+        cleanup.run("restore mock TCP state", lambda: mock.set_tcp_state("up"))
+        cleanup.run(f"delete check {http_check_id}", lambda: server.delete_check_if_present(token, http_check_id))
+        cleanup.run(f"delete check {tcp_check_id}", lambda: server.delete_check_if_present(token, tcp_check_id))
+        cleanup.finish()
 
 
 def incidents_for_checks(server, token, *check_ids):

@@ -22,6 +22,12 @@ class ComposeStack:
     def logs(self):
         self._run("compose", "-f", self.compose_file, "logs", check=False)
 
+    def stop_service(self, service):
+        self._run("compose", "-f", self.compose_file, "stop", service)
+
+    def start_service(self, service):
+        self._run("compose", "-f", self.compose_file, "start", service)
+
     def _run(self, *args, check=True):
         cmd = [self.docker, *args]
         print(f"[stack] {' '.join(cmd)}")

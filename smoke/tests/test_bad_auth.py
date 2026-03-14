@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import uuid
 
-from client import SmokeError
+from smoke.client import SmokeError
 
 
 # Prove one representative auth failure is rejected cleanly and does not mutate
 # the stored password or invalidate the existing session.
-def run(server, mock):
-    del mock  # This scenario only exercises the server's auth endpoints.
+def test_bad_auth(server):
     server.wait_for_health()
     token = server.login()
     attempted_password = f"smoke-bad-auth-{uuid.uuid4().hex[:12]}"

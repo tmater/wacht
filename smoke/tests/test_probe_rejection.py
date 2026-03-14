@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from client import SmokeError
+from smoke.client import SmokeError
 
 
 VALID_PROBE_ID = "probe-1"
@@ -12,8 +12,7 @@ VALID_PROBE_SECRET = "smoke-secret-1"
 
 # Prove the probe-facing API rejects invalid credentials and inconsistent
 # payloads before they can mutate probe state or check history.
-def run(server, mock):
-    del mock  # This scenario talks directly to the server's probe endpoints.
+def test_probe_rejection(server):
     server.wait_for_health()
 
     bad_secret = server.request(
