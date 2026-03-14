@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 
-from client import SmokeError
+from smoke.client import SmokeError
 
 
 # Prove the seeded smoke user can bootstrap the dashboard identity endpoint.
-def run(server, mock):
-    del mock  # This scenario only exercises the server's auth endpoints.
+def test_authenticated_identity(server):
     server.wait_for_health()
 
     login = server.request(

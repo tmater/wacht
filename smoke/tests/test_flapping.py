@@ -4,9 +4,10 @@ import json
 import time
 import uuid
 
-from client import SmokeError, wait_for
-from scenarios.quorum import incidents_for_check, status_for_check
-from scenarios.webhook import deliveries_for_check
+from smoke.client import SmokeError, wait_for
+from smoke.support.cleanup import CleanupScope
+from smoke.support.quorum import incidents_for_check, status_for_check
+from smoke.support.webhook import deliveries_for_check
 
 
 OBSERVATION_SECONDS = 12
@@ -14,7 +15,7 @@ OBSERVATION_SECONDS = 12
 
 # Prove a flapping target does not open an incident or fire a webhook while it
 # oscillates during an observation window.
-def run(server, mock):
+def test_flapping(server, mock):
     server.wait_for_health()
     mock.clear_webhooks()
     token = server.login()
@@ -26,22 +27,25 @@ def run(server, mock):
         "webhook": "http://mock:9090/webhook",
         "interval": 1,
     }
+    cleanup = CleanupScope()
     server.create_check(token, payload)
 
     try:
-        wait_for(
-            "flapping check to receive its first probe result",
-            timeout_seconds=60,
-            interval_seconds=2,
-            fn=lambda: status_for_check(server, token, check_id),
-        )
+        with cleanup.preserve_primary_error():
+            wait_for(
+                "flapping check to receive its first probe result",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: status_for_check(server, token, check_id),
+            )
 
-        snapshot = assert_no_alerts_during_flapping(server, mock, token, check_id, seconds=OBSERVATION_SECONDS)
+            snapshot = assert_no_alerts_during_flapping(server, mock, token, check_id, seconds=OBSERVATION_SECONDS)
 
-        print(json.dumps(snapshot, indent=2))
+            print(json.dumps(snapshot, indent=2))
     finally:
-        mock.clear_webhooks()
-        server.delete_check_if_present(token, check_id)
+        cleanup.run("clear mock webhooks", mock.clear_webhooks)
+        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.finish()
 
 
 def assert_no_alerts_during_flapping(server, mock, token, check_id, seconds):

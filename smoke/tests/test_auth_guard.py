@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import uuid
 
-from client import SmokeClient, SmokeError
+from smoke.client import SmokeClient, SmokeError
 
 
 # Prove the session guard rejects missing bearer tokens and the admin guard
 # rejects a real non-admin session.
-def run(server, mock):
-    del mock  # This scenario only exercises the server's auth boundary.
+def test_auth_guard(server):
     server.wait_for_health()
 
     missing_token_routes = ("/status", "/api/checks", "/api/auth/me")

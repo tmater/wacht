@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 
-from client import SmokeError
+from smoke.client import SmokeError
 
 
 # Prove explicit logout deletes the current session token without breaking
 # normal re-authentication for the same seeded user.
-def run(server, mock):
-    del mock  # This scenario only exercises the server's auth endpoints.
+def test_logout_invalidates_token(server):
     server.wait_for_health()
 
     login = server.request(
