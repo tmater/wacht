@@ -40,6 +40,7 @@ SCENARIOS = {
     "webhook": webhook.run,
 }
 
+
 def parse_args():
     default_port = os.environ.get("SMOKE_HTTP_PORT", "18080")
     default_mock_port = os.environ.get("SMOKE_MOCK_PORT", "19090")
@@ -79,12 +80,18 @@ def selected_scenarios(args):
     return [(name, SCENARIOS[name]) for name in requested]
 
 
+def configure_stack_environment(stack):
+    # Scenarios that control probe containers must target the exact same Compose
+    # file and project as the stack lifecycle managed by the runner.
+    os.environ["SMOKE_COMPOSE_FILE"] = stack.compose_file
+    os.environ["SMOKE_COMPOSE_PROJECT"] = stack.project_name
+
+
 def main():
     args = parse_args()
     repo_root = SMOKE_DIR.parent
     stack = ComposeStack(Path(args.compose_file).resolve(), repo_root)
-    os.environ.setdefault("SMOKE_COMPOSE_FILE", str(Path(args.compose_file).resolve()))
-    os.environ.setdefault("SMOKE_COMPOSE_PROJECT", stack.project_name)
+    configure_stack_environment(stack)
     server = SmokeClient(base_url=args.base_url, email=args.email, password=args.password)
     mock = MockClient(base_url=args.mock_base_url)
     started_stack = False
