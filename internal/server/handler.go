@@ -152,11 +152,10 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	probes := make([]probeJSON, 0, len(probeStatuses))
 	for _, ps := range probeStatuses {
 		var lastSeenAt *string
-		online := false
+		online := probeOnline(ps.LastSeenAt, h.probeOfflineAfter())
 		if ps.LastSeenAt != nil {
 			s := ps.LastSeenAt.UTC().Format(time.RFC3339)
 			lastSeenAt = &s
-			online = time.Since(*ps.LastSeenAt) < 90*time.Second
 		}
 		probes = append(probes, probeJSON{ProbeID: ps.ProbeID, Online: online, LastSeenAt: lastSeenAt})
 	}
@@ -165,6 +164,23 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks, "probes": probes}); err != nil {
 		log.Printf("status: failed to encode response: %s", err)
 	}
+}
+
+func (h *Handler) probeOfflineAfter() time.Duration {
+	if h == nil || h.config == nil || h.config.ProbeOfflineAfter <= 0 {
+		return config.DefaultProbeOfflineAfter
+	}
+	return h.config.ProbeOfflineAfter
+}
+
+func probeOnline(lastSeenAt *time.Time, offlineAfter time.Duration) bool {
+	if lastSeenAt == nil {
+		return false
+	}
+	if offlineAfter <= 0 {
+		offlineAfter = config.DefaultProbeOfflineAfter
+	}
+	return time.Since(*lastSeenAt) < offlineAfter
 }
 
 // handleProbeChecks returns all checks for probes to run (no user scoping).

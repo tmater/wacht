@@ -9,6 +9,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	DefaultRetentionDays          = 30
+	DefaultAuthRateLimitRequests  = 10
+	DefaultAuthRateLimitWindow    = time.Minute
+	DefaultProbeOfflineAfter      = 90 * time.Second
+	DefaultProbeHeartbeatInterval = 30 * time.Second
+)
+
 type ServerConfig struct {
 	Probes              []ProbeAuth    `yaml:"probes"`
 	Checks              []checks.Check `yaml:"checks"`
@@ -16,6 +24,7 @@ type ServerConfig struct {
 	RetentionDays       int            `yaml:"retention_days"`        // 0 → default 30
 	AllowPrivateTargets bool           `yaml:"allow_private_targets"` // false by default
 	AuthRateLimit       RateLimit      `yaml:"auth_rate_limit"`
+	ProbeOfflineAfter   time.Duration  `yaml:"probe_offline_after"`
 }
 
 type SeedUser struct {
@@ -66,6 +75,15 @@ func LoadServer(path string) (*ServerConfig, error) {
 		}
 		seen[probe.ID] = struct{}{}
 	}
+	if cfg.ProbeOfflineAfter <= 0 {
+		cfg.ProbeOfflineAfter = DefaultProbeOfflineAfter
+	}
+	if cfg.AuthRateLimit.Requests <= 0 {
+		cfg.AuthRateLimit.Requests = DefaultAuthRateLimitRequests
+	}
+	if cfg.AuthRateLimit.Window <= 0 {
+		cfg.AuthRateLimit.Window = DefaultAuthRateLimitWindow
+	}
 	return &cfg, nil
 }
 
@@ -91,7 +109,7 @@ func LoadProbe(path string) (*ProbeConfig, error) {
 		return nil, fmt.Errorf("config: probe_id is required")
 	}
 	if cfg.HeartbeatInterval == 0 {
-		cfg.HeartbeatInterval = 30 * time.Second
+		cfg.HeartbeatInterval = DefaultProbeHeartbeatInterval
 	}
 
 	return &cfg, nil

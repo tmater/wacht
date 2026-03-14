@@ -13,7 +13,7 @@ if str(SMOKE_DIR) not in sys.path:
     sys.path.insert(0, str(SMOKE_DIR))
 
 from client import MockClient, SmokeClient, SmokeError  # noqa: E402
-from scenarios import auth_guard, bad_auth, crud, dns_lifecycle, flapping, incidents_api_shape, invalid_check, password_change, probe_rejection, quorum, startup, tcp_lifecycle, update, webhook  # noqa: E402
+from scenarios import auth_guard, authenticated_identity, bad_auth, crud, dns_lifecycle, flapping, incidents_api_shape, invalid_check, logout_invalidates_token, password_change, probe_degradation, probe_rejection, quorum, signup_approval, startup, tcp_lifecycle, update, webhook  # noqa: E402
 from stack import ComposeStack  # noqa: E402
 
 
@@ -22,9 +22,12 @@ from stack import ComposeStack  # noqa: E402
 SCENARIOS = {
     "startup": startup.run,
     "auth_guard": auth_guard.run,
+    "authenticated_identity": authenticated_identity.run,
     "bad_auth": bad_auth.run,
     "invalid_check": invalid_check.run,
+    "logout_invalidates_token": logout_invalidates_token.run,
     "password_change": password_change.run,
+    "probe_degradation": probe_degradation.run,
     "update": update.run,
     "crud": crud.run,
     "dns_lifecycle": dns_lifecycle.run,
@@ -32,9 +35,11 @@ SCENARIOS = {
     "incidents_api_shape": incidents_api_shape.run,
     "probe_rejection": probe_rejection.run,
     "quorum": quorum.run,
+    "signup_approval": signup_approval.run,
     "tcp_lifecycle": tcp_lifecycle.run,
     "webhook": webhook.run,
 }
+
 
 def parse_args():
     default_port = os.environ.get("SMOKE_HTTP_PORT", "18080")
@@ -75,10 +80,18 @@ def selected_scenarios(args):
     return [(name, SCENARIOS[name]) for name in requested]
 
 
+def configure_stack_environment(stack):
+    # Scenarios that control probe containers must target the exact same Compose
+    # file and project as the stack lifecycle managed by the runner.
+    os.environ["SMOKE_COMPOSE_FILE"] = stack.compose_file
+    os.environ["SMOKE_COMPOSE_PROJECT"] = stack.project_name
+
+
 def main():
     args = parse_args()
     repo_root = SMOKE_DIR.parent
     stack = ComposeStack(Path(args.compose_file).resolve(), repo_root)
+    configure_stack_environment(stack)
     server = SmokeClient(base_url=args.base_url, email=args.email, password=args.password)
     mock = MockClient(base_url=args.mock_base_url)
     started_stack = False

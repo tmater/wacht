@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/store"
 )
 
@@ -115,17 +116,12 @@ type tokenBucket struct {
 	resetAt time.Time
 }
 
-const (
-	defaultRateLimitRequests = 10
-	defaultRateLimitWindow   = time.Minute
-)
-
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 	if limit <= 0 {
-		limit = defaultRateLimitRequests
+		limit = config.DefaultAuthRateLimitRequests
 	}
 	if window <= 0 {
-		window = defaultRateLimitWindow
+		window = config.DefaultAuthRateLimitWindow
 	}
 	return &rateLimiter{
 		tokens: make(map[string]*tokenBucket),

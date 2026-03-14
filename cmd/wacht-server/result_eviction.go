@@ -4,15 +4,15 @@ import (
 	"log"
 	"time"
 
+	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/store"
 )
 
 const evictionInterval = 6 * time.Hour
-const defaultRetentionDays = 30
 
 func evictionLoop(db *store.Store, retentionDays int) {
 	if retentionDays <= 0 {
-		retentionDays = defaultRetentionDays
+		retentionDays = config.DefaultRetentionDays
 	}
 	for {
 		time.Sleep(evictionInterval)
