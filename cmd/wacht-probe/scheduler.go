@@ -15,7 +15,7 @@ import (
 // runningCheck tracks one live worker so reconcile can stop or replace it by
 // check ID instead of rebuilding the whole scheduler.
 type runningCheck struct {
-	check  checks.Check
+	check  proto.ProbeCheck
 	cancel context.CancelFunc
 }
 
@@ -24,7 +24,7 @@ type runningCheck struct {
 type scheduler struct {
 	mu          sync.Mutex
 	running     map[string]runningCheck
-	startWorker func(checks.Check) runningCheck
+	startWorker func(proto.ProbeCheck) runningCheck
 }
 
 // TODO: This goroutine-per-check model is fine at small scale, but a central
@@ -34,7 +34,7 @@ func newScheduler(cfg *config.ProbeConfig, policy network.Policy) *scheduler {
 	s := &scheduler{
 		running: make(map[string]runningCheck),
 	}
-	s.startWorker = func(check checks.Check) runningCheck {
+	s.startWorker = func(check proto.ProbeCheck) runningCheck {
 		return s.startRuntimeWorker(cfg, policy, check)
 	}
 	return s
@@ -42,8 +42,8 @@ func newScheduler(cfg *config.ProbeConfig, policy network.Policy) *scheduler {
 
 // Reconcile applies the latest desired check set by only touching added,
 // removed, or changed checks. Unchanged checks keep their existing cadence.
-func (s *scheduler) Reconcile(latest []checks.Check) {
-	next := make(map[string]checks.Check, len(latest))
+func (s *scheduler) Reconcile(latest []proto.ProbeCheck) {
+	next := make(map[string]proto.ProbeCheck, len(latest))
 	for _, check := range latest {
 		next[check.ID] = check
 	}
@@ -83,7 +83,7 @@ func (s *scheduler) Close() {
 
 // startRuntimeWorker runs the check once immediately, then continues on the
 // configured interval until reconcile or shutdown cancels it.
-func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.Policy, check checks.Check) runningCheck {
+func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.Policy, check proto.ProbeCheck) runningCheck {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
@@ -107,14 +107,14 @@ func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.P
 	}
 }
 
-func runAndPost(cfg *config.ProbeConfig, policy network.Policy, check checks.Check) {
+func runAndPost(cfg *config.ProbeConfig, policy network.Policy, check proto.ProbeCheck) {
 	var result proto.CheckResult
 	switch check.Type {
-	case checks.CheckHTTP:
+	case string(checks.CheckHTTP):
 		result = checks.HTTP(check.ID, cfg.ProbeID, check.Target, policy)
-	case checks.CheckTCP:
+	case string(checks.CheckTCP):
 		result = checks.TCP(check.ID, cfg.ProbeID, check.Target, policy)
-	case checks.CheckDNS:
+	case string(checks.CheckDNS):
 		result = checks.DNS(check.ID, cfg.ProbeID, check.Target, policy)
 	default:
 		log.Printf("probe: unknown check type %q for check_id=%s, skipping", check.Type, check.ID)

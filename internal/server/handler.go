@@ -183,7 +183,8 @@ func probeOnline(lastSeenAt *time.Time, offlineAfter time.Duration) bool {
 	return time.Since(*lastSeenAt) < offlineAfter
 }
 
-// handleProbeChecks returns all checks for probes to run (no user scoping).
+// handleProbeChecks returns the probe-visible check set. This currently stays
+// global for all authenticated probes, but strips server-only metadata.
 func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
 	checks, err := h.store.ListAllChecks()
 	if err != nil {
@@ -191,8 +192,17 @@ func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	payload := make([]proto.ProbeCheck, 0, len(checks))
+	for _, check := range checks {
+		payload = append(payload, proto.ProbeCheck{
+			ID:       check.ID,
+			Type:     string(check.Type),
+			Target:   check.Target,
+			Interval: check.Interval,
+		})
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(checks); err != nil {
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		log.Printf("handler: failed to encode checks: %s", err)
 	}
 }
