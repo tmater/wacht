@@ -57,6 +57,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("POST /api/auth/login", h.loginLimiter.middleware(h.handleLogin))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
+	mux.HandleFunc("POST /api/auth/setup-password", h.signupLimiter.middleware(h.handleSetupPassword))
 	mux.HandleFunc("POST /api/auth/request-access", h.signupLimiter.middleware(h.handleRequestAccess))
 
 	// Probe routes — per-probe auth.
@@ -71,7 +72,7 @@ func (h *Handler) Routes() http.Handler {
 	// Admin routes — session auth, is_admin required.
 	mux.HandleFunc("GET /api/admin/signup-requests", h.requireAdmin(h.handleListSignupRequests))
 	mux.HandleFunc("POST /api/admin/signup-requests/{id}/approve", h.requireAdmin(h.handleApproveSignupRequest))
-	mux.HandleFunc("DELETE /api/admin/signup-requests/{id}", h.requireAdmin(h.handleDeleteSignupRequest))
+	mux.HandleFunc("POST /api/admin/signup-requests/{id}/reject", h.requireAdmin(h.handleRejectSignupRequest))
 
 	// Dashboard routes — session auth.
 	mux.HandleFunc("GET /status", h.requireSession(h.handleStatus))

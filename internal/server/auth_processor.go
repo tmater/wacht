@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tmater/wacht/internal/store"
 )
@@ -12,8 +13,9 @@ type authStore interface {
 	UpdateUserPassword(userID int64, currentPassword, newPassword string) (bool, error)
 	CreateSignupRequest(email string) error
 	ListPendingSignupRequests() ([]store.SignupRequest, error)
-	ApproveSignupRequest(id int64) (email, tempPassword string, err error)
-	DeleteSignupRequest(id int64) error
+	ApproveSignupRequest(id int64) (store.SignupApproval, error)
+	RejectSignupRequest(id int64) (bool, error)
+	SetupPassword(token, newPassword string) (store.SetupPasswordOutcome, error)
 }
 
 type LoginRequest struct {
@@ -35,9 +37,20 @@ type RequestAccessRequest struct {
 	Email string `json:"email"`
 }
 
+type SetupPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
 type SignupApprovalOutcome struct {
-	Email        string
-	TempPassword string
+	Email      string
+	SetupToken string
+	ExpiresAt  time.Time
+}
+
+type SetupPasswordOutcome struct {
+	Token string
+	Email string
 }
 
 type authProcessor interface {
@@ -46,7 +59,8 @@ type authProcessor interface {
 	RequestAccess(req RequestAccessRequest) error
 	ListPendingSignupRequests() ([]store.SignupRequest, error)
 	ApproveSignupRequest(id int64) (SignupApprovalOutcome, error)
-	DeleteSignupRequest(id int64) error
+	RejectSignupRequest(id int64) error
+	SetupPassword(req SetupPasswordRequest) (SetupPasswordOutcome, error)
 }
 
 type AuthProcessor struct {
@@ -96,9 +110,6 @@ func (p *AuthProcessor) ChangePassword(user *store.User, req ChangePasswordReque
 }
 
 func (p *AuthProcessor) RequestAccess(req RequestAccessRequest) error {
-	if req.Email == "" {
-		return &badRequestError{message: "email is required"}
-	}
 	if err := p.store.CreateSignupRequest(req.Email); err != nil {
 		return fmt.Errorf("create signup request: %w", err)
 	}
@@ -114,22 +125,44 @@ func (p *AuthProcessor) ListPendingSignupRequests() ([]store.SignupRequest, erro
 }
 
 func (p *AuthProcessor) ApproveSignupRequest(id int64) (SignupApprovalOutcome, error) {
-	email, tempPassword, err := p.store.ApproveSignupRequest(id)
+	approval, err := p.store.ApproveSignupRequest(id)
 	if err != nil {
 		return SignupApprovalOutcome{}, fmt.Errorf("approve signup request: %w", err)
 	}
-	if email == "" {
+	if approval.Email == "" {
 		return SignupApprovalOutcome{}, &notFoundError{message: "request not found or already processed"}
 	}
 	return SignupApprovalOutcome{
-		Email:        email,
-		TempPassword: tempPassword,
+		Email:      approval.Email,
+		SetupToken: approval.SetupToken,
+		ExpiresAt:  approval.ExpiresAt,
 	}, nil
 }
 
-func (p *AuthProcessor) DeleteSignupRequest(id int64) error {
-	if err := p.store.DeleteSignupRequest(id); err != nil {
-		return fmt.Errorf("delete signup request: %w", err)
+func (p *AuthProcessor) RejectSignupRequest(id int64) error {
+	ok, err := p.store.RejectSignupRequest(id)
+	if err != nil {
+		return fmt.Errorf("reject signup request: %w", err)
+	}
+	if !ok {
+		return &notFoundError{message: "request not found or already processed"}
 	}
 	return nil
+}
+
+func (p *AuthProcessor) SetupPassword(req SetupPasswordRequest) (SetupPasswordOutcome, error) {
+	if req.Token == "" || req.NewPassword == "" {
+		return SetupPasswordOutcome{}, &badRequestError{message: "token and new_password are required"}
+	}
+	outcome, err := p.store.SetupPassword(req.Token, req.NewPassword)
+	if err != nil {
+		return SetupPasswordOutcome{}, fmt.Errorf("setup password: %w", err)
+	}
+	if outcome.SessionToken == "" {
+		return SetupPasswordOutcome{}, &unauthorizedError{message: "invalid or expired setup token"}
+	}
+	return SetupPasswordOutcome{
+		Token: outcome.SessionToken,
+		Email: outcome.Email,
+	}, nil
 }

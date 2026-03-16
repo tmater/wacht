@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/tmater/wacht/internal/store"
 )
@@ -13,8 +14,9 @@ type fakeAuthStore struct {
 	updateUserPasswordFn        func(userID int64, currentPassword, newPassword string) (bool, error)
 	createSignupRequestFn       func(email string) error
 	listPendingSignupRequestsFn func() ([]store.SignupRequest, error)
-	approveSignupRequestFn      func(id int64) (email, tempPassword string, err error)
-	deleteSignupRequestFn       func(id int64) error
+	approveSignupRequestFn      func(id int64) (store.SignupApproval, error)
+	rejectSignupRequestFn       func(id int64) (bool, error)
+	setupPasswordFn             func(token, newPassword string) (store.SetupPasswordOutcome, error)
 	authEmail                   string
 	authPassword                string
 	sessionUserID               int64
@@ -23,6 +25,7 @@ type fakeAuthStore struct {
 	newPassword                 string
 	signupEmail                 string
 	signupRequestID             int64
+	setupToken                  string
 }
 
 func (f *fakeAuthStore) AuthenticateUser(email, password string) (*store.User, error) {
@@ -67,20 +70,29 @@ func (f *fakeAuthStore) ListPendingSignupRequests() ([]store.SignupRequest, erro
 	return nil, nil
 }
 
-func (f *fakeAuthStore) ApproveSignupRequest(id int64) (email, tempPassword string, err error) {
+func (f *fakeAuthStore) ApproveSignupRequest(id int64) (store.SignupApproval, error) {
 	f.signupRequestID = id
 	if f.approveSignupRequestFn != nil {
 		return f.approveSignupRequestFn(id)
 	}
-	return "", "", nil
+	return store.SignupApproval{}, nil
 }
 
-func (f *fakeAuthStore) DeleteSignupRequest(id int64) error {
+func (f *fakeAuthStore) RejectSignupRequest(id int64) (bool, error) {
 	f.signupRequestID = id
-	if f.deleteSignupRequestFn != nil {
-		return f.deleteSignupRequestFn(id)
+	if f.rejectSignupRequestFn != nil {
+		return f.rejectSignupRequestFn(id)
 	}
-	return nil
+	return false, nil
+}
+
+func (f *fakeAuthStore) SetupPassword(token, newPassword string) (store.SetupPasswordOutcome, error) {
+	f.setupToken = token
+	f.newPassword = newPassword
+	if f.setupPasswordFn != nil {
+		return f.setupPasswordFn(token, newPassword)
+	}
+	return store.SetupPasswordOutcome{}, nil
 }
 
 func TestAuthProcessorLoginCreatesSession(t *testing.T) {
@@ -188,19 +200,6 @@ func TestAuthProcessorChangePasswordUpdatesPassword(t *testing.T) {
 	}
 }
 
-func TestAuthProcessorRequestAccessRejectsMissingEmail(t *testing.T) {
-	p := NewAuthProcessor(&fakeAuthStore{})
-
-	err := p.RequestAccess(RequestAccessRequest{})
-	var badRequest *badRequestError
-	if !errors.As(err, &badRequest) {
-		t.Fatalf("RequestAccess() error = %v, want badRequestError", err)
-	}
-	if badRequest.Error() != "email is required" {
-		t.Fatalf("bad request = %q", badRequest.Error())
-	}
-}
-
 func TestAuthProcessorRequestAccessCreatesSignupRequest(t *testing.T) {
 	s := &fakeAuthStore{}
 	p := NewAuthProcessor(s)
@@ -224,5 +223,85 @@ func TestAuthProcessorApproveSignupRequestReturnsNotFound(t *testing.T) {
 	}
 	if notFound.Error() != "request not found or already processed" {
 		t.Fatalf("not found = %q", notFound.Error())
+	}
+}
+
+func TestAuthProcessorApproveSignupRequestReturnsSetupToken(t *testing.T) {
+	s := &fakeAuthStore{
+		approveSignupRequestFn: func(id int64) (store.SignupApproval, error) {
+			return store.SignupApproval{
+				Email:      "alice@example.com",
+				SetupToken: "setup-token",
+				ExpiresAt:  time.Date(2026, time.March, 16, 10, 0, 0, 0, time.UTC),
+			}, nil
+		},
+	}
+
+	p := NewAuthProcessor(s)
+	outcome, err := p.ApproveSignupRequest(7)
+	if err != nil {
+		t.Fatalf("ApproveSignupRequest() error = %v", err)
+	}
+	if outcome.Email != "alice@example.com" || outcome.SetupToken != "setup-token" {
+		t.Fatalf("unexpected approval outcome: %#v", outcome)
+	}
+}
+
+func TestAuthProcessorRejectSignupRequestReturnsNotFound(t *testing.T) {
+	p := NewAuthProcessor(&fakeAuthStore{})
+
+	err := p.RejectSignupRequest(42)
+	var notFound *notFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("RejectSignupRequest() error = %v, want notFoundError", err)
+	}
+}
+
+func TestAuthProcessorSetupPasswordRejectsMissingFields(t *testing.T) {
+	p := NewAuthProcessor(&fakeAuthStore{})
+
+	_, err := p.SetupPassword(SetupPasswordRequest{})
+	var badRequest *badRequestError
+	if !errors.As(err, &badRequest) {
+		t.Fatalf("SetupPassword() error = %v, want badRequestError", err)
+	}
+	if badRequest.Error() != "token and new_password are required" {
+		t.Fatalf("bad request = %q", badRequest.Error())
+	}
+}
+
+func TestAuthProcessorSetupPasswordRejectsInvalidToken(t *testing.T) {
+	p := NewAuthProcessor(&fakeAuthStore{})
+
+	_, err := p.SetupPassword(SetupPasswordRequest{Token: "bad", NewPassword: "secret"})
+	var unauthorized *unauthorizedError
+	if !errors.As(err, &unauthorized) {
+		t.Fatalf("SetupPassword() error = %v, want unauthorizedError", err)
+	}
+	if unauthorized.Error() != "invalid or expired setup token" {
+		t.Fatalf("unauthorized = %q", unauthorized.Error())
+	}
+}
+
+func TestAuthProcessorSetupPasswordReturnsSession(t *testing.T) {
+	s := &fakeAuthStore{
+		setupPasswordFn: func(token, newPassword string) (store.SetupPasswordOutcome, error) {
+			return store.SetupPasswordOutcome{
+				Email:        "alice@example.com",
+				SessionToken: "session-123",
+			}, nil
+		},
+	}
+
+	p := NewAuthProcessor(s)
+	outcome, err := p.SetupPassword(SetupPasswordRequest{Token: "setup-token", NewPassword: "secret"})
+	if err != nil {
+		t.Fatalf("SetupPassword() error = %v", err)
+	}
+	if outcome.Email != "alice@example.com" || outcome.Token != "session-123" {
+		t.Fatalf("unexpected setup password outcome: %#v", outcome)
+	}
+	if s.setupToken != "setup-token" || s.newPassword != "secret" {
+		t.Fatalf("SetupPassword store called with %q/%q", s.setupToken, s.newPassword)
 	}
 }
