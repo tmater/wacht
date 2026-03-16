@@ -103,6 +103,53 @@ class SmokeClient:
             raise SmokeError("login response did not contain a token")
         return token
 
+    def request_access(self, email):
+        self.request(
+            "POST",
+            "/api/auth/request-access",
+            payload={"email": email},
+            expected_status=(200,),
+        )
+
+    def list_signup_requests(self, admin_token):
+        pending = self.request(
+            "GET",
+            "/api/admin/signup-requests",
+            headers=self.auth_headers(admin_token),
+            expected_status=(200,),
+        )
+        if pending is None:
+            return []
+        return pending
+
+    def approve_signup_request(self, admin_token, request_id):
+        return self.request(
+            "POST",
+            f"/api/admin/signup-requests/{request_id}/approve",
+            headers=self.auth_headers(admin_token),
+            expected_status=(200,),
+        )
+
+    def reject_signup_request(self, admin_token, request_id):
+        self.request(
+            "POST",
+            f"/api/admin/signup-requests/{request_id}/reject",
+            headers=self.auth_headers(admin_token),
+            expected_status=(204,),
+        )
+
+    def setup_password(self, setup_token, new_password):
+        response = self.request(
+            "POST",
+            "/api/auth/setup-password",
+            payload={"token": setup_token, "new_password": new_password},
+            expected_status=(200,),
+        )
+        token = response.get("token")
+        if not token:
+            raise SmokeError("setup-password response did not contain a token")
+        return response
+
     def wait_for_health(self, timeout_seconds=90, interval_seconds=2):
         wait_for(
             "server health",

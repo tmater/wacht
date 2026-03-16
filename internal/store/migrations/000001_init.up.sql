@@ -58,8 +58,20 @@ CREATE TABLE checks (
 );
 
 CREATE TABLE signup_requests (
-    id           BIGSERIAL PRIMARY KEY,
-    email        TEXT NOT NULL UNIQUE,
-    requested_at TIMESTAMPTZ NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'pending'
+    id                     BIGSERIAL PRIMARY KEY,
+    email                  TEXT NOT NULL UNIQUE,
+    requested_at           TIMESTAMPTZ NOT NULL,
+    approved_at            TIMESTAMPTZ,
+    rejected_at            TIMESTAMPTZ,
+    completed_at           TIMESTAMPTZ,
+    user_id                BIGINT REFERENCES users(id),
+    setup_token_hash       TEXT,
+    setup_token_expires_at TIMESTAMPTZ,
+    setup_token_used_at    TIMESTAMPTZ,
+    status                 TEXT NOT NULL DEFAULT 'pending',
+    CONSTRAINT signup_requests_status_check CHECK (status IN ('pending', 'approved', 'rejected', 'completed'))
 );
+
+CREATE UNIQUE INDEX idx_signup_requests_setup_token_hash
+    ON signup_requests (setup_token_hash)
+    WHERE setup_token_hash IS NOT NULL;

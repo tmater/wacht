@@ -20,40 +20,37 @@ def test_auth_guard(server):
 
     admin_token = server.login()
     email = f"smoke-auth-guard-{uuid.uuid4().hex[:12]}@wacht.local"
+    chosen_password = f"smoke-setup-{uuid.uuid4().hex[:12]}"
 
-    server.request(
-        "POST",
-        "/api/auth/request-access",
-        payload={"email": email},
-        expected_status=(200,),
-    )
-    pending = server.request(
-        "GET",
-        "/api/admin/signup-requests",
-        headers=server.auth_headers(admin_token),
-        expected_status=(200,),
-    )
+    server.request_access(email)
+    pending = server.list_signup_requests(admin_token)
     request_id = pending_request_id(pending, email)
     if request_id is None:
         raise SmokeError(f"expected pending signup request for {email}, got {pending!r}")
 
-    approval = server.request(
-        "POST",
-        f"/api/admin/signup-requests/{request_id}/approve",
-        headers=server.auth_headers(admin_token),
-        expected_status=(200,),
-    )
+    approval = server.approve_signup_request(admin_token, request_id)
     if approval.get("email") != email:
         raise SmokeError(f"expected approved signup email {email!r}, got {approval.get('email')!r}")
-    temp_password = approval.get("temp_password")
-    if not temp_password:
-        raise SmokeError(f"expected temp_password in signup approval response, got {approval!r}")
+    setup_token = approval.get("setup_token")
+    if not setup_token:
+        raise SmokeError(f"expected setup_token in signup approval response, got {approval!r}")
 
     normal_user = SmokeClient(
         base_url=server.base_url,
         email=email,
-        password=temp_password,
+        password=chosen_password,
         timeout_seconds=server.timeout_seconds,
+    )
+    setup = normal_user.setup_password(setup_token, chosen_password)
+    setup_token_value = setup.get("token")
+    if not setup_token_value:
+        raise SmokeError(f"expected setup-password token in response, got {setup!r}")
+
+    identity = normal_user.request(
+        "GET",
+        "/api/auth/me",
+        headers=normal_user.auth_headers(setup_token_value),
+        expected_status=(200,),
     )
     normal_token = normal_user.login()
     identity = normal_user.request(
@@ -79,6 +76,7 @@ def test_auth_guard(server):
         json.dumps(
             {
                 "missing_token_routes": missing_token_bodies,
+                "setup_password_email": setup.get("email"),
                 "approved_user": identity,
                 "non_admin_admin_route": forbidden.strip(),
             },

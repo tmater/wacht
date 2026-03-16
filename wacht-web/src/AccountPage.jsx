@@ -78,7 +78,7 @@ export default function AccountPage({ email, isAdmin, onLogout }) {
 
 function SignupRequests({ onLogout }) {
   const [requests, setRequests] = useState([])
-  const [approved, setApproved] = useState(null) // { email, tempPassword }
+  const [approved, setApproved] = useState(null) // { email, setupToken, expiresAt }
   const [err, setErr] = useState(null)
 
   async function load() {
@@ -102,7 +102,7 @@ function SignupRequests({ onLogout }) {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      setApproved({ email: data.email, tempPassword: data.temp_password })
+      setApproved({ email: data.email, setupToken: data.setup_token, expiresAt: data.expires_at })
       load()
     } catch (e) {
       setErr(e.message)
@@ -111,8 +111,8 @@ function SignupRequests({ onLogout }) {
 
   async function handleReject(id) {
     try {
-      const res = await fetch(`${API_URL}/api/admin/signup-requests/${id}`, {
-        method: 'DELETE',
+      const res = await fetch(`${API_URL}/api/admin/signup-requests/${id}/reject`, {
+        method: 'POST',
         headers: authHeaders(),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -122,18 +122,24 @@ function SignupRequests({ onLogout }) {
     }
   }
 
-  function emailTemplate(email, tempPassword) {
+  function setupLink(setupToken) {
+    const url = new URL(window.location.href)
+    url.search = ''
+    url.searchParams.set('setup_token', setupToken)
+    return url.toString()
+  }
+
+  function emailTemplate(email, setupToken) {
     return `Subject: Your Wacht account is ready
 
 Hi,
 
 Your account has been approved.
 
-Login: ${window.location.origin}
-Email: ${email}
-Temporary password: ${tempPassword}
+Open this link to set your password:
+${setupLink(setupToken)}
 
-Please change your password after signing in.`
+Email: ${email}`
   }
 
   return (
@@ -145,15 +151,22 @@ Please change your password after signing in.`
       {approved && (
         <div className={`${ui.card} p-4 mb-4`}>
           <p className={`mb-2 ${ui.successText}`}>Approved — {approved.email}</p>
+          <p className="mb-3 text-xs text-gray-500">Setup link expires {new Date(approved.expiresAt).toLocaleString()}.</p>
           <pre className="text-xs text-gray-400 whitespace-pre-wrap mb-3 font-mono bg-gray-900 rounded p-3">
-            {emailTemplate(approved.email, approved.tempPassword)}
+            {emailTemplate(approved.email, approved.setupToken)}
           </pre>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => navigator.clipboard.writeText(emailTemplate(approved.email, approved.tempPassword))}
+              onClick={() => navigator.clipboard.writeText(emailTemplate(approved.email, approved.setupToken))}
               className={ui.btn.primary}
             >
               Copy email
+            </button>
+            <button
+              onClick={() => navigator.clipboard.writeText(setupLink(approved.setupToken))}
+              className={ui.btn.ghost}
+            >
+              Copy link
             </button>
             <button onClick={() => setApproved(null)} className={ui.btn.ghost}>Dismiss</button>
           </div>

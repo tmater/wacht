@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tmater/wacht/internal/store"
 )
@@ -18,7 +19,8 @@ type fakeAuthProcessor struct {
 	requestAccessFn             func(req RequestAccessRequest) error
 	listPendingSignupRequestsFn func() ([]store.SignupRequest, error)
 	approveSignupRequestFn      func(id int64) (SignupApprovalOutcome, error)
-	deleteSignupRequestFn       func(id int64) error
+	rejectSignupRequestFn       func(id int64) error
+	setupPasswordFn             func(req SetupPasswordRequest) (SetupPasswordOutcome, error)
 }
 
 func (f fakeAuthProcessor) Login(req LoginRequest) (LoginOutcome, error) {
@@ -41,8 +43,12 @@ func (f fakeAuthProcessor) ApproveSignupRequest(id int64) (SignupApprovalOutcome
 	return f.approveSignupRequestFn(id)
 }
 
-func (f fakeAuthProcessor) DeleteSignupRequest(id int64) error {
-	return f.deleteSignupRequestFn(id)
+func (f fakeAuthProcessor) RejectSignupRequest(id int64) error {
+	return f.rejectSignupRequestFn(id)
+}
+
+func (f fakeAuthProcessor) SetupPassword(req SetupPasswordRequest) (SetupPasswordOutcome, error) {
+	return f.setupPasswordFn(req)
 }
 
 func TestHandleLoginMapsUnauthorizedError(t *testing.T) {
@@ -55,7 +61,8 @@ func TestHandleLoginMapsUnauthorizedError(t *testing.T) {
 			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
 			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
 			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
-			deleteSignupRequestFn:       func(id int64) error { return nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn:             func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
 		},
 	}
 
@@ -82,7 +89,8 @@ func TestHandleLoginReturnsJSONOnSuccess(t *testing.T) {
 			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
 			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
 			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
-			deleteSignupRequestFn:       func(id int64) error { return nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn:             func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
 		},
 	}
 
@@ -113,7 +121,8 @@ func TestHandleChangePasswordMapsBadRequestError(t *testing.T) {
 			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
 			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
 			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
-			deleteSignupRequestFn:       func(id int64) error { return nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn:             func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
 		},
 	}
 
@@ -141,7 +150,8 @@ func TestHandleChangePasswordMapsInternalError(t *testing.T) {
 			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
 			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
 			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
-			deleteSignupRequestFn:       func(id int64) error { return nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn:             func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
 		},
 	}
 
@@ -159,17 +169,16 @@ func TestHandleChangePasswordMapsInternalError(t *testing.T) {
 	}
 }
 
-func TestHandleRequestAccessMapsBadRequestError(t *testing.T) {
+func TestHandleRequestAccessAlwaysReturnsOK(t *testing.T) {
 	h := &Handler{
 		authProcessor: fakeAuthProcessor{
-			loginFn:          func(req LoginRequest) (LoginOutcome, error) { return LoginOutcome{}, nil },
-			changePasswordFn: func(user *store.User, req ChangePasswordRequest) error { return nil },
-			requestAccessFn: func(req RequestAccessRequest) error {
-				return &badRequestError{message: "email is required"}
-			},
+			loginFn:                     func(req LoginRequest) (LoginOutcome, error) { return LoginOutcome{}, nil },
+			changePasswordFn:            func(user *store.User, req ChangePasswordRequest) error { return nil },
+			requestAccessFn:             func(req RequestAccessRequest) error { return errors.New("boom") },
 			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
 			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
-			deleteSignupRequestFn:       func(id int64) error { return nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn:             func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
 		},
 	}
 
@@ -178,11 +187,40 @@ func TestHandleRequestAccessMapsBadRequestError(t *testing.T) {
 
 	h.handleRequestAccess(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if body := rec.Body.String(); body != "email is required\n" {
-		t.Fatalf("body = %q, want email is required", body)
+}
+
+func TestHandleSetupPasswordReturnsJSONOnSuccess(t *testing.T) {
+	h := &Handler{
+		authProcessor: fakeAuthProcessor{
+			loginFn:                     func(req LoginRequest) (LoginOutcome, error) { return LoginOutcome{}, nil },
+			changePasswordFn:            func(user *store.User, req ChangePasswordRequest) error { return nil },
+			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
+			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
+			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn: func(req SetupPasswordRequest) (SetupPasswordOutcome, error) {
+				return SetupPasswordOutcome{Token: "session-123", Email: "alice@example.com"}, nil
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/setup-password", bytes.NewBufferString(`{"token":"setup","new_password":"secret"}`))
+	rec := httptest.NewRecorder()
+
+	h.handleSetupPassword(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if body["token"] != "session-123" || body["email"] != "alice@example.com" {
+		t.Fatalf("body = %#v, want setup-password token/email payload", body)
 	}
 }
 
@@ -196,7 +234,8 @@ func TestHandleApproveSignupRequestMapsNotFoundError(t *testing.T) {
 			approveSignupRequestFn: func(id int64) (SignupApprovalOutcome, error) {
 				return SignupApprovalOutcome{}, &notFoundError{message: "request not found or already processed"}
 			},
-			deleteSignupRequestFn: func(id int64) error { return nil },
+			rejectSignupRequestFn: func(id int64) error { return nil },
+			setupPasswordFn:       func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
 		},
 	}
 
@@ -211,5 +250,45 @@ func TestHandleApproveSignupRequestMapsNotFoundError(t *testing.T) {
 	}
 	if body := rec.Body.String(); body != "request not found or already processed\n" {
 		t.Fatalf("body = %q, want not found message", body)
+	}
+}
+
+func TestHandleApproveSignupRequestReturnsSetupToken(t *testing.T) {
+	h := &Handler{
+		authProcessor: fakeAuthProcessor{
+			loginFn:                     func(req LoginRequest) (LoginOutcome, error) { return LoginOutcome{}, nil },
+			changePasswordFn:            func(user *store.User, req ChangePasswordRequest) error { return nil },
+			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
+			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
+			approveSignupRequestFn: func(id int64) (SignupApprovalOutcome, error) {
+				return SignupApprovalOutcome{
+					Email:      "alice@example.com",
+					SetupToken: "setup-token",
+					ExpiresAt:  time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC),
+				}, nil
+			},
+			rejectSignupRequestFn: func(id int64) error { return nil },
+			setupPasswordFn:       func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/signup-requests/42/approve", nil)
+	req.SetPathValue("id", "42")
+	rec := httptest.NewRecorder()
+
+	h.handleApproveSignupRequest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if body["setup_token"] != "setup-token" || body["email"] != "alice@example.com" {
+		t.Fatalf("body = %#v, want setup token/email payload", body)
+	}
+	if body["expires_at"] != "2026-03-16T12:00:00Z" {
+		t.Fatalf("expires_at = %q, want 2026-03-16T12:00:00Z", body["expires_at"])
 	}
 }

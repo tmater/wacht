@@ -211,6 +211,26 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleSetupPassword lets a user choose a password with a one-time setup token.
+func (h *Handler) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
+	var req SetupPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	outcome, err := h.authProcessor.SetupPassword(req)
+	if err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		log.Printf("auth: failed to setup password: %s", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": outcome.Token, "email": outcome.Email})
+}
+
 // handleRequestAccess accepts a public email submission for signup.
 // Always returns 200 OK to prevent email enumeration.
 func (h *Handler) handleRequestAccess(w http.ResponseWriter, r *http.Request) {
@@ -264,7 +284,7 @@ func (h *Handler) handleListSignupRequests(w http.ResponseWriter, r *http.Reques
 }
 
 // handleApproveSignupRequest approves a pending request and returns the generated
-// temporary password. Protected by requireAdmin.
+// one-time setup token. Protected by requireAdmin.
 func (h *Handler) handleApproveSignupRequest(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -285,27 +305,28 @@ func (h *Handler) handleApproveSignupRequest(w http.ResponseWriter, r *http.Requ
 	log.Printf("admin: approved signup request id=%d email=%s", id, outcome.Email)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{
-		"email":         outcome.Email,
-		"temp_password": outcome.TempPassword,
+		"email":       outcome.Email,
+		"setup_token": outcome.SetupToken,
+		"expires_at":  outcome.ExpiresAt.UTC().Format(time.RFC3339),
 	}); err != nil {
 		log.Printf("admin: failed to encode approved signup request id=%d: %s", id, err)
 	}
 }
 
-// handleDeleteSignupRequest rejects and removes a pending signup request.
+// handleRejectSignupRequest marks a pending signup request rejected.
 // Protected by requireAdmin.
-func (h *Handler) handleDeleteSignupRequest(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleRejectSignupRequest(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.authProcessor.DeleteSignupRequest(id); err != nil {
+	if err := h.authProcessor.RejectSignupRequest(id); err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("admin: failed to delete signup request id=%d: %s", id, err)
+		log.Printf("admin: failed to reject signup request id=%d: %s", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

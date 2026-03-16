@@ -15,41 +15,38 @@ def test_signup_approval(server):
     admin_token = server.login()
     approved_email = f"smoke-signup-approved-{uuid.uuid4().hex[:12]}@wacht.local"
     rejected_email = f"smoke-signup-rejected-{uuid.uuid4().hex[:12]}@wacht.local"
+    chosen_password = f"smoke-setup-{uuid.uuid4().hex[:12]}"
     tracked_emails = {approved_email, rejected_email}
     cleanup = CleanupScope()
 
     try:
         with cleanup.preserve_primary_error():
             for email in (approved_email, rejected_email):
-                server.request(
-                    "POST",
-                    "/api/auth/request-access",
-                    payload={"email": email},
-                    expected_status=(200,),
-                )
+                server.request_access(email)
 
-            pending_before = list_pending_requests(server, admin_token)
+            pending_before = server.list_signup_requests(admin_token)
             approved_request = require_pending_request(pending_before, approved_email)
             rejected_request = require_pending_request(pending_before, rejected_email)
 
-            approval = server.request(
-                "POST",
-                f"/api/admin/signup-requests/{approved_request['id']}/approve",
-                headers=server.auth_headers(admin_token),
-                expected_status=(200,),
-            )
+            approval = server.approve_signup_request(admin_token, approved_request["id"])
             if approval.get("email") != approved_email:
                 raise SmokeError(f"expected approved signup email {approved_email!r}, got {approval.get('email')!r}")
-            temp_password = approval.get("temp_password")
-            if not temp_password:
-                raise SmokeError(f"expected temp_password in signup approval response, got {approval!r}")
+            setup_token = approval.get("setup_token")
+            if not setup_token:
+                raise SmokeError(f"expected setup_token in signup approval response, got {approval!r}")
+
+            server.request_access(approved_email)
+            pending_after_duplicate_request = server.list_signup_requests(admin_token)
+            if any(request.get("email") == approved_email for request in pending_after_duplicate_request):
+                raise SmokeError(f"expected approved signup to stay out of the pending queue, got {pending_after_duplicate_request!r}")
 
             approved_user = SmokeClient(
                 base_url=server.base_url,
                 email=approved_email,
-                password=temp_password,
+                password=chosen_password,
                 timeout_seconds=server.timeout_seconds,
             )
+            setup = approved_user.setup_password(setup_token, chosen_password)
             approved_token = approved_user.login()
             identity = approved_user.request(
                 "GET",
@@ -62,14 +59,10 @@ def test_signup_approval(server):
             if identity.get("is_admin") is not False:
                 raise SmokeError(f"expected approved signup user to be non-admin, got {identity!r}")
 
-            server.request(
-                "DELETE",
-                f"/api/admin/signup-requests/{rejected_request['id']}",
-                headers=server.auth_headers(admin_token),
-                expected_status=(204,),
-            )
+            server.reject_signup_request(admin_token, rejected_request["id"])
+            server.request_access(rejected_email)
 
-            pending_after = list_pending_requests(server, admin_token)
+            pending_after = server.list_signup_requests(admin_token)
             leftovers = [request for request in pending_after if request.get("email") in tracked_emails]
             if leftovers:
                 raise SmokeError(f"expected processed signup requests to leave the pending list, got {leftovers!r}")
@@ -88,8 +81,10 @@ def test_signup_approval(server):
                         "approved_request": approved_request,
                         "approval": {
                             "email": approval["email"],
-                            "temp_password_length": len(temp_password),
+                            "setup_token_length": len(setup_token),
+                            "expires_at": approval.get("expires_at"),
                         },
+                        "setup_password_email": setup.get("email"),
                         "approved_identity": identity,
                         "rejected_request": rejected_request,
                         "rejected_approval": rejected_approval.strip(),
@@ -107,15 +102,7 @@ def test_signup_approval(server):
 
 
 def list_pending_requests(server, admin_token):
-    pending = server.request(
-        "GET",
-        "/api/admin/signup-requests",
-        headers=server.auth_headers(admin_token),
-        expected_status=(200,),
-    )
-    if pending is None:
-        return []
-    return pending
+    return server.list_signup_requests(admin_token)
 
 
 def require_pending_request(requests, email):
@@ -134,12 +121,7 @@ def cleanup_pending_requests(server, admin_token, emails):
     for request in list_pending_requests(server, admin_token):
         if request.get("email") not in emails:
             continue
-        server.request(
-            "DELETE",
-            f"/api/admin/signup-requests/{request['id']}",
-            headers=server.auth_headers(admin_token),
-            expected_status=(204,),
-        )
+        server.reject_signup_request(admin_token, request["id"])
 
 
 def assert_body(label, body, expected):
