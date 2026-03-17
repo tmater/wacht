@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
@@ -30,12 +31,12 @@ type scheduler struct {
 // TODO: This goroutine-per-check model is fine at small scale, but a central
 // scheduler plus bounded worker pool will scale better once probes need to run
 // large check sets with smoother execution spread.
-func newScheduler(cfg *config.ProbeConfig, policy network.Policy) *scheduler {
+func newScheduler(cfg *config.ProbeConfig, policy network.Policy, apiClient *probeapi.Client) *scheduler {
 	s := &scheduler{
 		running: make(map[string]runningCheck),
 	}
 	s.startWorker = func(check proto.ProbeCheck) runningCheck {
-		return s.startRuntimeWorker(cfg, policy, check)
+		return s.startRuntimeWorker(cfg, policy, apiClient, check)
 	}
 	return s
 }
@@ -83,18 +84,18 @@ func (s *scheduler) Close() {
 
 // startRuntimeWorker runs the check once immediately, then continues on the
 // configured interval until reconcile or shutdown cancels it.
-func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.Policy, check proto.ProbeCheck) runningCheck {
+func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.Policy, apiClient *probeapi.Client, check proto.ProbeCheck) runningCheck {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
-		runAndPost(cfg, policy, check)
+		runAndPost(cfg, policy, apiClient, check)
 		ticker := time.NewTicker(time.Duration(check.Interval) * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				runAndPost(cfg, policy, check)
+				runAndPost(cfg, policy, apiClient, check)
 			case <-ctx.Done():
 				return
 			}
@@ -107,7 +108,7 @@ func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.P
 	}
 }
 
-func runAndPost(cfg *config.ProbeConfig, policy network.Policy, check proto.ProbeCheck) {
+func runAndPost(cfg *config.ProbeConfig, policy network.Policy, apiClient *probeapi.Client, check proto.ProbeCheck) {
 	var result proto.CheckResult
 	switch check.Type {
 	case string(checks.CheckHTTP):
@@ -120,7 +121,7 @@ func runAndPost(cfg *config.ProbeConfig, policy network.Policy, check proto.Prob
 		log.Printf("probe: unknown check type %q for check_id=%s, skipping", check.Type, check.ID)
 		return
 	}
-	if err := postResult(cfg.Server, cfg.Secret, result); err != nil {
-		log.Printf("failed to post result: %s", err)
+	if err := apiClient.PostResult(context.Background(), result); err != nil {
+		log.Printf("probe: probe-server API result upload failed check_id=%s probe_id=%s: %s", check.ID, cfg.ProbeID, err)
 	}
 }

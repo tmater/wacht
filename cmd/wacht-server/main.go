@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/tmater/wacht/internal/checks"
@@ -95,7 +94,7 @@ func main() {
 
 	addr := ":8080"
 	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, h.Routes()); err != nil {
+	if err := newHTTPServer(addr, h.Routes()).ListenAndServe(); err != nil {
 		log.Fatalf("server error: %s", err)
 	}
 }
