@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/store"
@@ -93,7 +94,7 @@ func TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe(t *testing.T) {
 	s := &fakeProbeStore{}
 	p := NewProbeProcessor(s)
 
-	err := p.Heartbeat(&store.Probe{ProbeID: "probe-1"}, ProbeHeartbeatRequest{})
+	err := p.Heartbeat(&store.Probe{ProbeID: "probe-1"}, probeapi.HeartbeatRequest{})
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
 	}
@@ -106,7 +107,7 @@ func TestProbeProcessorRegisterRecordsVersion(t *testing.T) {
 	s := &fakeProbeStore{}
 	p := NewProbeProcessor(s)
 
-	err := p.Register(&store.Probe{ProbeID: "probe-1"}, ProbeRegistrationRequest{Version: "v1.2.3"})
+	err := p.Register(&store.Probe{ProbeID: "probe-1"}, probeapi.RegisterRequest{Version: "v1.2.3"})
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}

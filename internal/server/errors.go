@@ -36,6 +36,12 @@ func writeProcessorError(w http.ResponseWriter, err error) bool {
 		return true
 	}
 
+	var tooLarge *requestEntityTooLargeError
+	if errors.As(err, &tooLarge) {
+		http.Error(w, tooLarge.Error(), http.StatusRequestEntityTooLarge)
+		return true
+	}
+
 	var unauthorized *unauthorizedError
 	if errors.As(err, &unauthorized) {
 		http.Error(w, unauthorized.Error(), http.StatusUnauthorized)

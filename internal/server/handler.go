@@ -3,12 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
+	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
@@ -62,12 +62,12 @@ func (h *Handler) Routes() http.Handler {
 
 	// Probe routes — per-probe auth.
 	probe := http.NewServeMux()
-	probe.HandleFunc("POST /api/probes/register", h.handleProbeRegister)
-	probe.HandleFunc("GET /api/probes/checks", h.handleProbeChecks)
-	probe.HandleFunc("POST /api/probes/heartbeat", h.handleHeartbeat)
-	probe.HandleFunc("POST /api/results", h.handleResult)
+	probe.HandleFunc(http.MethodPost+" "+probeapi.PathRegister, h.handleProbeRegister)
+	probe.HandleFunc(http.MethodGet+" "+probeapi.PathChecks, h.handleProbeChecks)
+	probe.HandleFunc(http.MethodPost+" "+probeapi.PathHeartbeat, h.handleHeartbeat)
+	probe.HandleFunc(http.MethodPost+" "+probeapi.PathResults, h.handleResult)
 	mux.Handle("/api/probes/", h.requireProbeAuth(probe))
-	mux.Handle("/api/results", h.requireProbeAuth(probe))
+	mux.Handle(probeapi.PathResults, h.requireProbeAuth(probe))
 
 	// Admin routes — session auth, is_admin required.
 	mux.HandleFunc("GET /api/admin/signup-requests", h.requireAdmin(h.handleListSignupRequests))
@@ -92,7 +92,7 @@ func (h *Handler) Routes() http.Handler {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Wacht-Probe-ID, X-Wacht-Probe-Secret")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+probeapi.HeaderProbeID+", "+probeapi.HeaderProbeSecret)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -226,9 +226,12 @@ func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request) {
 // handleCreateCheck creates a new check owned by the authenticated user.
 func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
-	check, err := h.decodeCheck(r, "")
+	check, err := h.decodeCheck(w, r, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.store.CreateCheck(check, user.ID); err != nil {
@@ -243,9 +246,12 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	id := r.PathValue("id")
-	check, err := h.decodeCheck(r, id)
+	check, err := h.decodeCheck(w, r, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.store.UpdateCheck(check, user.ID); err != nil {
@@ -256,10 +262,10 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) decodeCheck(r *http.Request, id string) (checks.Check, error) {
+func (h *Handler) decodeCheck(w http.ResponseWriter, r *http.Request, id string) (checks.Check, error) {
 	var check checks.Check
-	if err := json.NewDecoder(r.Body).Decode(&check); err != nil {
-		return checks.Check{}, &badRequestError{message: "bad request"}
+	if err := decodeJSONBody(w, r, &check, maxJSONRequestBodyBytes, false); err != nil {
+		return checks.Check{}, err
 	}
 	if id != "" {
 		check.ID = id
@@ -292,9 +298,12 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 // handleHeartbeat updates last_seen_at for a registered probe.
 func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
-	var req ProbeHeartbeatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	var req probeapi.HeartbeatRequest
+	if err := decodeJSONBody(w, r, &req, maxProbeJSONRequestBodyBytes, true); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.probeProcessor.Heartbeat(probe, req); err != nil {
@@ -311,9 +320,12 @@ func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 // handleProbeRegister records an authenticated probe startup.
 func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
-	var req ProbeRegistrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	var req probeapi.RegisterRequest
+	if err := decodeJSONBody(w, r, &req, maxProbeJSONRequestBodyBytes, true); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.probeProcessor.Register(probe, req); err != nil {
@@ -332,9 +344,12 @@ func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
 	var result proto.CheckResult
-	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+	if err := decodeJSONBody(w, r, &result, maxProbeJSONRequestBodyBytes, false); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
 		log.Printf("handler: failed to decode result: %s", err)
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	outcome, err := h.probeProcessor.Process(probe, result)

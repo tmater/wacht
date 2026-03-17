@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -290,5 +291,35 @@ func TestHandleApproveSignupRequestReturnsSetupToken(t *testing.T) {
 	}
 	if body["expires_at"] != "2026-03-16T12:00:00Z" {
 		t.Fatalf("expires_at = %q, want 2026-03-16T12:00:00Z", body["expires_at"])
+	}
+}
+
+func TestHandleLoginRejectsTooLargeBody(t *testing.T) {
+	h := &Handler{
+		authProcessor: fakeAuthProcessor{
+			loginFn: func(req LoginRequest) (LoginOutcome, error) {
+				t.Fatal("Login should not be called for an oversized body")
+				return LoginOutcome{}, nil
+			},
+			changePasswordFn:            func(user *store.User, req ChangePasswordRequest) error { return nil },
+			requestAccessFn:             func(req RequestAccessRequest) error { return nil },
+			listPendingSignupRequestsFn: func() ([]store.SignupRequest, error) { return nil, nil },
+			approveSignupRequestFn:      func(id int64) (SignupApprovalOutcome, error) { return SignupApprovalOutcome{}, nil },
+			rejectSignupRequestFn:       func(id int64) error { return nil },
+			setupPasswordFn:             func(req SetupPasswordRequest) (SetupPasswordOutcome, error) { return SetupPasswordOutcome{}, nil },
+		},
+	}
+
+	body := `{"email":"alice@example.com","password":"` + strings.Repeat("x", int(maxJSONRequestBodyBytes)) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	h.handleLogin(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if got := rec.Body.String(); got != "request body too large\n" {
+		t.Fatalf("body = %q, want request body too large", got)
 	}
 }

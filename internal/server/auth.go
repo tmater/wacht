@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/store"
 )
@@ -21,17 +22,12 @@ const (
 	contextKeyProbe contextKey = "probe"
 )
 
-const (
-	probeIDHeader     = "X-Wacht-Probe-ID"
-	probeSecretHeader = "X-Wacht-Probe-Secret"
-)
-
 // requireProbeAuth authenticates an individual probe using its provisioned
 // probe_id + secret and injects that probe into the request context.
 func (h *Handler) requireProbeAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		probeID := strings.TrimSpace(r.Header.Get(probeIDHeader))
-		secret := strings.TrimSpace(r.Header.Get(probeSecretHeader))
+		probeID := strings.TrimSpace(r.Header.Get(probeapi.HeaderProbeID))
+		secret := strings.TrimSpace(r.Header.Get(probeapi.HeaderProbeSecret))
 		if probeID == "" || secret == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -162,8 +158,11 @@ func (rl *rateLimiter) middleware(next http.HandlerFunc) http.HandlerFunc {
 // handleLogin authenticates a user and returns a session token.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	outcome, err := h.authProcessor.Login(req)
@@ -196,8 +195,11 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	var req ChangePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.authProcessor.ChangePassword(user, req); err != nil {
@@ -214,8 +216,11 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 // handleSetupPassword lets a user choose a password with a one-time setup token.
 func (h *Handler) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
 	var req SetupPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	outcome, err := h.authProcessor.SetupPassword(req)
@@ -235,8 +240,11 @@ func (h *Handler) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
 // Always returns 200 OK to prevent email enumeration.
 func (h *Handler) handleRequestAccess(w http.ResponseWriter, r *http.Request) {
 	var req RequestAccessRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.authProcessor.RequestAccess(req); err != nil {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
+	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/quorum"
@@ -23,23 +24,14 @@ type probeStore interface {
 	ResolveIncident(checkID string) (bool, error)
 }
 
-type ProbeHeartbeatRequest struct {
-	ProbeID string `json:"probe_id"`
-}
-
-type ProbeRegistrationRequest struct {
-	ProbeID string `json:"probe_id"`
-	Version string `json:"version"`
-}
-
 type ProbeResultOutcome struct {
 	WebhookURL string
 	Alert      *alert.AlertPayload
 }
 
 type probeProcessor interface {
-	Heartbeat(probe *store.Probe, req ProbeHeartbeatRequest) error
-	Register(probe *store.Probe, req ProbeRegistrationRequest) error
+	Heartbeat(probe *store.Probe, req probeapi.HeartbeatRequest) error
+	Register(probe *store.Probe, req probeapi.RegisterRequest) error
 	Process(probe *store.Probe, incoming proto.CheckResult) (ProbeResultOutcome, error)
 }
 
@@ -51,7 +43,7 @@ func NewProbeProcessor(store probeStore) *ProbeProcessor {
 	return &ProbeProcessor{store: store}
 }
 
-func (p *ProbeProcessor) Heartbeat(probe *store.Probe, req ProbeHeartbeatRequest) error {
+func (p *ProbeProcessor) Heartbeat(probe *store.Probe, req probeapi.HeartbeatRequest) error {
 	if probe == nil {
 		return fmt.Errorf("probe is required")
 	}
@@ -61,7 +53,7 @@ func (p *ProbeProcessor) Heartbeat(probe *store.Probe, req ProbeHeartbeatRequest
 	return p.store.UpdateProbeHeartbeat(probe.ProbeID)
 }
 
-func (p *ProbeProcessor) Register(probe *store.Probe, req ProbeRegistrationRequest) error {
+func (p *ProbeProcessor) Register(probe *store.Probe, req probeapi.RegisterRequest) error {
 	if probe == nil {
 		return fmt.Errorf("probe is required")
 	}
