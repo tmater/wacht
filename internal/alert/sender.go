@@ -1,10 +1,11 @@
 package alert
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 )
 
@@ -68,9 +69,9 @@ func (s *Sender) worker() {
 	defer s.wg.Done()
 	for job := range s.jobs {
 		if err := s.send(job.url, job.payload); err != nil {
-			log.Printf("alert: webhook failed check_id=%s: %s", job.payload.CheckID, err)
+			slog.Default().Warn("webhook delivery failed", "component", "alert", "check_id", job.payload.CheckID, "status", job.payload.Status, "webhook_host", logx.URLHost(job.url), "err", err)
 		} else {
-			log.Printf("alert: webhook fired check_id=%s url=%s", job.payload.CheckID, job.url)
+			slog.Default().Info("webhook delivered", "component", "alert", "check_id", job.payload.CheckID, "status", job.payload.Status, "webhook_host", logx.URLHost(job.url))
 		}
 	}
 }

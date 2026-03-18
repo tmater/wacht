@@ -3,11 +3,12 @@ package checks
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 )
@@ -15,7 +16,7 @@ import (
 // DNS resolves target as a hostname and returns a CheckResult.
 // target should be a bare hostname, e.g. "example.com".
 func DNS(checkID, probeID, target string, policy network.Policy) proto.CheckResult {
-	log.Printf("running DNS check: check_id=%s target=%s", checkID, target)
+	slog.Default().Debug("dns check started", "component", "check_dns", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target))
 
 	result := proto.CheckResult{
 		CheckID:   checkID,
@@ -29,7 +30,7 @@ func DNS(checkID, probeID, target string, policy network.Policy) proto.CheckResu
 	if err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("DNS check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("dns check failed", "component", "check_dns", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 
@@ -43,19 +44,19 @@ func DNS(checkID, probeID, target string, policy network.Policy) proto.CheckResu
 	if err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("DNS check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("dns check failed", "component", "check_dns", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 
 	if len(addrs) == 0 {
 		result.Up = false
 		result.Error = "no addresses resolved"
-		log.Printf("DNS check failed: check_id=%s error=no addresses resolved", checkID)
+		slog.Default().Warn("dns check failed", "component", "check_dns", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", "no addresses resolved")
 		return result
 	}
 
 	result.Up = true
-	log.Printf("DNS check done: check_id=%s up=true addrs=%d latency=%s", checkID, len(addrs), result.Latency)
+	slog.Default().Debug("dns check finished", "component", "check_dns", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "up", true, "addrs", len(addrs), "latency_ms", result.Latency.Milliseconds())
 	return result
 }
 
@@ -90,7 +91,7 @@ func DNSExpect(checkID, probeID, target, expectedAddr string, policy network.Pol
 
 	result.Up = false
 	result.Error = fmt.Sprintf("expected address %s not found in DNS response", expectedAddr)
-	log.Printf("DNS check failed: check_id=%s error=%s", checkID, result.Error)
+	slog.Default().Warn("dns expectation failed", "component", "check_dns", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", result.Error)
 	return result
 }
 

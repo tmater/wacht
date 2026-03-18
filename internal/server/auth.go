@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/store"
 )
 
@@ -26,6 +26,7 @@ const (
 // probe_id + secret and injects that probe into the request context.
 func (h *Handler) requireProbeAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger := requestLogger(r)
 		probeID := strings.TrimSpace(r.Header.Get(probeapi.HeaderProbeID))
 		secret := strings.TrimSpace(r.Header.Get(probeapi.HeaderProbeSecret))
 		if probeID == "" || secret == "" {
@@ -34,7 +35,7 @@ func (h *Handler) requireProbeAuth(next http.Handler) http.Handler {
 		}
 		probe, err := h.store.AuthenticateProbe(probeID, secret)
 		if err != nil {
-			log.Printf("auth: probe lookup error probe_id=%s: %s", probeID, err)
+			logger.Error("probe lookup failed", "component", "auth", "probe_id", probeID, "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -43,13 +44,14 @@ func (h *Handler) requireProbeAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), contextKeyProbe, probe)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, attachAuthenticatedProbe(r.WithContext(ctx), probe))
 	})
 }
 
 // requireSession validates the Bearer token and injects the user into context.
 func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger := requestLogger(r)
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if token == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -57,7 +59,7 @@ func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
 		}
 		user, err := h.store.GetSessionUser(token)
 		if err != nil {
-			log.Printf("auth: session lookup error: %s", err)
+			logger.Error("session lookup failed", "component", "auth", "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -66,7 +68,7 @@ func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		ctx := context.WithValue(r.Context(), contextKeyUser, user)
-		next(w, r.WithContext(ctx))
+		next(w, attachAuthenticatedUser(r.WithContext(ctx), user))
 	}
 }
 
@@ -157,6 +159,7 @@ func (rl *rateLimiter) middleware(next http.HandlerFunc) http.HandlerFunc {
 
 // handleLogin authenticates a user and returns a session token.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	var req LoginRequest
 	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
 		if writeProcessorError(w, err) {
@@ -170,7 +173,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("auth: login failed email=%s: %s", req.Email, err)
+		logger.Error("login failed", "component", "auth", "email_hash", logx.EmailHash(req.Email), "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -180,13 +183,14 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout deletes the session token.
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if token == "" {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if err := h.store.DeleteSession(token); err != nil {
-		log.Printf("auth: failed to delete session: %s", err)
+		logger.Error("delete session failed", "component", "auth", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -194,6 +198,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 // handleChangePassword verifies the current password and sets a new one.
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
+	logger := requestLogger(r)
 	var req ChangePasswordRequest
 	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
 		if writeProcessorError(w, err) {
@@ -206,7 +211,7 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("auth: failed to update password user_id=%d: %s", user.ID, err)
+		logger.Error("change password failed", "component", "auth", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -215,6 +220,7 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // handleSetupPassword lets a user choose a password with a one-time setup token.
 func (h *Handler) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	var req SetupPasswordRequest
 	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
 		if writeProcessorError(w, err) {
@@ -228,7 +234,7 @@ func (h *Handler) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("auth: failed to setup password: %s", err)
+		logger.Error("setup password failed", "component", "auth", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -239,6 +245,7 @@ func (h *Handler) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
 // handleRequestAccess accepts a public email submission for signup.
 // Always returns 200 OK to prevent email enumeration.
 func (h *Handler) handleRequestAccess(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	var req RequestAccessRequest
 	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, false); err != nil {
 		if writeProcessorError(w, err) {
@@ -251,21 +258,22 @@ func (h *Handler) handleRequestAccess(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("signup: failed to create request email=%s: %s", req.Email, err)
+		logger.Error("create signup request failed", "component", "signup", "email_hash", logx.EmailHash(req.Email), "err", err)
 	} else {
-		log.Printf("signup: request received email=%s", req.Email)
+		logger.Info("signup request received", "component", "signup", "email_hash", logx.EmailHash(req.Email))
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
 // handleListSignupRequests returns all pending signup requests. Protected by requireAdmin.
 func (h *Handler) handleListSignupRequests(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	reqs, err := h.authProcessor.ListPendingSignupRequests()
 	if err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("admin: failed to list signup requests: %s", err)
+		logger.Error("list signup requests failed", "component", "admin", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -287,13 +295,14 @@ func (h *Handler) handleListSignupRequests(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
-		log.Printf("admin: failed to encode signup requests: %s", err)
+		logger.Warn("encode signup requests failed", "component", "admin", "err", err)
 	}
 }
 
 // handleApproveSignupRequest approves a pending request and returns the generated
 // one-time setup token. Protected by requireAdmin.
 func (h *Handler) handleApproveSignupRequest(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
@@ -305,25 +314,26 @@ func (h *Handler) handleApproveSignupRequest(w http.ResponseWriter, r *http.Requ
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("admin: failed to approve signup request id=%d: %s", id, err)
+		logger.Error("approve signup request failed", "component", "admin", "signup_request_id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("admin: approved signup request id=%d email=%s", id, outcome.Email)
+	logger.Info("signup request approved", "component", "admin", "signup_request_id", id, "email_hash", logx.EmailHash(outcome.Email))
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{
 		"email":       outcome.Email,
 		"setup_token": outcome.SetupToken,
 		"expires_at":  outcome.ExpiresAt.UTC().Format(time.RFC3339),
 	}); err != nil {
-		log.Printf("admin: failed to encode approved signup request id=%d: %s", id, err)
+		logger.Warn("encode approved signup request failed", "component", "admin", "signup_request_id", id, "err", err)
 	}
 }
 
 // handleRejectSignupRequest marks a pending signup request rejected.
 // Protected by requireAdmin.
 func (h *Handler) handleRejectSignupRequest(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
@@ -334,11 +344,11 @@ func (h *Handler) handleRejectSignupRequest(w http.ResponseWriter, r *http.Reque
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("admin: failed to reject signup request id=%d: %s", id, err)
+		logger.Error("reject signup request failed", "component", "admin", "signup_request_id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("admin: rejected signup request id=%d", id)
+	logger.Info("signup request rejected", "component", "admin", "signup_request_id", id)
 	w.WriteHeader(http.StatusNoContent)
 }

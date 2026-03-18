@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/store"
@@ -84,7 +84,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/auth/change-password", h.requireSession(h.handleChangePassword))
 	mux.HandleFunc("GET /api/incidents", h.requireSession(h.handleListIncidents))
 
-	return withCORS(mux)
+	return withRequestLog(withCORS(mux))
 }
 
 // withCORS adds permissive CORS headers so the dashboard can talk to the
@@ -105,17 +105,18 @@ func withCORS(next http.Handler) http.Handler {
 // handleStatus serves the authenticated status view as JSON.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
+	logger := requestLogger(r)
 
 	statuses, err := h.store.CheckStatuses(user.ID)
 	if err != nil {
-		log.Printf("status: failed to query check statuses: %s", err)
+		logger.Error("query check statuses failed", "component", "status", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	probeStatuses, err := h.store.ProbeStatuses(user.ID)
 	if err != nil {
-		log.Printf("status: failed to query probe statuses: %s", err)
+		logger.Error("query probe statuses failed", "component", "status", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -163,7 +164,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks, "probes": probes}); err != nil {
-		log.Printf("status: failed to encode response: %s", err)
+		logger.Warn("encode status response failed", "component", "status", "err", err)
 	}
 }
 
@@ -187,9 +188,10 @@ func probeOnline(lastSeenAt *time.Time, offlineAfter time.Duration) bool {
 // handleProbeChecks returns the probe-visible check set. This currently stays
 // global for all authenticated probes, but strips server-only metadata.
 func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
 	checks, err := h.store.ListAllChecks()
 	if err != nil {
-		log.Printf("handler: failed to list checks: %s", err)
+		logger.Error("list probe checks failed", "component", "probe", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -204,28 +206,30 @@ func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		log.Printf("handler: failed to encode checks: %s", err)
+		logger.Warn("encode probe checks failed", "component", "probe", "err", err)
 	}
 }
 
 // handleListChecks returns checks owned by the authenticated user.
 func (h *Handler) handleListChecks(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
+	logger := requestLogger(r)
 	checks, err := h.store.ListChecks(user.ID)
 	if err != nil {
-		log.Printf("handler: failed to list checks: %s", err)
+		logger.Error("list checks failed", "component", "checks", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(checks); err != nil {
-		log.Printf("handler: failed to encode checks: %s", err)
+		logger.Warn("encode checks failed", "component", "checks", "err", err)
 	}
 }
 
 // handleCreateCheck creates a new check owned by the authenticated user.
 func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
+	logger := requestLogger(r)
 	check, err := h.decodeCheck(w, r, "")
 	if err != nil {
 		if writeProcessorError(w, err) {
@@ -235,7 +239,7 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.CreateCheck(check, user.ID); err != nil {
-		log.Printf("handler: failed to create check id=%s: %s", check.ID, err)
+		logger.Error("create check failed", "component", "checks", "check_id", check.ID, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -246,6 +250,7 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	id := r.PathValue("id")
+	logger := requestLogger(r)
 	check, err := h.decodeCheck(w, r, id)
 	if err != nil {
 		if writeProcessorError(w, err) {
@@ -255,7 +260,7 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.UpdateCheck(check, user.ID); err != nil {
-		log.Printf("handler: failed to update check id=%s: %s", id, err)
+		logger.Error("update check failed", "component", "checks", "check_id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -287,8 +292,9 @@ func (h *Handler) targetPolicy() network.Policy {
 func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	id := r.PathValue("id")
+	logger := requestLogger(r)
 	if err := h.store.DeleteCheck(id, user.ID); err != nil {
-		log.Printf("handler: failed to delete check id=%s: %s", id, err)
+		logger.Error("delete check failed", "component", "checks", "check_id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -298,6 +304,7 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 // handleHeartbeat updates last_seen_at for a registered probe.
 func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
+	logger := requestLogger(r)
 	var req probeapi.HeartbeatRequest
 	if err := decodeJSONBody(w, r, &req, maxProbeJSONRequestBodyBytes, true); err != nil {
 		if writeProcessorError(w, err) {
@@ -310,7 +317,7 @@ func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("handler: failed to update heartbeat probe_id=%s: %s", probe.ProbeID, err)
+		logger.Error("update heartbeat failed", "component", "probe", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -320,6 +327,7 @@ func (h *Handler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 // handleProbeRegister records an authenticated probe startup.
 func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
+	logger := requestLogger(r)
 	var req probeapi.RegisterRequest
 	if err := decodeJSONBody(w, r, &req, maxProbeJSONRequestBodyBytes, true); err != nil {
 		if writeProcessorError(w, err) {
@@ -332,23 +340,24 @@ func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("handler: failed to register probe_id=%s: %s", probe.ProbeID, err)
+		logger.Error("register probe failed", "component", "probe", "version", req.Version, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("handler: registered probe_id=%s version=%s", probe.ProbeID, req.Version)
+	logger.Info("probe registered", "component", "probe", "version", req.Version)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleResult receives a check result from a probe and saves it.
 func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
+	logger := requestLogger(r)
 	var result proto.CheckResult
 	if err := decodeJSONBody(w, r, &result, maxProbeJSONRequestBodyBytes, false); err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("handler: failed to decode result: %s", err)
+		logger.Error("decode probe result failed", "component", "probe", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -357,14 +366,14 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		if writeProcessorError(w, err) {
 			return
 		}
-		log.Printf("handler: failed to process result check_id=%s probe_id=%s: %s", result.CheckID, probe.ProbeID, err)
+		logger.Error("process probe result failed", "component", "probe", "check_id", result.CheckID, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	if outcome.Alert != nil {
 		if ok := h.webhooks.Enqueue(outcome.WebhookURL, *outcome.Alert); !ok {
-			log.Printf("alert: webhook queue full, dropping check_id=%s url=%s", outcome.Alert.CheckID, outcome.WebhookURL)
+			logger.Warn("webhook queue full; dropping alert", "component", "alert", "check_id", outcome.Alert.CheckID, "webhook_host", logx.URLHost(outcome.WebhookURL))
 		}
 	}
 
@@ -375,9 +384,10 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 // authenticated user, newest first.
 func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
+	logger := requestLogger(r)
 	incidents, err := h.store.ListIncidents(user.ID, 50)
 	if err != nil {
-		log.Printf("handler: failed to list incidents: %s", err)
+		logger.Error("list incidents failed", "component", "incidents", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -408,6 +418,6 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
-		log.Printf("handler: failed to encode incidents: %s", err)
+		logger.Warn("encode incidents failed", "component", "incidents", "err", err)
 	}
 }

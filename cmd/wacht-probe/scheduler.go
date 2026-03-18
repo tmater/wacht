@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -118,10 +118,10 @@ func runAndPost(cfg *config.ProbeConfig, policy network.Policy, apiClient *probe
 	case string(checks.CheckDNS):
 		result = checks.DNS(check.ID, cfg.ProbeID, check.Target, policy)
 	default:
-		log.Printf("probe: unknown check type %q for check_id=%s, skipping", check.Type, check.ID)
+		slog.Default().Warn("unknown check type; skipping", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID, "check_type", check.Type)
 		return
 	}
 	if err := apiClient.PostResult(context.Background(), result); err != nil {
-		log.Printf("probe: probe-server API result upload failed check_id=%s probe_id=%s: %s", check.ID, cfg.ProbeID, err)
+		slog.Default().Warn("result upload failed", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID, "err", err)
 	}
 }
