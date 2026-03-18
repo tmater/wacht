@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/tmater/wacht/internal/store"
@@ -14,16 +14,16 @@ func staleProbeLoop(db *store.Store) {
 		time.Sleep(30 * time.Second)
 		statuses, err := db.AllProbeStatuses()
 		if err != nil {
-			log.Printf("stale check: failed to query probes: %s", err)
+			slog.Default().Error("query probe statuses failed", "component", "probe_health", "err", err)
 			continue
 		}
 		for _, ps := range statuses {
 			if ps.LastSeenAt == nil {
-				log.Printf("stale probe: probe_id=%s has never checked in", ps.ProbeID)
+				slog.Default().Warn("probe has never checked in", "component", "probe_health", "probe_id", ps.ProbeID)
 				continue
 			}
 			if time.Since(*ps.LastSeenAt) > staleThreshold {
-				log.Printf("stale probe: probe_id=%s last_seen=%s ago", ps.ProbeID, time.Since(*ps.LastSeenAt).Round(time.Second))
+				slog.Default().Warn("probe is stale", "component", "probe_health", "probe_id", ps.ProbeID, "last_seen_ago", time.Since(*ps.LastSeenAt).Round(time.Second).String())
 			}
 		}
 	}

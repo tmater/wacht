@@ -3,43 +3,51 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 )
 
 func main() {
+	logger := logx.Configure("wacht-probe")
 	configPath := flag.String("config", "probe.yaml", "path to probe config file")
 	serverOverride := flag.String("server", "", "override server URL from config")
 	flag.Parse()
 
+	fatal := func(msg string, args ...any) {
+		logger.Error(msg, args...)
+		os.Exit(1)
+	}
+
 	cfg, err := config.LoadProbe(*configPath)
 	if err != nil {
-		log.Fatalf("failed to load config: %s", err)
+		fatal("load config failed", "config_path", *configPath, "err", err)
 	}
 
 	if *serverOverride != "" {
 		cfg.Server = *serverOverride
 	}
 
-	log.Printf("wacht-probe starting probe-id=%s server=%s config=%s", cfg.ProbeID, cfg.Server, *configPath)
+	logger.Info("probe starting", "probe_id", cfg.ProbeID, "server", cfg.Server, "config_path", *configPath)
 
 	apiClient := probeapi.NewClient(cfg.Server, cfg.ProbeID, cfg.Secret, nil)
 
 	if err := apiClient.Register(context.Background(), "dev"); err != nil {
-		log.Fatalf("probe: failed to register with server: %s", err)
+		fatal("register probe failed", "probe_id", cfg.ProbeID, "err", err)
 	}
-	log.Printf("probe: registered with server as probe_id=%s", cfg.ProbeID)
+	logger.Info("probe registered", "probe_id", cfg.ProbeID)
 
 	checkList, err := apiClient.FetchChecks(context.Background())
 	if err != nil {
-		log.Fatalf("probe: failed to fetch checks from server: %s", err)
+		fatal("fetch checks failed", "probe_id", cfg.ProbeID, "err", err)
 	}
-	log.Printf("probe: fetched %d checks from server", len(checkList))
+	logger.Info("checks fetched", "probe_id", cfg.ProbeID, "count", len(checkList))
 
 	policy := network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}
 	scheduler := newScheduler(cfg, policy, apiClient)
@@ -48,18 +56,18 @@ func main() {
 
 	// TODO: Split heartbeat and check-sync into separate config intervals if the
 	// probe needs different liveness and config propagation cadences.
-	go heartbeatLoop(apiClient, cfg.HeartbeatInterval)
-	checkSyncLoop(apiClient, cfg.HeartbeatInterval, scheduler.Reconcile)
+	go heartbeatLoop(apiClient, cfg.ProbeID, cfg.HeartbeatInterval)
+	checkSyncLoop(apiClient, cfg.ProbeID, cfg.HeartbeatInterval, scheduler.Reconcile)
 }
 
 // heartbeatLoop only reports probe liveness
-func heartbeatLoop(apiClient *probeapi.Client, interval time.Duration) {
+func heartbeatLoop(apiClient *probeapi.Client, probeID string, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		if err := apiClient.Heartbeat(context.Background()); err != nil {
-			log.Printf("probe: probe-server API heartbeat failed: %s", err)
+			slog.Default().Warn("probe heartbeat failed", "component", "probe", "probe_id", probeID, "err", err)
 			continue
 		}
 	}
@@ -67,17 +75,17 @@ func heartbeatLoop(apiClient *probeapi.Client, interval time.Duration) {
 
 // checkSyncLoop polls the server for the current check set and hands the
 // result to the scheduler
-func checkSyncLoop(apiClient *probeapi.Client, interval time.Duration, onChecks func([]proto.ProbeCheck)) {
+func checkSyncLoop(apiClient *probeapi.Client, probeID string, interval time.Duration, onChecks func([]proto.ProbeCheck)) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		updated, err := apiClient.FetchChecks(context.Background())
 		if err != nil {
-			log.Printf("probe: probe-server API check sync failed: %s", err)
+			slog.Default().Warn("check sync failed", "component", "probe", "probe_id", probeID, "err", err)
 			continue
 		}
-		log.Printf("probe: refreshed %d checks from server", len(updated))
+		slog.Default().Debug("checks refreshed", "component", "probe", "probe_id", probeID, "count", len(updated))
 		onChecks(updated)
 	}
 }

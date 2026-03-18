@@ -2,7 +2,7 @@ package server
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
@@ -73,7 +73,7 @@ func (p *ProbeProcessor) Process(probe *store.Probe, incoming proto.CheckResult)
 		return ProbeResultOutcome{}, err
 	}
 
-	log.Printf("handler: received result check_id=%s probe_id=%s up=%v", result.CheckID, result.ProbeID, result.Up)
+	slog.Default().Debug("probe result received", "component", "probe", "check_id", result.CheckID, "probe_id", result.ProbeID, "up", result.Up)
 
 	if err := p.store.SaveResult(result); err != nil {
 		return ProbeResultOutcome{}, fmt.Errorf("save result: %w", err)
@@ -81,7 +81,7 @@ func (p *ProbeProcessor) Process(probe *store.Probe, incoming proto.CheckResult)
 
 	recent, err := p.store.RecentResultsPerProbe(result.CheckID)
 	if err != nil {
-		log.Printf("quorum: failed to query recent results for check_id=%s: %s", result.CheckID, err)
+		slog.Default().Error("query recent results failed", "component", "quorum", "check_id", result.CheckID, "err", err)
 		return ProbeResultOutcome{}, nil
 	}
 
@@ -120,7 +120,7 @@ func (p *ProbeProcessor) openIncidentIfNeeded(check *checks.Check, recent []prot
 
 		history, err := p.store.RecentResultsByProbe(check.ID, result.ProbeID, 2)
 		if err != nil {
-			log.Printf("quorum: failed to query history probe_id=%s check_id=%s: %s", result.ProbeID, check.ID, err)
+			slog.Default().Error("query probe failure history failed", "component", "quorum", "check_id", check.ID, "probe_id", result.ProbeID, "err", err)
 			return ProbeResultOutcome{}, nil
 		}
 		if !quorum.AllConsecutivelyDown(history) {
@@ -129,14 +129,18 @@ func (p *ProbeProcessor) openIncidentIfNeeded(check *checks.Check, recent []prot
 	}
 
 	probesDown := countDown(recent)
-	log.Printf("quorum: ALERT check_id=%s down on %d/%d probes (consecutive)", check.ID, probesDown, len(recent))
 
 	alreadyOpen, err := p.store.OpenIncident(check.ID)
 	if err != nil {
-		log.Printf("alert: failed to open incident check_id=%s: %s", check.ID, err)
+		slog.Default().Error("open incident failed", "component", "alert", "check_id", check.ID, "err", err)
 		return ProbeResultOutcome{}, nil
 	}
-	if alreadyOpen || check.Webhook == "" {
+	if alreadyOpen {
+		return ProbeResultOutcome{}, nil
+	}
+
+	slog.Default().Info("incident opened", "component", "alert", "check_id", check.ID, "probes_down", probesDown, "probes_total", len(recent))
+	if check.Webhook == "" {
 		return ProbeResultOutcome{}, nil
 	}
 
@@ -160,7 +164,7 @@ func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []p
 
 		history, err := p.store.RecentResultsByProbe(check.ID, result.ProbeID, 2)
 		if err != nil {
-			log.Printf("quorum: failed to query recovery history probe_id=%s check_id=%s: %s", result.ProbeID, check.ID, err)
+			slog.Default().Error("query probe recovery history failed", "component", "quorum", "check_id", check.ID, "probe_id", result.ProbeID, "err", err)
 			return ProbeResultOutcome{}, nil
 		}
 		if !quorum.AllConsecutivelyUp(history) {
@@ -170,10 +174,15 @@ func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []p
 
 	resolved, err := p.store.ResolveIncident(check.ID)
 	if err != nil {
-		log.Printf("alert: failed to resolve incident check_id=%s: %s", check.ID, err)
+		slog.Default().Error("resolve incident failed", "component", "alert", "check_id", check.ID, "err", err)
 		return ProbeResultOutcome{}, nil
 	}
-	if !resolved || check.Webhook == "" {
+	if !resolved {
+		return ProbeResultOutcome{}, nil
+	}
+
+	slog.Default().Info("incident resolved", "component", "alert", "check_id", check.ID, "probes_down", countDown(recent), "probes_total", len(recent))
+	if check.Webhook == "" {
 		return ProbeResultOutcome{}, nil
 	}
 

@@ -3,17 +3,18 @@ package checks
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 )
 
 // HTTP runs an HTTP check against the given target URL and returns a CheckResult.
 func HTTP(checkID, probeID, target string, policy network.Policy) proto.CheckResult {
-	log.Printf("running HTTP check: check_id=%s target=%s", checkID, target)
+	slog.Default().Debug("http check started", "component", "check_http", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -29,7 +30,7 @@ func HTTP(checkID, probeID, target string, policy network.Policy) proto.CheckRes
 	if _, err := network.ParseHTTPURLTarget(target); err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("HTTP check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("http check failed", "component", "check_http", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 
@@ -38,7 +39,7 @@ func HTTP(checkID, probeID, target string, policy network.Policy) proto.CheckRes
 	if err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("HTTP check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("http check failed", "component", "check_http", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 
@@ -49,7 +50,7 @@ func HTTP(checkID, probeID, target string, policy network.Policy) proto.CheckRes
 	if err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("HTTP check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("http check failed", "component", "check_http", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 	defer resp.Body.Close()
@@ -59,6 +60,6 @@ func HTTP(checkID, probeID, target string, policy network.Policy) proto.CheckRes
 		result.Error = fmt.Sprintf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	log.Printf("HTTP check done: check_id=%s status=%d up=%v latency=%s", checkID, resp.StatusCode, result.Up, result.Latency)
+	slog.Default().Debug("http check finished", "component", "check_http", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "status_code", resp.StatusCode, "up", result.Up, "latency_ms", result.Latency.Milliseconds())
 	return result
 }

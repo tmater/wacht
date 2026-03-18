@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/tmater/wacht/internal/config"
@@ -19,11 +19,11 @@ func evictionLoop(db *store.Store, retentionDays int) {
 		cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 		n, err := db.EvictOldResults(cutoff)
 		if err != nil {
-			log.Printf("eviction: error: %s", err)
+			slog.Default().Error("evict old results failed", "component", "eviction", "retention_days", retentionDays, "err", err)
 			continue
 		}
 		if n > 0 {
-			log.Printf("eviction: deleted %d rows older than %d days", n, retentionDays)
+			slog.Default().Info("evicted old results", "component", "eviction", "rows_deleted", n, "retention_days", retentionDays)
 		}
 	}
 }

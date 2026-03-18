@@ -2,16 +2,17 @@ package checks
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
+	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 )
 
 // TCP attempts to open a TCP connection to target (host:port) and returns a CheckResult.
 func TCP(checkID, probeID, target string, policy network.Policy) proto.CheckResult {
-	log.Printf("running TCP check: check_id=%s target=%s", checkID, target)
+	slog.Default().Debug("tcp check started", "component", "check_tcp", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target))
 
 	result := proto.CheckResult{
 		CheckID:   checkID,
@@ -24,7 +25,7 @@ func TCP(checkID, probeID, target string, policy network.Policy) proto.CheckResu
 	if _, _, err := network.ParseTCPAddressTarget(target); err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("TCP check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("tcp check failed", "component", "check_tcp", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 
@@ -38,12 +39,12 @@ func TCP(checkID, probeID, target string, policy network.Policy) proto.CheckResu
 	if err != nil {
 		result.Up = false
 		result.Error = err.Error()
-		log.Printf("TCP check failed: check_id=%s error=%s", checkID, err)
+		slog.Default().Warn("tcp check failed", "component", "check_tcp", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "err", err)
 		return result
 	}
 	conn.Close()
 
 	result.Up = true
-	log.Printf("TCP check done: check_id=%s up=true latency=%s", checkID, result.Latency)
+	slog.Default().Debug("tcp check finished", "component", "check_tcp", "check_id", checkID, "probe_id", probeID, "target_host", logx.TargetHost(target), "up", true, "latency_ms", result.Latency.Milliseconds())
 	return result
 }
