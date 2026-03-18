@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +20,7 @@ const (
 	requestIDHeader                 = "X-Request-ID"
 	contextKeyLogger     contextKey = "logger"
 	contextKeyRequestLog contextKey = "request_log"
+	contextKeyBaseWriter contextKey = "base_writer"
 )
 
 type requestLogScope struct {
@@ -46,6 +50,48 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	if r == nil {
+		return nil
+	}
+	return r.ResponseWriter
+}
+
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := r.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
+
+func (r *statusRecorder) ReadFrom(src io.Reader) (int64, error) {
+	readerFrom, ok := r.ResponseWriter.(io.ReaderFrom)
+	if !ok {
+		return io.Copy(writerOnly{r}, src)
+	}
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	n, err := readerFrom.ReadFrom(src)
+	r.bytes += int(n)
+	return n, err
+}
+
 func withRequestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := normalizeRequestID(r.Header.Get(requestIDHeader))
@@ -57,6 +103,7 @@ func withRequestLog(next http.Handler) http.Handler {
 		logger := slog.Default().With("request_id", requestID)
 		ctx := context.WithValue(r.Context(), contextKeyRequestLog, scope)
 		ctx = context.WithValue(ctx, contextKeyLogger, logger)
+		ctx = context.WithValue(ctx, contextKeyBaseWriter, w)
 		r = r.WithContext(ctx)
 
 		w.Header().Set(requestIDHeader, requestID)
@@ -133,6 +180,16 @@ func requestLogFromContext(ctx context.Context) *requestLogScope {
 	return scope
 }
 
+func baseResponseWriter(r *http.Request, fallback http.ResponseWriter) http.ResponseWriter {
+	if r == nil {
+		return fallback
+	}
+	if w, _ := r.Context().Value(contextKeyBaseWriter).(http.ResponseWriter); w != nil {
+		return w
+	}
+	return fallback
+}
+
 func requestLogLevel(path string, status int) slog.Level {
 	switch {
 	case status >= http.StatusInternalServerError:
@@ -177,4 +234,8 @@ func newRequestID() string {
 		return "req-fallback"
 	}
 	return "req-" + hex.EncodeToString(b[:])
+}
+
+type writerOnly struct {
+	io.Writer
 }

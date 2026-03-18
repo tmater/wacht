@@ -35,7 +35,7 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 		return &badRequestError{message: "bad request"}
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	r.Body = http.MaxBytesReader(baseResponseWriter(r, w), r.Body, maxBytes)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(dst); err != nil {
 		if allowEmpty && errors.Is(err, io.EOF) {

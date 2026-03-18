@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,63 @@ func TestWithRequestLogGeneratesRequestIDWhenHeaderIsInvalid(t *testing.T) {
 	assertLogContains(t, line, `level=DEBUG`)
 	assertLogContains(t, line, `probe_id=probe-1`)
 	assertLogContains(t, line, `request_id=`+requestID)
+}
+
+func TestStatusRecorderPreservesFlushViaResponseController(t *testing.T) {
+	base := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	rec := &statusRecorder{ResponseWriter: base}
+
+	if err := http.NewResponseController(rec).Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if !base.flushed {
+		t.Fatal("expected underlying writer to be flushed")
+	}
+	if rec.Unwrap() != base {
+		t.Fatal("expected Unwrap to return the underlying writer")
+	}
+}
+
+func TestWithRequestLogPreservesConnectionCloseOnTooLargeBody(t *testing.T) {
+	handler := withRequestLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		err := decodeJSONBody(w, r, &payload, 8, false)
+		if err == nil {
+			http.Error(w, "expected oversized body to fail decoding", http.StatusInternalServerError)
+			return
+		}
+		if !writeProcessorError(w, err) {
+			http.Error(w, "expected writeProcessorError to handle oversized body", http.StatusInternalServerError)
+			return
+		}
+	}))
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	res, err := http.Post(server.URL, "application/json", strings.NewReader(`{"payload":"way too large"}`))
+	if err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	defer res.Body.Close()
+	io.Copy(io.Discard, res.Body)
+
+	if res.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", res.StatusCode)
+	}
+	if !res.Close {
+		t.Fatalf("res.Close = false, want true after oversized body")
+	}
+}
+
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (r *flushRecorder) Flush() {
+	r.flushed = true
+	r.ResponseRecorder.Flush()
 }
 
 func restoreDefaultLogger(t *testing.T, logger *slog.Logger) {
