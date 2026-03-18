@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"sync"
 	"testing"
@@ -347,6 +348,63 @@ func TestMarkIncidentNotificationRetry_SupersedesDownAfterResolve(t *testing.T) 
 	}
 	if state != notificationStateSuperseded {
 		t.Fatalf("state = %q, want %q", state, notificationStateSuperseded)
+	}
+}
+
+func TestMarkIncidentNotificationDelivered_DoesNotOverrideSupersededDownNotification(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("notify-delivered@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"down"}`),
+	}); err != nil {
+		t.Fatalf("OpenIncidentWithNotification: %v", err)
+	}
+
+	now := time.Now().UTC().Add(time.Second)
+	jobs, err := s.ClaimDueIncidentNotifications(now, now.Add(-time.Minute), 1)
+	if err != nil {
+		t.Fatalf("ClaimDueIncidentNotifications: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 claimed job, got %d", len(jobs))
+	}
+
+	if _, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"up"}`),
+	}); err != nil {
+		t.Fatalf("ResolveIncidentWithNotification: %v", err)
+	}
+
+	if err := s.MarkIncidentNotificationDelivered(jobs[0].ID, time.Now().UTC()); err != nil {
+		t.Fatalf("MarkIncidentNotificationDelivered: %v", err)
+	}
+
+	var (
+		state       string
+		deliveredAt sql.NullTime
+	)
+	if err := s.db.QueryRow(`
+		SELECT state, delivered_at
+		FROM incident_notifications
+		WHERE id = $1
+	`, jobs[0].ID).Scan(&state, &deliveredAt); err != nil {
+		t.Fatalf("query notification: %v", err)
+	}
+	if state != notificationStateSuperseded {
+		t.Fatalf("state = %q, want %q", state, notificationStateSuperseded)
+	}
+	if deliveredAt.Valid {
+		t.Fatalf("delivered_at = %s, want NULL for superseded notification", deliveredAt.Time)
 	}
 }
 

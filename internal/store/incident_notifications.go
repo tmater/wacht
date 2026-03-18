@@ -107,7 +107,8 @@ func (s *Store) ClaimDueIncidentNotifications(now, staleBefore time.Time, limit 
 	return jobs, rows.Err()
 }
 
-// MarkIncidentNotificationDelivered records a successful delivery.
+// MarkIncidentNotificationDelivered records a successful delivery while
+// preserving rows that were already superseded during an in-flight send.
 func (s *Store) MarkIncidentNotificationDelivered(id int64, deliveredAt time.Time) error {
 	_, err := s.db.Exec(`
 		UPDATE incident_notifications
@@ -117,7 +118,8 @@ func (s *Store) MarkIncidentNotificationDelivered(id int64, deliveredAt time.Tim
 		    last_error = NULL,
 		    updated_at = $1
 		WHERE id = $3
-	`, deliveredAt, notificationStateDelivered, id)
+		  AND state = $4
+	`, deliveredAt, notificationStateDelivered, id, notificationStateProcessing)
 	return err
 }
 
