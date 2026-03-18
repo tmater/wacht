@@ -177,34 +177,25 @@ func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
 // OpenIncident records a new incident for checkID. Returns true if an incident
 // was already open (caller should skip alerting to avoid duplicate notifications).
 func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
-	var incidentID int64
-	err = s.db.QueryRow(`
-		INSERT INTO incidents (check_id, user_id, started_at)
-		VALUES ($1, (SELECT user_id FROM checks WHERE id = $1), $2)
-		ON CONFLICT (check_id) WHERE resolved_at IS NULL DO NOTHING
-		RETURNING id
-	`, checkID, time.Now().UTC()).Scan(&incidentID)
-	if err == sql.ErrNoRows {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return false, nil
+	return s.openIncidentWithNotification(checkID, nil)
+}
+
+// OpenIncidentWithNotification records a new incident and durable webhook work
+// for the "down" transition in one transaction.
+func (s *Store) OpenIncidentWithNotification(checkID string, request *NotificationRequest) (alreadyOpen bool, err error) {
+	return s.openIncidentWithNotification(checkID, request)
 }
 
 // ResolveIncident marks the open incident for checkID as resolved. It returns
 // true when an open incident was actually closed.
 func (s *Store) ResolveIncident(checkID string) (resolved bool, err error) {
-	res, err := s.db.Exec(`UPDATE incidents SET resolved_at=$1 WHERE check_id=$2 AND resolved_at IS NULL`, time.Now().UTC(), checkID)
-	if err != nil {
-		return false, err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return rows > 0, nil
+	return s.resolveIncidentWithNotification(checkID, nil)
+}
+
+// ResolveIncidentWithNotification resolves an incident and durable webhook work
+// for the "up" transition in one transaction.
+func (s *Store) ResolveIncidentWithNotification(checkID string, request *NotificationRequest) (resolved bool, err error) {
+	return s.resolveIncidentWithNotification(checkID, request)
 }
 
 // SeedChecks inserts checks that do not already exist in the database.
@@ -297,22 +288,46 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 
 // Incident represents a recorded outage for a check.
 type Incident struct {
-	ID         int64
-	CheckID    string
-	StartedAt  time.Time
-	ResolvedAt *time.Time
+	ID               int64
+	CheckID          string
+	StartedAt        time.Time
+	ResolvedAt       *time.Time
+	DownNotification *IncidentNotification
+	UpNotification   *IncidentNotification
 }
 
 // ListIncidents returns the most recent limit incidents for userID ordered
 // newest first.
 func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 	rows, err := s.db.Query(`
-		SELECT id, check_id, started_at, resolved_at
-		FROM incidents
+		SELECT
+			i.id,
+			i.check_id,
+			i.started_at,
+			i.resolved_at,
+			down_n.id,
+			down_n.state,
+			down_n.attempts,
+			down_n.last_error,
+			down_n.last_attempt_at,
+			down_n.next_attempt_at,
+			down_n.delivered_at,
+			up_n.id,
+			up_n.state,
+			up_n.attempts,
+			up_n.last_error,
+			up_n.last_attempt_at,
+			up_n.next_attempt_at,
+			up_n.delivered_at
+		FROM incidents i
+		LEFT JOIN incident_notifications down_n
+			ON down_n.incident_id = i.id AND down_n.event = $2
+		LEFT JOIN incident_notifications up_n
+			ON up_n.incident_id = i.id AND up_n.event = $3
 		WHERE user_id = $1
-		ORDER BY started_at DESC
-		LIMIT $2
-	`, userID, limit)
+		ORDER BY i.started_at DESC
+		LIMIT $4
+	`, userID, notificationEventDown, notificationEventUp, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -321,9 +336,38 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 	var incidents []Incident
 	for rows.Next() {
 		var inc Incident
-		if err := rows.Scan(&inc.ID, &inc.CheckID, &inc.StartedAt, &inc.ResolvedAt); err != nil {
+		var (
+			downID, upID                                          sql.NullInt64
+			downState, upState                                    sql.NullString
+			downAttempts, upAttempts                              sql.NullInt32
+			downError, upError                                    sql.NullString
+			downLastAttemptAt, downNextAttemptAt, downDeliveredAt sql.NullTime
+			upLastAttemptAt, upNextAttemptAt, upDeliveredAt       sql.NullTime
+		)
+		if err := rows.Scan(
+			&inc.ID,
+			&inc.CheckID,
+			&inc.StartedAt,
+			&inc.ResolvedAt,
+			&downID,
+			&downState,
+			&downAttempts,
+			&downError,
+			&downLastAttemptAt,
+			&downNextAttemptAt,
+			&downDeliveredAt,
+			&upID,
+			&upState,
+			&upAttempts,
+			&upError,
+			&upLastAttemptAt,
+			&upNextAttemptAt,
+			&upDeliveredAt,
+		); err != nil {
 			return nil, err
 		}
+		inc.DownNotification = scanIncidentNotification(downID, downState, downAttempts, downError, downLastAttemptAt, downNextAttemptAt, downDeliveredAt)
+		inc.UpNotification = scanIncidentNotification(upID, upState, upAttempts, upError, upLastAttemptAt, upNextAttemptAt, upDeliveredAt)
 		incidents = append(incidents, inc)
 	}
 	return incidents, rows.Err()

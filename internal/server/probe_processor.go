@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -20,14 +21,11 @@ type probeStore interface {
 	SaveResult(r proto.CheckResult) error
 	RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error)
 	RecentResultsByProbe(checkID, probeID string, n int) ([]proto.CheckResult, error)
-	OpenIncident(checkID string) (bool, error)
-	ResolveIncident(checkID string) (bool, error)
+	OpenIncidentWithNotification(checkID string, request *store.NotificationRequest) (bool, error)
+	ResolveIncidentWithNotification(checkID string, request *store.NotificationRequest) (bool, error)
 }
 
-type ProbeResultOutcome struct {
-	WebhookURL string
-	Alert      *alert.AlertPayload
-}
+type ProbeResultOutcome struct{}
 
 type probeProcessor interface {
 	Heartbeat(probe *store.Probe, req probeapi.HeartbeatRequest) error
@@ -130,7 +128,18 @@ func (p *ProbeProcessor) openIncidentIfNeeded(check *checks.Check, recent []prot
 
 	probesDown := countDown(recent)
 
-	alreadyOpen, err := p.store.OpenIncident(check.ID)
+	request, err := notificationRequest(check.Webhook, alert.AlertPayload{
+		CheckID:     check.ID,
+		Target:      check.Target,
+		Status:      "down",
+		ProbesDown:  probesDown,
+		ProbesTotal: len(recent),
+	})
+	if err != nil {
+		slog.Default().Warn("encode down notification failed", "component", "alert", "check_id", check.ID, "err", err)
+	}
+
+	alreadyOpen, err := p.store.OpenIncidentWithNotification(check.ID, request)
 	if err != nil {
 		slog.Default().Error("open incident failed", "component", "alert", "check_id", check.ID, "err", err)
 		return ProbeResultOutcome{}, nil
@@ -140,20 +149,7 @@ func (p *ProbeProcessor) openIncidentIfNeeded(check *checks.Check, recent []prot
 	}
 
 	slog.Default().Info("incident opened", "component", "alert", "check_id", check.ID, "probes_down", probesDown, "probes_total", len(recent))
-	if check.Webhook == "" {
-		return ProbeResultOutcome{}, nil
-	}
-
-	return ProbeResultOutcome{
-		WebhookURL: check.Webhook,
-		Alert: &alert.AlertPayload{
-			CheckID:     check.ID,
-			Target:      check.Target,
-			Status:      "down",
-			ProbesDown:  probesDown,
-			ProbesTotal: len(recent),
-		},
-	}, nil
+	return ProbeResultOutcome{}, nil
 }
 
 func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []proto.CheckResult) (ProbeResultOutcome, error) {
@@ -172,7 +168,18 @@ func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []p
 		}
 	}
 
-	resolved, err := p.store.ResolveIncident(check.ID)
+	request, err := notificationRequest(check.Webhook, alert.AlertPayload{
+		CheckID:     check.ID,
+		Target:      check.Target,
+		Status:      "up",
+		ProbesDown:  countDown(recent),
+		ProbesTotal: len(recent),
+	})
+	if err != nil {
+		slog.Default().Warn("encode recovery notification failed", "component", "alert", "check_id", check.ID, "err", err)
+	}
+
+	resolved, err := p.store.ResolveIncidentWithNotification(check.ID, request)
 	if err != nil {
 		slog.Default().Error("resolve incident failed", "component", "alert", "check_id", check.ID, "err", err)
 		return ProbeResultOutcome{}, nil
@@ -182,20 +189,7 @@ func (p *ProbeProcessor) resolveIncidentIfNeeded(check *checks.Check, recent []p
 	}
 
 	slog.Default().Info("incident resolved", "component", "alert", "check_id", check.ID, "probes_down", countDown(recent), "probes_total", len(recent))
-	if check.Webhook == "" {
-		return ProbeResultOutcome{}, nil
-	}
-
-	return ProbeResultOutcome{
-		WebhookURL: check.Webhook,
-		Alert: &alert.AlertPayload{
-			CheckID:     check.ID,
-			Target:      check.Target,
-			Status:      "up",
-			ProbesDown:  countDown(recent),
-			ProbesTotal: len(recent),
-		},
-	}, nil
+	return ProbeResultOutcome{}, nil
 }
 
 func countDown(results []proto.CheckResult) int {
@@ -206,4 +200,18 @@ func countDown(results []proto.CheckResult) int {
 		}
 	}
 	return n
+}
+
+func notificationRequest(webhookURL string, payload alert.AlertPayload) (*store.NotificationRequest, error) {
+	if webhookURL == "" {
+		return nil, nil
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return &store.NotificationRequest{
+		WebhookURL: webhookURL,
+		Payload:    body,
+	}, nil
 }

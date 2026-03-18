@@ -4,94 +4,120 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/tmater/wacht/internal/network"
+	"github.com/tmater/wacht/internal/store"
 )
 
-func TestSender_EnqueueDeliversInBackground(t *testing.T) {
-	var (
-		mu        sync.Mutex
-		delivered []AlertPayload
-	)
+type fakeNotificationStore struct {
+	mu          sync.Mutex
+	jobs        []store.NotificationJob
+	deliveredID int64
+	retriedID   int64
+	retryAt     time.Time
+	retryErr    string
+}
 
-	sender := newSender(1, 4, func(url string, payload AlertPayload) error {
-		mu.Lock()
-		delivered = append(delivered, payload)
-		mu.Unlock()
-		return nil
-	})
-	defer sender.Close()
+func (f *fakeNotificationStore) ClaimDueIncidentNotifications(now, staleBefore time.Time, limit int) ([]store.NotificationJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-	ok := sender.Enqueue("https://hooks.example.com/a", AlertPayload{CheckID: "check-1"})
-	if !ok {
-		t.Fatal("expected enqueue to succeed")
+	if len(f.jobs) == 0 {
+		return nil, nil
+	}
+	jobs := append([]store.NotificationJob(nil), f.jobs...)
+	f.jobs = nil
+	return jobs, nil
+}
+
+func (f *fakeNotificationStore) MarkIncidentNotificationDelivered(id int64, deliveredAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deliveredID = id
+	return nil
+}
+
+func (f *fakeNotificationStore) MarkIncidentNotificationRetry(id int64, attemptedAt, nextAttemptAt time.Time, lastError string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retriedID = id
+	f.retryAt = nextAttemptAt
+	f.retryErr = lastError
+	return nil
+}
+
+func TestSenderRunBatchRecordsDeliveryOutcome(t *testing.T) {
+	tests := []struct {
+		name            string
+		job             store.NotificationJob
+		sendErr         error
+		wantDeliveredID int64
+		wantRetriedID   int64
+		wantRetryErr    string
+	}{
+		{
+			name:            "delivered",
+			job:             store.NotificationJob{ID: 7, CheckID: "check-1", Event: "down", WebhookURL: "https://hooks.example.com/a", Payload: []byte(`{"status":"down"}`), Attempts: 1},
+			wantDeliveredID: 7,
+		},
+		{
+			name:          "retry on failure",
+			job:           store.NotificationJob{ID: 9, CheckID: "check-2", Event: "up", WebhookURL: "https://hooks.example.com/b", Payload: []byte(`{"status":"up"}`), Attempts: 3},
+			sendErr:       errors.New("boom"),
+			wantRetriedID: 9,
+			wantRetryErr:  "boom",
+		},
 	}
 
-	sender.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &fakeNotificationStore{jobs: []store.NotificationJob{tt.job}}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(delivered) != 1 {
-		t.Fatalf("expected 1 delivered payload, got %d", len(delivered))
-	}
-	if delivered[0].CheckID != "check-1" {
-		t.Fatalf("expected check-1, got %s", delivered[0].CheckID)
+			var sentPayload []byte
+			sender := newSender(st, network.Policy{}, 0, 1, time.Hour, time.Hour, func(url string, payload []byte) error {
+				sentPayload = append([]byte(nil), payload...)
+				return tt.sendErr
+			})
+			defer sender.Close()
+
+			startedAt := time.Now()
+			if !sender.runBatch() {
+				t.Fatal("expected runBatch to process claimed job")
+			}
+			if string(sentPayload) != string(tt.job.Payload) {
+				t.Fatalf("payload = %s, want %s", sentPayload, tt.job.Payload)
+			}
+			if st.deliveredID != tt.wantDeliveredID {
+				t.Fatalf("deliveredID = %d, want %d", st.deliveredID, tt.wantDeliveredID)
+			}
+			if st.retriedID != tt.wantRetriedID {
+				t.Fatalf("retriedID = %d, want %d", st.retriedID, tt.wantRetriedID)
+			}
+			if tt.wantRetryErr == "" {
+				if !st.retryAt.IsZero() {
+					t.Fatalf("retryAt = %s, want zero time", st.retryAt)
+				}
+				return
+			}
+			if st.retryErr != tt.wantRetryErr {
+				t.Fatalf("retryErr = %q, want %q", st.retryErr, tt.wantRetryErr)
+			}
+			if !st.retryAt.After(startedAt) {
+				t.Fatalf("retryAt = %s, want retry time after %s", st.retryAt, startedAt)
+			}
+		})
 	}
 }
 
-func TestSender_EnqueueDropsWhenQueueFull(t *testing.T) {
-	block := make(chan struct{})
-	started := make(chan struct{})
-	var once sync.Once
-	sender := newSender(1, 1, func(url string, payload AlertPayload) error {
-		once.Do(func() { close(started) })
-		<-block
-		return nil
-	})
-	defer func() {
-		close(block)
-		sender.Close()
-	}()
-
-	if !sender.Enqueue("https://hooks.example.com/a", AlertPayload{CheckID: "check-1"}) {
-		t.Fatal("expected first enqueue to succeed")
+func TestNextRetryDelayBackoffCaps(t *testing.T) {
+	if got := nextRetryDelayWithBackoff(1); got != time.Second {
+		t.Fatalf("attempt 1 delay = %s, want 1s", got)
 	}
-	<-started
-	if !sender.Enqueue("https://hooks.example.com/b", AlertPayload{CheckID: "check-2"}) {
-		t.Fatal("expected second enqueue to fill queue")
+	if got := nextRetryDelayWithBackoff(4); got != 8*time.Second {
+		t.Fatalf("attempt 4 delay = %s, want 8s", got)
 	}
-	if sender.Enqueue("https://hooks.example.com/c", AlertPayload{CheckID: "check-3"}) {
-		t.Fatal("expected third enqueue to fail when queue is full")
+	if got := nextRetryDelayWithBackoff(30); got != maxWebhookRetryDelay {
+		t.Fatalf("attempt 30 delay = %s, want %s", got, maxWebhookRetryDelay)
 	}
-}
-
-func TestSender_CloseDrainsQueuedWork(t *testing.T) {
-	var count int
-	sender := newSender(1, 2, func(url string, payload AlertPayload) error {
-		count++
-		return nil
-	})
-
-	if !sender.Enqueue("https://hooks.example.com/a", AlertPayload{CheckID: "check-1"}) {
-		t.Fatal("expected enqueue to succeed")
-	}
-	if !sender.Enqueue("https://hooks.example.com/b", AlertPayload{CheckID: "check-2"}) {
-		t.Fatal("expected enqueue to succeed")
-	}
-
-	sender.Close()
-
-	if count != 2 {
-		t.Fatalf("expected 2 deliveries after Close, got %d", count)
-	}
-}
-
-func TestSender_SendErrorsDoNotPanic(t *testing.T) {
-	sender := newSender(1, 1, func(url string, payload AlertPayload) error {
-		return errors.New("boom")
-	})
-
-	if !sender.Enqueue("https://hooks.example.com/a", AlertPayload{CheckID: "check-1"}) {
-		t.Fatal("expected enqueue to succeed")
-	}
-
-	sender.Close()
 }

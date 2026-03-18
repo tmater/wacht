@@ -11,19 +11,88 @@ function formatDuration(ms) {
   return `${seconds}s`
 }
 
+const deliveryStyles = {
+  delivered: 'bg-green-900 text-green-300',
+  skipped: 'bg-gray-700 text-gray-300',
+  retrying: 'bg-amber-900 text-amber-300',
+  sending: 'bg-blue-900 text-blue-300',
+  pending: 'bg-gray-800 text-gray-400',
+}
+
+function notificationState(notification) {
+  if (!notification) return null
+  switch (notification.state) {
+    case 'delivered':
+      return 'delivered'
+    case 'retrying':
+      return 'retrying'
+    case 'processing':
+      return 'sending'
+    case 'superseded':
+      return 'skipped'
+    case 'pending':
+      return 'pending'
+    default:
+      return 'pending'
+  }
+}
+
+function incidentDeliveryStatus(incident) {
+  const states = [
+    notificationState(incident.down_notification),
+    notificationState(incident.up_notification),
+  ].filter(Boolean)
+
+  if (states.includes('retrying')) {
+    return 'retrying'
+  }
+  if (states.includes('sending')) {
+    return 'sending'
+  }
+  if (states.includes('pending')) {
+    return 'pending'
+  }
+  if (states.includes('delivered')) {
+    return 'delivered'
+  }
+  if (states.includes('skipped')) {
+    return 'skipped'
+  }
+  return 'pending'
+}
+
+function DeliveryBadge({ status }) {
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${deliveryStyles[status] ?? deliveryStyles.pending}`}>
+      {status.toUpperCase()}
+    </span>
+  )
+}
+
+function trimDuration(duration) {
+  if (!duration) return duration
+  return duration.replace(' 0s', '')
+}
+
 export default function IncidentRow({ incident }) {
   const started = new Date(incident.started_at)
-  const duration = incident.duration_ms != null
-    ? formatDuration(incident.duration_ms)
-    : formatDuration(Date.now() - started.getTime())
   const open = incident.resolved_at == null
+  const duration = incident.duration_ms != null
+    ? trimDuration(formatDuration(incident.duration_ms))
+    : trimDuration(formatDuration(Date.now() - started.getTime()))
+  const deliveryStatus = incidentDeliveryStatus(incident)
 
   return (
-    <div className="flex items-center justify-between gap-4 py-2 text-sm">
-      <span className="font-mono text-gray-300 truncate">{incident.check_id}</span>
-      <span className="text-gray-500 shrink-0">{started.toLocaleString()}</span>
-      <span className="text-gray-500 shrink-0">{duration}</span>
-      <StatusBadge status={open ? 'open' : 'resolved'} />
+    <div className="flex items-center gap-4 py-2">
+      <p className="font-mono text-sm text-gray-300 w-30 shrink-0 truncate">{incident.check_id}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-gray-500 truncate">{started.toLocaleString()}</p>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-xs text-gray-500 w-14 text-right">{duration}</span>
+        <DeliveryBadge status={deliveryStatus} />
+        <StatusBadge status={open ? 'open' : 'resolved'} />
+      </div>
     </div>
   )
 }

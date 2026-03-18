@@ -225,3 +225,6 @@ class MockClient:
 
     def clear_webhooks(self):
         self.request("DELETE", "/webhook", expected_status=(204,))
+
+    def configure_webhook(self, *, fail_next=0):
+        self.request("POST", "/webhook/control", payload={"fail_next": fail_next}, expected_status=(204,))

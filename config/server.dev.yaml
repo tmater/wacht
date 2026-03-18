@@ -18,6 +18,7 @@ checks:
   - id: check-down
     type: http
     target: http://mock:9090/down
+    webhook: http://mock:9090/webhook
   - id: check-flap
     type: http
     target: http://mock:9090/flap

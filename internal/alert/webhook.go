@@ -2,7 +2,6 @@ package alert
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -19,14 +18,10 @@ type AlertPayload struct {
 
 const webhookTimeout = 5 * time.Second
 
-// Fire POSTs payload as JSON using the provided guarded client.
-func Fire(client *http.Client, url string, payload AlertPayload) error {
+// Fire POSTs a pre-rendered JSON payload using the provided guarded client.
+func Fire(client *http.Client, url string, body []byte) error {
 	if client == nil {
 		return fmt.Errorf("webhook: client is required")
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
 	}
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

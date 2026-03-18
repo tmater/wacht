@@ -34,7 +34,7 @@ func TestFire(t *testing.T) {
 		ProbesTotal: 3,
 	}
 
-	if err := Fire(http.DefaultClient, srv.URL, payload); err != nil {
+	if err := Fire(http.DefaultClient, srv.URL, mustMarshal(t, payload)); err != nil {
 		t.Fatalf("Fire returned error: %s", err)
 	}
 
@@ -55,7 +55,7 @@ func TestFire_NonSuccessStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := Fire(http.DefaultClient, srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(http.DefaultClient, srv.URL, mustMarshal(t, AlertPayload{CheckID: "x", Target: "y", Status: "down"}))
 	if err == nil {
 		t.Fatal("expected error for non-2xx response, got nil")
 	}
@@ -73,7 +73,7 @@ func TestFire_DoesNotFollowRedirects(t *testing.T) {
 			return http.ErrUseLastResponse
 		},
 	}
-	err := Fire(client, srv.URL, AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(client, srv.URL, mustMarshal(t, AlertPayload{CheckID: "x", Target: "y", Status: "down"}))
 	if err == nil {
 		t.Fatal("expected redirect response to be treated as an error")
 	}
@@ -82,8 +82,18 @@ func TestFire_DoesNotFollowRedirects(t *testing.T) {
 func TestFire_RejectsPrivateAddressWithGuardedClient(t *testing.T) {
 	client := network.Policy{}.NewHTTPClient(webhookTimeout, 3*time.Second, false)
 
-	err := Fire(client, "http://127.0.0.1/webhook", AlertPayload{CheckID: "x", Target: "y", Status: "down"})
+	err := Fire(client, "http://127.0.0.1/webhook", mustMarshal(t, AlertPayload{CheckID: "x", Target: "y", Status: "down"}))
 	if err == nil {
 		t.Fatal("expected private destination to be rejected")
 	}
+}
+
+func mustMarshal(t *testing.T, payload AlertPayload) []byte {
+	t.Helper()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return body
 }
