@@ -26,6 +26,14 @@ type notificationStore interface {
 
 type sendFunc func(url string, payload []byte) error
 
+type batchResult int
+
+const (
+	batchIdle batchResult = iota
+	batchProcessed
+	batchStopped
+)
+
 // Sender delivers webhooks from durable DB-backed jobs so result ingestion
 // never has to choose between blocking and dropping alerts.
 type Sender struct {
@@ -87,8 +95,12 @@ func newSender(st notificationStore, policy network.Policy, workers, claimBatch 
 func (s *Sender) worker() {
 	defer s.wg.Done()
 	for {
-		if s.runBatch() {
+		switch s.runBatch() {
+		case batchStopped:
+			return
+		case batchProcessed:
 			continue
+		case batchIdle:
 		}
 
 		select {
@@ -99,25 +111,30 @@ func (s *Sender) worker() {
 	}
 }
 
-func (s *Sender) runBatch() bool {
+func (s *Sender) runBatch() batchResult {
 	if s == nil || s.store == nil {
-		return false
+		return batchIdle
 	}
 
 	now := time.Now().UTC()
 	jobs, err := s.store.ClaimDueIncidentNotifications(now, now.Add(-s.staleAfter), s.claimBatch)
 	if err != nil {
 		slog.Default().Error("claim webhook jobs failed", "component", "alert", "err", err)
-		return false
+		return batchIdle
 	}
 	if len(jobs) == 0 {
-		return false
+		return batchIdle
 	}
 
 	for _, job := range jobs {
+		select {
+		case <-s.stop:
+			return batchStopped
+		default:
+		}
 		s.dispatch(job)
 	}
-	return true
+	return batchProcessed
 }
 
 func (s *Sender) dispatch(job store.NotificationJob) {

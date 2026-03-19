@@ -13,6 +13,7 @@ import (
 type fakeNotificationStore struct {
 	mu          sync.Mutex
 	jobs        []store.NotificationJob
+	claim       func() []store.NotificationJob
 	deliveredID int64
 	retriedID   int64
 	retryAt     time.Time
@@ -23,6 +24,9 @@ func (f *fakeNotificationStore) ClaimDueIncidentNotifications(now, staleBefore t
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.claim != nil {
+		return f.claim(), nil
+	}
 	if len(f.jobs) == 0 {
 		return nil, nil
 	}
@@ -47,46 +51,84 @@ func (f *fakeNotificationStore) MarkIncidentNotificationRetry(id int64, attempte
 	return nil
 }
 
+func testJob(id int64, checkID, event, status string, attempts int) store.NotificationJob {
+	return store.NotificationJob{
+		ID:         id,
+		IncidentID: id,
+		CheckID:    checkID,
+		Event:      event,
+		WebhookURL: "https://hooks.example.com/a",
+		Payload:    []byte(`{"status":"` + status + `"}`),
+		Attempts:   attempts,
+	}
+}
+
 func TestSenderRunBatchRecordsDeliveryOutcome(t *testing.T) {
 	tests := []struct {
 		name            string
-		job             store.NotificationJob
+		jobs            []store.NotificationJob
 		sendErr         error
+		stopAfterFirst  bool
+		wantResult      batchResult
+		wantSent        int
 		wantDeliveredID int64
 		wantRetriedID   int64
 		wantRetryErr    string
 	}{
 		{
 			name:            "delivered",
-			job:             store.NotificationJob{ID: 7, CheckID: "check-1", Event: "down", WebhookURL: "https://hooks.example.com/a", Payload: []byte(`{"status":"down"}`), Attempts: 1},
+			jobs:            []store.NotificationJob{testJob(7, "check-1", "down", "down", 1)},
+			wantResult:      batchProcessed,
+			wantSent:        1,
 			wantDeliveredID: 7,
 		},
 		{
 			name:          "retry on failure",
-			job:           store.NotificationJob{ID: 9, CheckID: "check-2", Event: "up", WebhookURL: "https://hooks.example.com/b", Payload: []byte(`{"status":"up"}`), Attempts: 3},
+			jobs:          []store.NotificationJob{testJob(9, "check-2", "up", "up", 3)},
 			sendErr:       errors.New("boom"),
+			wantResult:    batchProcessed,
+			wantSent:      1,
 			wantRetriedID: 9,
 			wantRetryErr:  "boom",
+		},
+		{
+			name:            "stop after first send",
+			jobs:            []store.NotificationJob{testJob(7, "check-1", "down", "down", 1), testJob(8, "check-1", "up", "up", 1)},
+			stopAfterFirst:  true,
+			wantResult:      batchStopped,
+			wantSent:        1,
+			wantDeliveredID: 7,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			st := &fakeNotificationStore{jobs: []store.NotificationJob{tt.job}}
+			st := &fakeNotificationStore{jobs: append([]store.NotificationJob(nil), tt.jobs...)}
 
-			var sentPayload []byte
-			sender := newSender(st, network.Policy{}, 0, 1, time.Hour, time.Hour, func(url string, payload []byte) error {
-				sentPayload = append([]byte(nil), payload...)
+			var (
+				sender       *Sender
+				sentPayloads [][]byte
+			)
+			sender = newSender(st, network.Policy{}, 0, len(tt.jobs), time.Hour, time.Hour, func(url string, payload []byte) error {
+				sentPayloads = append(sentPayloads, append([]byte(nil), payload...))
+				if tt.stopAfterFirst && len(sentPayloads) == 1 {
+					sender.once.Do(func() {
+						close(sender.stop)
+					})
+				}
 				return tt.sendErr
 			})
 			defer sender.Close()
 
 			startedAt := time.Now()
-			if !sender.runBatch() {
-				t.Fatal("expected runBatch to process claimed job")
+			if got := sender.runBatch(); got != tt.wantResult {
+				t.Fatalf("runBatch = %v, want %v", got, tt.wantResult)
 			}
-			if string(sentPayload) != string(tt.job.Payload) {
-				t.Fatalf("payload = %s, want %s", sentPayload, tt.job.Payload)
+			if len(sentPayloads) != tt.wantSent {
+				t.Fatalf("sent %d payloads, want %d", len(sentPayloads), tt.wantSent)
+			}
+			if tt.wantSent > 0 && string(sentPayloads[0]) != string(tt.jobs[0].Payload) {
+				t.Fatalf("first payload = %s, want %s", sentPayloads[0], tt.jobs[0].Payload)
 			}
 			if st.deliveredID != tt.wantDeliveredID {
 				t.Fatalf("deliveredID = %d, want %d", st.deliveredID, tt.wantDeliveredID)
@@ -107,6 +149,38 @@ func TestSenderRunBatchRecordsDeliveryOutcome(t *testing.T) {
 				t.Fatalf("retryAt = %s, want retry time after %s", st.retryAt, startedAt)
 			}
 		})
+	}
+}
+
+func TestSenderCloseReturnsUnderSustainedLoad(t *testing.T) {
+	started := make(chan struct{})
+	var (
+		nextID int64
+		once   sync.Once
+	)
+	st := &fakeNotificationStore{
+		claim: func() []store.NotificationJob {
+			nextID++
+			return []store.NotificationJob{testJob(nextID, "check-1", "down", "down", 1)}
+		},
+	}
+
+	sender := newSender(st, network.Policy{}, 1, 1, time.Hour, time.Hour, func(url string, payload []byte) error {
+		once.Do(func() { close(started) })
+		return nil
+	})
+
+	<-started
+
+	done := make(chan struct{})
+	go func() {
+		sender.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Close blocked under sustained load")
 	}
 }
 
