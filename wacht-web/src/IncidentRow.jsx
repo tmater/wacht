@@ -13,6 +13,7 @@ function formatDuration(ms) {
 
 const deliveryStyles = {
   delivered: 'bg-green-900 text-green-300',
+  none: 'bg-gray-950 text-gray-500',
   skipped: 'bg-gray-700 text-gray-300',
   retrying: 'bg-amber-900 text-amber-300',
   sending: 'bg-blue-900 text-blue-300',
@@ -43,6 +44,9 @@ function incidentDeliveryStatus(incident) {
     notificationState(incident.up_notification),
   ].filter(Boolean)
 
+  if (states.length === 0) {
+    return 'none'
+  }
   if (states.includes('retrying')) {
     return 'retrying'
   }
@@ -58,7 +62,7 @@ function incidentDeliveryStatus(incident) {
   if (states.includes('skipped')) {
     return 'skipped'
   }
-  return 'pending'
+  return 'none'
 }
 
 function DeliveryBadge({ status }) {
