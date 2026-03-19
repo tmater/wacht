@@ -28,6 +28,10 @@ type controlState struct {
 	Status string `json:"status"`
 }
 
+type webhookControlState struct {
+	FailNext int `json:"fail_next"`
+}
+
 func main() {
 	var currentState atomic.Int32
 	currentState.Store(stateUp)
@@ -176,6 +180,10 @@ func main() {
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
+			if webhooks.failNow() {
+				http.Error(w, "forced failure", http.StatusInternalServerError)
+				return
+			}
 			webhooks.add(payload)
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodDelete:
@@ -186,9 +194,30 @@ func main() {
 		}
 	})
 
+	mux.HandleFunc("/webhook/control", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, webhooks.control())
+		case http.MethodPost:
+			var req webhookControlState
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			if req.FailNext < 0 {
+				http.Error(w, "fail_next must be non-negative", http.StatusBadRequest)
+				return
+			}
+			webhooks.setFailNext(req.FailNext)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
 	addr := ":9090"
 	log.Printf("wacht-mock listening on %s", addr)
-	log.Printf("endpoints: /up /down /slow /flap /http/state /tcp/state /dns/state /webhook")
+	log.Printf("endpoints: /up /down /slow /flap /http/state /tcp/state /dns/state /webhook /webhook/control")
 	log.Printf("tcp target listening on %s", tcpTarget.addr)
 	log.Printf("dns target serving %s -> %s", dnsFixtureHost, dnsFixtureIP)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -273,6 +302,7 @@ func (t *tcpTarget) acceptLoop(ln net.Listener) {
 type webhookStore struct {
 	mu       sync.Mutex
 	payloads []alert.AlertPayload
+	failNext int
 }
 
 func (s *webhookStore) add(payload alert.AlertPayload) {
@@ -296,6 +326,32 @@ func (s *webhookStore) clear() {
 	defer s.mu.Unlock()
 
 	s.payloads = nil
+	s.failNext = 0
+}
+
+func (s *webhookStore) setFailNext(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.failNext = n
+}
+
+func (s *webhookStore) control() webhookControlState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return webhookControlState{FailNext: s.failNext}
+}
+
+func (s *webhookStore) failNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.failNext <= 0 {
+		return false
+	}
+	s.failNext--
+	return true
 }
 
 func writeState(w http.ResponseWriter, state int32) {

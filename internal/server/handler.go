@@ -10,7 +10,6 @@ import (
 	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
-	"github.com/tmater/wacht/internal/logx"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/store"
@@ -27,13 +26,22 @@ type Handler struct {
 	signupLimiter  *rateLimiter
 }
 
+type notificationJSON struct {
+	State         string  `json:"state"`
+	Attempts      int     `json:"attempts"`
+	LastError     string  `json:"last_error,omitempty"`
+	LastAttemptAt *string `json:"last_attempt_at,omitempty"`
+	NextAttemptAt *string `json:"next_attempt_at,omitempty"`
+	DeliveredAt   *string `json:"delivered_at,omitempty"`
+}
+
 // New creates a new Handler.
 func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 	authRateLimit := cfg.AuthRateLimit
 	return &Handler{
 		store:          store,
 		config:         cfg,
-		webhooks:       alert.NewSender(network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
+		webhooks:       alert.NewSender(store, network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
 		authProcessor:  NewAuthProcessor(store),
 		probeProcessor: NewProbeProcessor(store),
 		loginLimiter:   newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
@@ -361,8 +369,7 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	outcome, err := h.probeProcessor.Process(probe, result)
-	if err != nil {
+	if _, err := h.probeProcessor.Process(probe, result); err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}
@@ -370,13 +377,6 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-
-	if outcome.Alert != nil {
-		if ok := h.webhooks.Enqueue(outcome.WebhookURL, *outcome.Alert); !ok {
-			logger.Warn("webhook queue full; dropping alert", "component", "alert", "check_id", outcome.Alert.CheckID, "webhook_host", logx.URLHost(outcome.WebhookURL))
-		}
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -393,11 +393,13 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type incidentJSON struct {
-		ID         int64   `json:"id"`
-		CheckID    string  `json:"check_id"`
-		StartedAt  string  `json:"started_at"`
-		ResolvedAt *string `json:"resolved_at,omitempty"`
-		DurationMs *int64  `json:"duration_ms,omitempty"`
+		ID               int64             `json:"id"`
+		CheckID          string            `json:"check_id"`
+		StartedAt        string            `json:"started_at"`
+		ResolvedAt       *string           `json:"resolved_at,omitempty"`
+		DurationMs       *int64            `json:"duration_ms,omitempty"`
+		DownNotification *notificationJSON `json:"down_notification,omitempty"`
+		UpNotification   *notificationJSON `json:"up_notification,omitempty"`
 	}
 
 	out := make([]incidentJSON, 0, len(incidents))
@@ -413,6 +415,8 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 			ms := inc.ResolvedAt.Sub(inc.StartedAt).Milliseconds()
 			ij.DurationMs = &ms
 		}
+		ij.DownNotification = notificationToJSON(inc.DownNotification)
+		ij.UpNotification = notificationToJSON(inc.UpNotification)
 		out = append(out, ij)
 	}
 
@@ -420,4 +424,29 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		logger.Warn("encode incidents failed", "component", "incidents", "err", err)
 	}
+}
+
+func notificationToJSON(n *store.IncidentNotification) *notificationJSON {
+	if n == nil {
+		return nil
+	}
+
+	out := &notificationJSON{
+		State:     n.State,
+		Attempts:  n.Attempts,
+		LastError: n.LastError,
+	}
+	if n.LastAttemptAt != nil {
+		s := n.LastAttemptAt.UTC().Format(time.RFC3339)
+		out.LastAttemptAt = &s
+	}
+	if n.NextAttemptAt != nil {
+		s := n.NextAttemptAt.UTC().Format(time.RFC3339)
+		out.NextAttemptAt = &s
+	}
+	if n.DeliveredAt != nil {
+		s := n.DeliveredAt.UTC().Format(time.RFC3339)
+		out.DeliveredAt = &s
+	}
+	return out
 }

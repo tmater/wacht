@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"sync"
 	"testing"
@@ -58,7 +59,7 @@ func newTestStore(t *testing.T) *Store {
 
 	// Wipe all tables so tests don't interfere with each other.
 	_, err = s.db.Exec(`
-		TRUNCATE signup_requests, check_results, incidents, sessions, checks, users, probes RESTART IDENTITY CASCADE
+		TRUNCATE incident_notifications, signup_requests, check_results, incidents, sessions, checks, users, probes RESTART IDENTITY CASCADE
 	`)
 	if err != nil {
 		t.Fatalf("truncate tables: %v", err)
@@ -198,6 +199,212 @@ func TestResolveIncident_NoOpenIncident(t *testing.T) {
 	}
 	if resolved {
 		t.Fatal("expected ResolveIncident to report no-op when nothing was open")
+	}
+}
+
+func TestOpenIncidentWithNotification_CreatesDurableDownNotification(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("notify-open@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	alreadyOpen, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"down"}`),
+	})
+	if err != nil {
+		t.Fatalf("OpenIncidentWithNotification: %v", err)
+	}
+	if alreadyOpen {
+		t.Fatal("expected first open to create incident")
+	}
+
+	var (
+		event, state, webhookURL string
+		attempts                 int
+		payload                  string
+	)
+	if err := s.db.QueryRow(`
+		SELECT event, state, webhook_url, attempts, payload::text
+		FROM incident_notifications
+		LIMIT 1
+	`).Scan(&event, &state, &webhookURL, &attempts, &payload); err != nil {
+		t.Fatalf("QueryRow incident_notifications: %v", err)
+	}
+
+	if event != notificationEventDown {
+		t.Fatalf("event = %q, want %q", event, notificationEventDown)
+	}
+	if state != notificationStatePending {
+		t.Fatalf("state = %q, want %q", state, notificationStatePending)
+	}
+	if webhookURL != "https://hooks.example.com/wacht" {
+		t.Fatalf("webhook_url = %q, want durable webhook URL", webhookURL)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts = %d, want 0", attempts)
+	}
+	if payload != `{"status": "down"}` {
+		t.Fatalf("payload = %s, want down payload snapshot", payload)
+	}
+}
+
+func TestResolveIncidentWithNotification_SupersedesPendingDownNotification(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("notify-resolve@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"down"}`),
+	}); err != nil {
+		t.Fatalf("OpenIncidentWithNotification: %v", err)
+	}
+	resolved, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"up"}`),
+	})
+	if err != nil {
+		t.Fatalf("ResolveIncidentWithNotification: %v", err)
+	}
+	if !resolved {
+		t.Fatal("expected incident to resolve")
+	}
+
+	rows, err := s.db.Query(`
+		SELECT event, state
+		FROM incident_notifications
+		ORDER BY event ASC
+	`)
+	if err != nil {
+		t.Fatalf("Query incident_notifications: %v", err)
+	}
+	defer rows.Close()
+
+	states := map[string]string{}
+	for rows.Next() {
+		var event, state string
+		if err := rows.Scan(&event, &state); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		states[event] = state
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+
+	if states[notificationEventDown] != notificationStateSuperseded {
+		t.Fatalf("down state = %q, want %q", states[notificationEventDown], notificationStateSuperseded)
+	}
+	if states[notificationEventUp] != notificationStatePending {
+		t.Fatalf("up state = %q, want %q", states[notificationEventUp], notificationStatePending)
+	}
+}
+
+func TestMarkIncidentNotificationRetry_SupersedesDownAfterResolve(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("notify-retry@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"down"}`),
+	}); err != nil {
+		t.Fatalf("OpenIncidentWithNotification: %v", err)
+	}
+
+	var notificationID int64
+	if err := s.db.QueryRow(`SELECT id FROM incident_notifications WHERE event = $1`, notificationEventDown).Scan(&notificationID); err != nil {
+		t.Fatalf("query notification id: %v", err)
+	}
+
+	if _, err := s.ResolveIncident("check-1"); err != nil {
+		t.Fatalf("ResolveIncident: %v", err)
+	}
+	if err := s.MarkIncidentNotificationRetry(notificationID, time.Now().UTC(), time.Now().UTC().Add(time.Minute), "boom"); err != nil {
+		t.Fatalf("MarkIncidentNotificationRetry: %v", err)
+	}
+
+	var state string
+	if err := s.db.QueryRow(`SELECT state FROM incident_notifications WHERE id = $1`, notificationID).Scan(&state); err != nil {
+		t.Fatalf("query state: %v", err)
+	}
+	if state != notificationStateSuperseded {
+		t.Fatalf("state = %q, want %q", state, notificationStateSuperseded)
+	}
+}
+
+func TestMarkIncidentNotificationDelivered_DoesNotOverrideSupersededDownNotification(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("notify-delivered@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"down"}`),
+	}); err != nil {
+		t.Fatalf("OpenIncidentWithNotification: %v", err)
+	}
+
+	now := time.Now().UTC().Add(time.Second)
+	jobs, err := s.ClaimDueIncidentNotifications(now, now.Add(-time.Minute), 1)
+	if err != nil {
+		t.Fatalf("ClaimDueIncidentNotifications: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 claimed job, got %d", len(jobs))
+	}
+
+	if _, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"up"}`),
+	}); err != nil {
+		t.Fatalf("ResolveIncidentWithNotification: %v", err)
+	}
+
+	if err := s.MarkIncidentNotificationDelivered(jobs[0].ID, time.Now().UTC()); err != nil {
+		t.Fatalf("MarkIncidentNotificationDelivered: %v", err)
+	}
+
+	var (
+		state       string
+		deliveredAt sql.NullTime
+	)
+	if err := s.db.QueryRow(`
+		SELECT state, delivered_at
+		FROM incident_notifications
+		WHERE id = $1
+	`, jobs[0].ID).Scan(&state, &deliveredAt); err != nil {
+		t.Fatalf("query notification: %v", err)
+	}
+	if state != notificationStateSuperseded {
+		t.Fatalf("state = %q, want %q", state, notificationStateSuperseded)
+	}
+	if deliveredAt.Valid {
+		t.Fatalf("delivered_at = %s, want NULL for superseded notification", deliveredAt.Time)
 	}
 }
 
@@ -468,6 +675,53 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 		if inc.ResolvedAt == nil {
 			t.Errorf("incident id=%d check_id=%s: expected resolved, got open", inc.ID, inc.CheckID)
 		}
+	}
+}
+
+func TestListIncidents_IncludesNotificationSummary(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("incident-summary@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"down"}`),
+	}); err != nil {
+		t.Fatalf("OpenIncidentWithNotification: %v", err)
+	}
+	if _, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+		WebhookURL: "https://hooks.example.com/wacht",
+		Payload:    []byte(`{"status":"up"}`),
+	}); err != nil {
+		t.Fatalf("ResolveIncidentWithNotification: %v", err)
+	}
+
+	incidents, err := s.ListIncidents(user.ID, 10)
+	if err != nil {
+		t.Fatalf("ListIncidents: %v", err)
+	}
+	if len(incidents) != 1 {
+		t.Fatalf("expected 1 incident, got %d", len(incidents))
+	}
+
+	incident := incidents[0]
+	if incident.DownNotification == nil {
+		t.Fatal("expected down notification summary")
+	}
+	if incident.UpNotification == nil {
+		t.Fatal("expected up notification summary")
+	}
+	if incident.DownNotification.State != notificationStateSuperseded {
+		t.Fatalf("down state = %q, want %q", incident.DownNotification.State, notificationStateSuperseded)
+	}
+	if incident.UpNotification.State != notificationStatePending {
+		t.Fatalf("up state = %q, want %q", incident.UpNotification.State, notificationStatePending)
 	}
 }
 

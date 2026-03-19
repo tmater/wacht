@@ -100,11 +100,14 @@ Webhook payload:
 
 Recovery notifications use the same payload with `status` set to `up`.
 
-Webhook delivery is best-effort. Webhook URLs must be public HTTP(S)
-endpoints; loopback, private, and link-local destinations are rejected.
-Alerts are queued for background delivery so result ingestion is not
-blocked by slow destinations. Delivery is timed out after 5 seconds, and
-no retry is attempted.
+Webhook URLs must be public HTTP(S) endpoints; loopback, private, and
+link-local destinations are rejected. Alert delivery is persisted in the
+database and retried with backoff in the background so result ingestion is
+not blocked by slow destinations. Delivery is timed out after 5 seconds.
+If an outage resolves before its `down` alert can be delivered, that stale
+opening notification is superseded and the recovery notification becomes the
+current delivery target instead. Delivery state is visible in incident
+history.
 
 ## Status page
 

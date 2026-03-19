@@ -90,7 +90,7 @@ func TestHandleProbeRegisterMapsInternalError(t *testing.T) {
 
 func TestHandleResultMapsBadRequestError(t *testing.T) {
 	h := &Handler{
-		webhooks: alert.NewSender(network.Policy{}),
+		webhooks: alert.NewSender(nil, network.Policy{}),
 		probeProcessor: fakeProbeProcessor{
 			heartbeatFn: func(probe *store.Probe, req probeapi.HeartbeatRequest) error { return nil },
 			registerFn:  func(probe *store.Probe, req probeapi.RegisterRequest) error { return nil },
@@ -117,7 +117,7 @@ func TestHandleResultMapsBadRequestError(t *testing.T) {
 
 func TestHandleResultReturnsNoContentOnProcessorSuccess(t *testing.T) {
 	h := &Handler{
-		webhooks: alert.NewSender(network.Policy{}),
+		webhooks: alert.NewSender(nil, network.Policy{}),
 		probeProcessor: fakeProbeProcessor{
 			heartbeatFn: func(probe *store.Probe, req probeapi.HeartbeatRequest) error { return nil },
 			registerFn:  func(probe *store.Probe, req probeapi.RegisterRequest) error { return nil },

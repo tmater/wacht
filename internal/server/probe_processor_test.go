@@ -18,14 +18,16 @@ type fakeProbeStore struct {
 	saveResultFn            func(r proto.CheckResult) error
 	recentResultsPerProbeFn func(checkID string) ([]proto.CheckResult, error)
 	recentResultsByProbeFn  func(checkID, probeID string, n int) ([]proto.CheckResult, error)
-	openIncidentFn          func(checkID string) (bool, error)
-	resolveIncidentFn       func(checkID string) (bool, error)
+	openIncidentFn          func(checkID string, request *store.NotificationRequest) (bool, error)
+	resolveIncidentFn       func(checkID string, request *store.NotificationRequest) (bool, error)
 	registerProbeID         string
 	registerVersion         string
 	heartbeatProbeID        string
 	savedResults            []proto.CheckResult
 	openIncidentCalls       int
 	resolveIncidentCalls    int
+	lastOpenNotification    *store.NotificationRequest
+	lastResolveNotification *store.NotificationRequest
 }
 
 func (f *fakeProbeStore) RegisterProbe(probeID, version string) error {
@@ -74,18 +76,20 @@ func (f *fakeProbeStore) RecentResultsByProbe(checkID, probeID string, n int) ([
 	return nil, nil
 }
 
-func (f *fakeProbeStore) OpenIncident(checkID string) (bool, error) {
+func (f *fakeProbeStore) OpenIncidentWithNotification(checkID string, request *store.NotificationRequest) (bool, error) {
 	f.openIncidentCalls++
+	f.lastOpenNotification = request
 	if f.openIncidentFn != nil {
-		return f.openIncidentFn(checkID)
+		return f.openIncidentFn(checkID, request)
 	}
 	return false, nil
 }
 
-func (f *fakeProbeStore) ResolveIncident(checkID string) (bool, error) {
+func (f *fakeProbeStore) ResolveIncidentWithNotification(checkID string, request *store.NotificationRequest) (bool, error) {
 	f.resolveIncidentCalls++
+	f.lastResolveNotification = request
 	if f.resolveIncidentFn != nil {
-		return f.resolveIncidentFn(checkID)
+		return f.resolveIncidentFn(checkID, request)
 	}
 	return false, nil
 }
@@ -119,7 +123,7 @@ func TestProbeProcessorRegisterRecordsVersion(t *testing.T) {
 	}
 }
 
-func TestProbeProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
+func TestProbeProcessorProcessOpensIncidentAndCreatesNotification(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
@@ -148,20 +152,20 @@ func TestProbeProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if outcome.Alert == nil {
-		t.Fatalf("Process() returned no alert")
-	}
-	if outcome.WebhookURL != "https://hooks.example.com/wacht" {
-		t.Fatalf("WebhookURL = %q, want webhook URL", outcome.WebhookURL)
-	}
-	if outcome.Alert.Status != "down" {
-		t.Fatalf("alert status = %q, want down", outcome.Alert.Status)
-	}
-	if outcome.Alert.ProbesDown != 2 || outcome.Alert.ProbesTotal != 3 {
-		t.Fatalf("alert counts = %d/%d, want 2/3", outcome.Alert.ProbesDown, outcome.Alert.ProbesTotal)
+	if outcome != (ProbeResultOutcome{}) {
+		t.Fatalf("Process() outcome = %#v, want empty outcome", outcome)
 	}
 	if len(s.savedResults) != 1 {
 		t.Fatalf("saved results = %d, want 1", len(s.savedResults))
+	}
+	if s.lastOpenNotification == nil {
+		t.Fatal("expected durable down notification request")
+	}
+	if s.lastOpenNotification.WebhookURL != "https://hooks.example.com/wacht" {
+		t.Fatalf("WebhookURL = %q, want webhook URL", s.lastOpenNotification.WebhookURL)
+	}
+	if string(s.lastOpenNotification.Payload) != `{"check_id":"site","target":"https://example.com","status":"down","probes_down":2,"probes_total":3}` {
+		t.Fatalf("payload = %s", s.lastOpenNotification.Payload)
 	}
 
 	saved := s.savedResults[0]
@@ -182,7 +186,7 @@ func TestProbeProcessorProcessOpensIncidentAndReturnsAlert(t *testing.T) {
 	}
 }
 
-func TestProbeProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
+func TestProbeProcessorProcessResolvesIncidentAndCreatesNotification(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "tcp", "db.example.com:5432", "https://hooks.example.com/wacht", 0)
@@ -204,7 +208,7 @@ func TestProbeProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
 				{ProbeID: probeID, Up: true},
 			}, nil
 		},
-		resolveIncidentFn: func(checkID string) (bool, error) {
+		resolveIncidentFn: func(checkID string, request *store.NotificationRequest) (bool, error) {
 			return true, nil
 		},
 	}
@@ -217,14 +221,14 @@ func TestProbeProcessorProcessResolvesIncidentAndReturnsAlert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if outcome.Alert == nil {
-		t.Fatalf("Process() returned no recovery alert")
+	if outcome != (ProbeResultOutcome{}) {
+		t.Fatalf("Process() outcome = %#v, want empty outcome", outcome)
 	}
-	if outcome.Alert.Status != "up" {
-		t.Fatalf("alert status = %q, want up", outcome.Alert.Status)
+	if s.lastResolveNotification == nil {
+		t.Fatal("expected durable recovery notification request")
 	}
-	if outcome.Alert.ProbesDown != 1 || outcome.Alert.ProbesTotal != 3 {
-		t.Fatalf("alert counts = %d/%d, want 1/3", outcome.Alert.ProbesDown, outcome.Alert.ProbesTotal)
+	if string(s.lastResolveNotification.Payload) != `{"check_id":"db","target":"db.example.com:5432","status":"up","probes_down":1,"probes_total":3}` {
+		t.Fatalf("payload = %s", s.lastResolveNotification.Payload)
 	}
 }
 
@@ -256,8 +260,8 @@ func TestProbeProcessorProcessDoesNotResolveIncidentWithoutConsecutiveSuccesses(
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if outcome.Alert != nil {
-		t.Fatalf("Process() returned recovery alert = %#v, want nil", outcome.Alert)
+	if outcome != (ProbeResultOutcome{}) {
+		t.Fatalf("Process() returned outcome = %#v, want empty outcome", outcome)
 	}
 	if s.resolveIncidentCalls != 0 {
 		t.Fatalf("ResolveIncident calls = %d, want 0", s.resolveIncidentCalls)
@@ -347,8 +351,8 @@ func TestProbeProcessorProcessDoesNotOpenIncidentWithoutConsecutiveFailures(t *t
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if outcome.Alert != nil {
-		t.Fatalf("Process() alert = %#v, want nil", outcome.Alert)
+	if outcome != (ProbeResultOutcome{}) {
+		t.Fatalf("Process() outcome = %#v, want empty outcome", outcome)
 	}
 	if s.openIncidentCalls != 0 {
 		t.Fatalf("OpenIncident calls = %d, want 0", s.openIncidentCalls)

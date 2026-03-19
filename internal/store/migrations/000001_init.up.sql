@@ -33,6 +33,30 @@ CREATE TABLE incidents (
 CREATE INDEX idx_incidents_user_started_at ON incidents (user_id, started_at DESC);
 CREATE UNIQUE INDEX idx_incidents_open_check ON incidents (check_id) WHERE resolved_at IS NULL;
 
+CREATE TABLE incident_notifications (
+    id              BIGSERIAL PRIMARY KEY,
+    incident_id     BIGINT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    event           TEXT NOT NULL,
+    state           TEXT NOT NULL,
+    webhook_url     TEXT NOT NULL,
+    payload         JSONB NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    last_attempt_at TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ,
+    delivered_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL,
+    CONSTRAINT incident_notifications_event_check CHECK (event IN ('down', 'up')),
+    CONSTRAINT incident_notifications_state_check CHECK (state IN ('pending', 'processing', 'retrying', 'delivered', 'superseded'))
+);
+
+CREATE UNIQUE INDEX idx_incident_notifications_incident_event
+    ON incident_notifications (incident_id, event);
+
+CREATE INDEX idx_incident_notifications_dispatch
+    ON incident_notifications (state, next_attempt_at, id);
+
 CREATE TABLE users (
     id            BIGSERIAL PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
