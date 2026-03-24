@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -143,18 +145,93 @@ func (rl *rateLimiter) allow(ip string) bool {
 	return true
 }
 
-func (rl *rateLimiter) middleware(next http.HandlerFunc) http.HandlerFunc {
+func (h *Handler) rateLimited(rl *rateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if i := strings.LastIndex(ip, ":"); i != -1 {
-			ip = ip[:i]
-		}
-		if !rl.allow(ip) {
+		if !rl.allow(h.clientIP(r)) {
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
 		}
 		next(w, r)
 	}
+}
+
+func (h *Handler) clientIP(r *http.Request) string {
+	peer, ok := parseRequestIP(r.RemoteAddr)
+	if !ok {
+		return r.RemoteAddr
+	}
+	if h == nil || !ipInPrefixes(peer, h.trustedProxies) {
+		return peer.String()
+	}
+	if client, ok := forwardedClientIP(r, peer, h.trustedProxies); ok {
+		return client.String()
+	}
+	return peer.String()
+}
+
+func forwardedClientIP(r *http.Request, peer netip.Addr, trusted []netip.Prefix) (netip.Addr, bool) {
+	chain := parseForwardedFor(r.Header.Get("X-Forwarded-For"))
+	if len(chain) == 0 {
+		if realIP, ok := parseIP(r.Header.Get("X-Real-IP")); ok {
+			chain = append(chain, realIP)
+		}
+	}
+	chain = append(chain, peer)
+	for i := len(chain) - 1; i >= 0; i-- {
+		if !ipInPrefixes(chain[i], trusted) {
+			return chain[i], true
+		}
+	}
+	if len(chain) == 0 {
+		return netip.Addr{}, false
+	}
+	return chain[0], true
+}
+
+func parseForwardedFor(header string) []netip.Addr {
+	if header == "" {
+		return nil
+	}
+	parts := strings.Split(header, ",")
+	ips := make([]netip.Addr, 0, len(parts))
+	for _, part := range parts {
+		if ip, ok := parseIP(part); ok {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
+
+func parseRequestIP(remoteAddr string) (netip.Addr, bool) {
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	return parseIP(host)
+}
+
+func parseIP(raw string) (netip.Addr, bool) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "[")
+	raw = strings.TrimSuffix(raw, "]")
+	if raw == "" {
+		return netip.Addr{}, false
+	}
+	ip, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return ip.Unmap(), true
+}
+
+func ipInPrefixes(ip netip.Addr, prefixes []netip.Prefix) bool {
+	ip = ip.Unmap()
+	for _, prefix := range prefixes {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleLogin authenticates a user and returns a session token.

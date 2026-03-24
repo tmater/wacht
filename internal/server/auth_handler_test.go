@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +224,143 @@ func TestHandleSetupPasswordReturnsJSONOnSuccess(t *testing.T) {
 	if body["token"] != "session-123" || body["email"] != "alice@example.com" {
 		t.Fatalf("body = %#v, want setup-password token/email payload", body)
 	}
+}
+
+func TestRateLimitedUsesDistinctDirectClientIPs(t *testing.T) {
+	h := &Handler{loginLimiter: newRateLimiter(1, time.Minute)}
+	limited := h.rateLimited(h.loginLimiter, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req1.RemoteAddr = "198.51.100.10:1234"
+	rec1 := httptest.NewRecorder()
+	limited(rec1, req1)
+	if rec1.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req2.RemoteAddr = "198.51.100.11:1234"
+	rec2 := httptest.NewRecorder()
+	limited(rec2, req2)
+	if rec2.Code != http.StatusNoContent {
+		t.Fatalf("second status = %d, want 204", rec2.Code)
+	}
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req3.RemoteAddr = "198.51.100.10:9999"
+	rec3 := httptest.NewRecorder()
+	limited(rec3, req3)
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("third status = %d, want 429", rec3.Code)
+	}
+}
+
+func TestRateLimitedUsesForwardedClientIPFromTrustedProxy(t *testing.T) {
+	h := &Handler{
+		loginLimiter:   newRateLimiter(1, time.Minute),
+		trustedProxies: mustPrefixes(t, "172.16.0.0/12"),
+	}
+	limited := h.rateLimited(h.loginLimiter, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req1.RemoteAddr = "172.18.0.2:1234"
+	req1.Header.Set("X-Forwarded-For", "198.51.100.10")
+	rec1 := httptest.NewRecorder()
+	limited(rec1, req1)
+	if rec1.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req2.RemoteAddr = "172.18.0.2:1234"
+	req2.Header.Set("X-Forwarded-For", "198.51.100.11")
+	rec2 := httptest.NewRecorder()
+	limited(rec2, req2)
+	if rec2.Code != http.StatusNoContent {
+		t.Fatalf("second status = %d, want 204", rec2.Code)
+	}
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req3.RemoteAddr = "172.18.0.2:9876"
+	req3.Header.Set("X-Forwarded-For", "198.51.100.10")
+	rec3 := httptest.NewRecorder()
+	limited(rec3, req3)
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("third status = %d, want 429", rec3.Code)
+	}
+}
+
+func TestRateLimitedUsesRightmostUntrustedForwardedIP(t *testing.T) {
+	h := &Handler{
+		loginLimiter:   newRateLimiter(1, time.Minute),
+		trustedProxies: mustPrefixes(t, "172.16.0.0/12"),
+	}
+	limited := h.rateLimited(h.loginLimiter, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req1.RemoteAddr = "172.18.0.2:1234"
+	req1.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.10")
+	rec1 := httptest.NewRecorder()
+	limited(rec1, req1)
+	if rec1.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req2.RemoteAddr = "172.18.0.2:4321"
+	req2.Header.Set("X-Forwarded-For", "198.51.100.10")
+	rec2 := httptest.NewRecorder()
+	limited(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429", rec2.Code)
+	}
+}
+
+func TestRateLimitedIgnoresForwardedHeadersFromUntrustedPeer(t *testing.T) {
+	h := &Handler{
+		loginLimiter:   newRateLimiter(1, time.Minute),
+		trustedProxies: mustPrefixes(t, "172.16.0.0/12"),
+	}
+	limited := h.rateLimited(h.loginLimiter, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req1.RemoteAddr = "198.51.100.77:1234"
+	req1.Header.Set("X-Forwarded-For", "203.0.113.10")
+	rec1 := httptest.NewRecorder()
+	limited(rec1, req1)
+	if rec1.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req2.RemoteAddr = "198.51.100.77:9876"
+	req2.Header.Set("X-Forwarded-For", "203.0.113.11")
+	rec2 := httptest.NewRecorder()
+	limited(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429", rec2.Code)
+	}
+}
+
+func mustPrefixes(t *testing.T, cidrs ...string) []netip.Prefix {
+	t.Helper()
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			t.Fatalf("ParsePrefix(%q): %v", cidr, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes
 }
 
 func TestHandleApproveSignupRequestMapsNotFoundError(t *testing.T) {

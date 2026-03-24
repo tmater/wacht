@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"time"
 
@@ -17,6 +18,15 @@ const (
 	DefaultProbeHeartbeatInterval = 30 * time.Second
 )
 
+var DefaultTrustedProxies = []string{
+	"127.0.0.1/8",
+	"::1/128",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"fc00::/7",
+}
+
 type ServerConfig struct {
 	Probes              []ProbeAuth    `yaml:"probes"`
 	Checks              []checks.Check `yaml:"checks"`
@@ -24,7 +34,9 @@ type ServerConfig struct {
 	RetentionDays       int            `yaml:"retention_days"`        // 0 → default 30
 	AllowPrivateTargets bool           `yaml:"allow_private_targets"` // false by default
 	AuthRateLimit       RateLimit      `yaml:"auth_rate_limit"`
+	TrustedProxies      []string       `yaml:"trusted_proxies"`
 	ProbeOfflineAfter   time.Duration  `yaml:"probe_offline_after"`
+	TrustedProxyCIDRs   []netip.Prefix `yaml:"-"`
 }
 
 type SeedUser struct {
@@ -83,6 +95,17 @@ func LoadServer(path string) (*ServerConfig, error) {
 	}
 	if cfg.AuthRateLimit.Window <= 0 {
 		cfg.AuthRateLimit.Window = DefaultAuthRateLimitWindow
+	}
+	if cfg.TrustedProxies == nil {
+		cfg.TrustedProxies = append([]string(nil), DefaultTrustedProxies...)
+	}
+	cfg.TrustedProxyCIDRs = make([]netip.Prefix, 0, len(cfg.TrustedProxies))
+	for i, cidr := range cfg.TrustedProxies {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("config: trusted_proxies[%d] invalid CIDR %q", i, cidr)
+		}
+		cfg.TrustedProxyCIDRs = append(cfg.TrustedProxyCIDRs, prefix.Masked())
 	}
 	return &cfg, nil
 }
