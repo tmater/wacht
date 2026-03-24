@@ -30,6 +30,9 @@ probes:
     secret: replace-with-a-strong-secret-2
   - id: probe-3
     secret: replace-with-a-strong-secret-3
+seed_user:
+  email: admin@wacht.local
+  password: changeme
 checks:
   - id: my-site
     type: http
@@ -62,6 +65,8 @@ docker compose up -d
 ```
 
 The dashboard is available at `http://<your-host>:3000`.
+
+**First login:** open `http://localhost:3000`, sign in with the `seed_user` credentials (`admin@wacht.local` / `changeme`), and change the password immediately. The seed user is only created on first boot when no users exist yet.
 
 ## Check types
 
@@ -112,9 +117,16 @@ history.
 ## Status page
 
 `GET /status` returns the current state of all checks for the authenticated user.
+Requests must include a valid session token.
 
 ```sh
-curl http://<your-host>:3000/status
+# Log in and capture the session token:
+TOKEN=$(curl -s -X POST http://<your-host>:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@wacht.local","password":"changeme"}' | jq -r .token)
+
+# Fetch current status:
+curl -H "Authorization: Bearer $TOKEN" http://<your-host>:3000/status
 ```
 
 ## License
