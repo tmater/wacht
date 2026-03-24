@@ -9,6 +9,11 @@ probes:
     secret: changeme-probe-2
   - id: probe-3
     secret: changeme-probe-3
+# First admin account — created on first boot when no users exist yet.
+# Change the password immediately after your first login.
+seed_user:
+  email: admin@wacht.local
+  password: changeme
 checks:
   - id: check-cloudflare
     type: http
