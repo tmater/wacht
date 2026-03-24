@@ -61,7 +61,7 @@ Start everything:
 docker compose up -d
 ```
 
-The server listens on port `8080`. The dashboard is available at `http://localhost:3000`.
+The dashboard is available at `http://<your-host>:3000`.
 
 ## Check types
 
@@ -114,7 +114,7 @@ history.
 `GET /status` returns the current state of all checks for the authenticated user.
 
 ```sh
-curl http://localhost:8080/status
+curl http://<your-host>:3000/status
 ```
 
 ## License

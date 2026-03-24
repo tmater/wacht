@@ -9,6 +9,13 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss()],
     base: process.env.VITE_BASE ?? '/',
+    server: {
+      proxy: {
+        '/api': 'http://localhost:8080',
+        '/status': 'http://localhost:8080',
+        '/healthz': 'http://localhost:8080',
+      },
+    },
     ...(isLib && {
       build: {
         lib: {
