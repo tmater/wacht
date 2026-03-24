@@ -22,8 +22,8 @@ services:
     command: ["--config=/etc/wacht/server.yaml", "--dsn=postgres://wacht:wacht@postgres/wacht?sslmode=disable"]
     volumes:
       - ./config/server.yaml:/etc/wacht/server.yaml:ro
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     depends_on:
       postgres:
         condition: service_healthy
