@@ -350,6 +350,34 @@ func TestRateLimitedIgnoresForwardedHeadersFromUntrustedPeer(t *testing.T) {
 	}
 }
 
+func TestRateLimitedIgnoresForwardedHeadersFromPrivatePeerByDefault(t *testing.T) {
+	h := &Handler{
+		loginLimiter:   newRateLimiter(1, time.Minute),
+		trustedProxies: mustPrefixes(t, "127.0.0.0/8", "::1/128"),
+	}
+	limited := h.rateLimited(h.loginLimiter, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req1.RemoteAddr = "192.168.1.44:1234"
+	req1.Header.Set("X-Forwarded-For", "203.0.113.10")
+	rec1 := httptest.NewRecorder()
+	limited(rec1, req1)
+	if rec1.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req2.RemoteAddr = "192.168.1.44:5678"
+	req2.Header.Set("X-Forwarded-For", "203.0.113.11")
+	rec2 := httptest.NewRecorder()
+	limited(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429", rec2.Code)
+	}
+}
+
 func mustPrefixes(t *testing.T, cidrs ...string) []netip.Prefix {
 	t.Helper()
 	prefixes := make([]netip.Prefix, 0, len(cidrs))

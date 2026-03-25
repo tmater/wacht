@@ -98,6 +98,12 @@ func TestLoadServer_DefaultsTrustedProxies(t *testing.T) {
 	if !cfg.TrustedProxyCIDRs[0].Contains(netip.MustParseAddr("127.0.0.1")) {
 		t.Fatal("expected loopback proxy CIDR to be trusted by default")
 	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("TrustedProxyCIDRs len = %d, want 2 loopback defaults", len(cfg.TrustedProxyCIDRs))
+	}
+	if cfg.TrustedProxyCIDRs[1].Contains(netip.MustParseAddr("fc00::1")) {
+		t.Fatal("did not expect ULA addresses to be trusted by default")
+	}
 }
 
 func TestLoadServer_ParsesTrustedProxies(t *testing.T) {
