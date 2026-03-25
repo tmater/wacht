@@ -12,9 +12,13 @@ CREATE TABLE users (
     id            BIGSERIAL PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    public_status_slug TEXT NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text),
     created_at    TIMESTAMPTZ NOT NULL,
     is_admin      BOOLEAN NOT NULL DEFAULT false
 );
+
+CREATE UNIQUE INDEX idx_users_public_status_slug
+    ON users (public_status_slug);
 
 CREATE TABLE sessions (
     token      TEXT PRIMARY KEY,

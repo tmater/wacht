@@ -614,6 +614,93 @@ func TestCheckStatuses_ScopedToUser(t *testing.T) {
 	}
 }
 
+func TestPublicCheckStatuses_UsesPendingUpAndDownStates(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("public-statuses@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck down: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("pending-check", "http", "https://pending.example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck pending: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("up-check", "http", "https://up.example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck up: %v", err)
+	}
+
+	saveResult(t, s, "down-check", "probe-a", false)
+	if _, err := s.OpenIncident("down-check"); err != nil {
+		t.Fatalf("OpenIncident: %v", err)
+	}
+	saveResult(t, s, "up-check", "probe-b", true)
+
+	statuses, found, err := s.PublicCheckStatuses(user.PublicStatusSlug)
+	if err != nil {
+		t.Fatalf("PublicCheckStatuses: %v", err)
+	}
+	if !found {
+		t.Fatal("expected slug to resolve to a user")
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 statuses, got %d", len(statuses))
+	}
+
+	byID := make(map[string]PublicCheckStatus, len(statuses))
+	for _, status := range statuses {
+		byID[status.CheckID] = status
+	}
+
+	if got := byID["down-check"].Status; got != "down" {
+		t.Fatalf("down-check status = %q, want down", got)
+	}
+	if byID["down-check"].IncidentSince == nil {
+		t.Fatal("expected down-check incident timestamp")
+	}
+	if got := byID["pending-check"].Status; got != "pending" {
+		t.Fatalf("pending-check status = %q, want pending", got)
+	}
+	if byID["pending-check"].IncidentSince != nil {
+		t.Fatal("expected pending-check to omit incident timestamp")
+	}
+	if got := byID["up-check"].Status; got != "up" {
+		t.Fatalf("up-check status = %q, want up", got)
+	}
+}
+
+func TestPublicCheckStatuses_DistinguishesUnknownSlugAndNoChecks(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("public-empty@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	statuses, found, err := s.PublicCheckStatuses(user.PublicStatusSlug)
+	if err != nil {
+		t.Fatalf("PublicCheckStatuses existing slug: %v", err)
+	}
+	if !found {
+		t.Fatal("expected existing slug to resolve")
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("expected no statuses for a user with no checks, got %d", len(statuses))
+	}
+
+	statuses, found, err = s.PublicCheckStatuses("missing-slug")
+	if err != nil {
+		t.Fatalf("PublicCheckStatuses missing slug: %v", err)
+	}
+	if found {
+		t.Fatal("expected missing slug to report found=false")
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("expected no statuses for missing slug, got %d", len(statuses))
+	}
+}
+
 func TestEvictOldResults_DeletesOldKeepsNew(t *testing.T) {
 	s := newTestStore(t)
 

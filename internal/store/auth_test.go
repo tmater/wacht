@@ -26,6 +26,9 @@ func TestCreateUser_HashesPassword(t *testing.T) {
 	if user.PasswordHash == "" {
 		t.Error("password hash is empty")
 	}
+	if user.PublicStatusSlug == "" {
+		t.Error("public status slug is empty")
+	}
 }
 
 func TestCreateUser_DuplicateEmail(t *testing.T) {
@@ -136,6 +139,9 @@ func TestSession_CreateAndLookup(t *testing.T) {
 	}
 	if got.ID != user.ID {
 		t.Errorf("expected user ID %d, got %d", user.ID, got.ID)
+	}
+	if got.PublicStatusSlug != user.PublicStatusSlug {
+		t.Errorf("expected public status slug %q, got %q", user.PublicStatusSlug, got.PublicStatusSlug)
 	}
 }
 

@@ -154,6 +154,14 @@ type CheckStatus struct {
 	IncidentSince *time.Time // non-nil when an incident is open
 }
 
+// PublicCheckStatus holds the public-safe state of a check for a public status
+// page. Unlike the authenticated status view, this never exposes targets.
+type PublicCheckStatus struct {
+	CheckID       string
+	Status        string
+	IncidentSince *time.Time
+}
+
 // CheckStatuses returns the current status for each reported check owned by
 // userID, joined with any open incident.
 func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
@@ -187,6 +195,58 @@ func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
 		statuses = append(statuses, cs)
 	}
 	return statuses, rows.Err()
+}
+
+// PublicCheckStatuses returns the public-safe status view for the user matched
+// by slug. The boolean reports whether the slug exists at all so callers can
+// distinguish "no checks yet" from "unknown page".
+func (s *Store) PublicCheckStatuses(slug string) ([]PublicCheckStatus, bool, error) {
+	var userID int64
+	err := s.db.QueryRow(`SELECT id FROM users WHERE public_status_slug = $1`, slug).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT c.id,
+		       CASE
+		           WHEN reported.check_uid IS NULL THEN 'pending'
+		           WHEN i.started_at IS NULL THEN 'up'
+		           ELSE 'down'
+		       END AS status,
+		       i.started_at
+		FROM checks c
+		LEFT JOIN (
+			SELECT DISTINCT check_uid
+			FROM check_results
+		) reported ON reported.check_uid = c.uid
+		LEFT JOIN incidents i
+			ON i.check_uid = c.uid AND i.resolved_at IS NULL
+		WHERE c.user_id = $1
+		  AND c.deleted_at IS NULL
+		ORDER BY c.id
+	`, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	var statuses []PublicCheckStatus
+	for rows.Next() {
+		var (
+			status    PublicCheckStatus
+			startedAt *time.Time
+		)
+		if err := rows.Scan(&status.CheckID, &status.Status, &startedAt); err != nil {
+			return nil, false, err
+		}
+		status.IncidentSince = startedAt
+		statuses = append(statuses, status)
+	}
+	return statuses, true, rows.Err()
 }
 
 // OpenIncident records a new incident for checkID. Returns true if an incident

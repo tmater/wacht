@@ -25,6 +25,7 @@ type Handler struct {
 	probeProcessor probeProcessor
 	loginLimiter   *rateLimiter
 	signupLimiter  *rateLimiter
+	publicLimiter  *rateLimiter
 	trustedProxies []netip.Prefix
 }
 
@@ -48,6 +49,7 @@ func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 		probeProcessor: NewProbeProcessor(store),
 		loginLimiter:   newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
 		signupLimiter:  newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
+		publicLimiter:  newRateLimiter(60, time.Minute),
 		trustedProxies: append([]netip.Prefix(nil), cfg.TrustedProxyCIDRs...),
 	}
 }
@@ -66,6 +68,7 @@ func (h *Handler) Routes() http.Handler {
 
 	// Public routes — no auth required.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("GET /api/public/status/{slug}", h.rateLimited(h.publicLimiter, h.handlePublicStatus))
 	mux.HandleFunc("POST /api/auth/login", h.rateLimited(h.loginLimiter, h.handleLogin))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
 	mux.HandleFunc("POST /api/auth/setup-password", h.rateLimited(h.signupLimiter, h.handleSetupPassword))
@@ -176,6 +179,47 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks, "probes": probes}); err != nil {
 		logger.Warn("encode status response failed", "component", "status", "err", err)
+	}
+}
+
+// handlePublicStatus serves the anonymous customer-facing status view as JSON.
+func (h *Handler) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	logger := requestLogger(r)
+
+	statuses, found, err := h.store.PublicCheckStatuses(slug)
+	if err != nil {
+		logger.Error("query public statuses failed", "component", "public_status", "slug", slug, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	type checkJSON struct {
+		CheckID       string  `json:"check_id"`
+		Status        string  `json:"status"`
+		IncidentSince *string `json:"incident_since,omitempty"`
+	}
+
+	checks := make([]checkJSON, 0, len(statuses))
+	for _, status := range statuses {
+		item := checkJSON{
+			CheckID: status.CheckID,
+			Status:  status.Status,
+		}
+		if status.IncidentSince != nil {
+			ts := status.IncidentSince.UTC().Format(time.RFC3339)
+			item.IncidentSince = &ts
+		}
+		checks = append(checks, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks}); err != nil {
+		logger.Warn("encode public status response failed", "component", "public_status", "slug", slug, "err", err)
 	}
 }
 
