@@ -57,11 +57,6 @@ export default function Dashboard({ onLogout, showProbes = true }) {
     }
   }
 
-  async function handleLogoutClick() {
-    await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', headers: authHeaders() })
-    onLogout()
-  }
-
   function handleSaved() {
     setShowAddForm(false)
     setEditingId(null)

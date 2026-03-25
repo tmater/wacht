@@ -1,0 +1,8 @@
+# Browser-test stack config. Keep this deterministic and lightweight so the
+# Playwright suite exercises the packaged UI and auth flow without depending on
+# probe health or external targets.
+probes: []
+seed_user:
+  email: browser@wacht.local
+  password: browserpassword
+checks: []

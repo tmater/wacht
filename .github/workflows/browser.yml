@@ -1,0 +1,35 @@
+name: Browser test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  browser:
+    # Run PR CI for the repo owner and Dependabot-authored updates.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login == 'tmater' || github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: wacht-web/package-lock.json
+
+      - name: Run browser tests
+        run: make browser
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            wacht-web/playwright-report
+            wacht-web/test-results
+          if-no-files-found: ignore
