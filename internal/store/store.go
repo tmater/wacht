@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"log"
@@ -61,9 +62,13 @@ func runMigrations(db *sql.DB, dsn string) error {
 
 // SaveResult persists a check result to the database.
 func (s *Store) SaveResult(r proto.CheckResult) error {
-	_, err := s.db.Exec(`
-		INSERT INTO check_results (check_id, probe_id, type, target, up, latency_ms, error, timestamp)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	var resultID int64
+	err := s.db.QueryRow(`
+		INSERT INTO check_results (check_uid, probe_id, type, target, up, latency_ms, error, timestamp)
+		SELECT uid, $2, $3, $4, $5, $6, $7, $8
+		FROM checks
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING id
 	`,
 		r.CheckID,
 		r.ProbeID,
@@ -73,7 +78,7 @@ func (s *Store) SaveResult(r proto.CheckResult) error {
 		r.Latency/time.Millisecond,
 		r.Error,
 		r.Timestamp,
-	)
+	).Scan(&resultID)
 	return err
 }
 
@@ -83,7 +88,12 @@ func (s *Store) RecentResultsByProbe(checkID, probeID string, n int) ([]proto.Ch
 	rows, err := s.db.Query(`
 		SELECT probe_id, up
 		FROM check_results
-		WHERE check_id = $1 AND probe_id = $2
+		WHERE check_uid = (
+			SELECT uid
+			FROM checks
+			WHERE id = $1 AND deleted_at IS NULL
+		)
+		  AND probe_id = $2
 		ORDER BY id DESC
 		LIMIT $3
 	`, checkID, probeID, n)
@@ -112,7 +122,11 @@ func (s *Store) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, erro
 		WHERE id IN (
 			SELECT MAX(id)
 			FROM check_results
-			WHERE check_id = $1
+			WHERE check_uid = (
+				SELECT uid
+				FROM checks
+				WHERE id = $1 AND deleted_at IS NULL
+			)
 			GROUP BY probe_id
 		)
 	`, checkID)
@@ -147,12 +161,13 @@ func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
 		SELECT c.id, c.target, i.started_at
 		FROM checks c
 		INNER JOIN (
-			SELECT DISTINCT check_id
+			SELECT DISTINCT check_uid
 			FROM check_results
-		) reported ON reported.check_id = c.id
+		) reported ON reported.check_uid = c.uid
 		LEFT JOIN incidents i
-			ON i.check_id = c.id AND i.resolved_at IS NULL
+			ON i.check_uid = c.uid AND i.resolved_at IS NULL
 		WHERE c.user_id = $1
+		  AND c.deleted_at IS NULL
 		ORDER BY c.id
 	`, userID)
 	if err != nil {
@@ -207,7 +222,7 @@ func (s *Store) SeedChecks(checks []checks.Check, userID int64) error {
 		_, err := s.db.Exec(`
 			INSERT INTO checks (id, type, target, webhook, user_id, interval_seconds)
 			VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6)
-			ON CONFLICT (id) DO NOTHING
+			ON CONFLICT DO NOTHING
 		`, c.ID, string(c.Type), c.Target, c.Webhook, userID, c.Interval)
 		if err != nil {
 			return err
@@ -218,7 +233,13 @@ func (s *Store) SeedChecks(checks []checks.Check, userID int64) error {
 
 // ListChecks returns all checks owned by userID.
 func (s *Store) ListChecks(userID int64) ([]checks.Check, error) {
-	rows, err := s.db.Query(`SELECT id, type, target, webhook, interval_seconds FROM checks WHERE user_id=$1 ORDER BY id`, userID)
+	rows, err := s.db.Query(`
+		SELECT id, type, target, webhook, interval_seconds
+		FROM checks
+		WHERE user_id = $1
+		  AND deleted_at IS NULL
+		ORDER BY id
+	`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +258,12 @@ func (s *Store) ListChecks(userID int64) ([]checks.Check, error) {
 
 // ListAllChecks returns all checks regardless of owner. Used by probes.
 func (s *Store) ListAllChecks() ([]checks.Check, error) {
-	rows, err := s.db.Query(`SELECT id, type, target, webhook, interval_seconds FROM checks ORDER BY id`)
+	rows, err := s.db.Query(`
+		SELECT id, type, target, webhook, interval_seconds
+		FROM checks
+		WHERE deleted_at IS NULL
+		ORDER BY id
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +282,12 @@ func (s *Store) ListAllChecks() ([]checks.Check, error) {
 
 // GetCheck returns a single check by id, or (nil, nil) if not found.
 func (s *Store) GetCheck(id string) (*checks.Check, error) {
-	c, err := scanCheck(s.db.QueryRow(`SELECT id, type, target, webhook, interval_seconds FROM checks WHERE id=$1`, id))
+	c, err := scanCheck(s.db.QueryRow(`
+		SELECT id, type, target, webhook, interval_seconds
+		FROM checks
+		WHERE id = $1
+		  AND deleted_at IS NULL
+	`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -275,15 +306,74 @@ func (s *Store) CreateCheck(c checks.Check, userID int64) error {
 
 // UpdateCheck replaces type, target, webhook, and interval_seconds for a check owned by userID.
 func (s *Store) UpdateCheck(c checks.Check, userID int64) error {
-	_, err := s.db.Exec(`UPDATE checks SET type=$1, target=$2, webhook=$3, interval_seconds=$4 WHERE id=$5 AND user_id=$6`,
+	_, err := s.db.Exec(`
+		UPDATE checks
+		SET type = $1, target = $2, webhook = $3, interval_seconds = $4
+		WHERE id = $5
+		  AND user_id = $6
+		  AND deleted_at IS NULL
+	`,
 		string(c.Type), c.Target, c.Webhook, c.Interval, c.ID, userID)
 	return err
 }
 
 // DeleteCheck removes a check owned by userID.
 func (s *Store) DeleteCheck(id string, userID int64) error {
-	_, err := s.db.Exec(`DELETE FROM checks WHERE id=$1 AND user_id=$2`, id, userID)
-	return err
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var checkUID int64
+	err = tx.QueryRow(`
+		SELECT uid
+		FROM checks
+		WHERE id = $1
+		  AND user_id = $2
+		  AND deleted_at IS NULL
+		FOR UPDATE
+	`, id, userID).Scan(&checkUID)
+	if err == sql.ErrNoRows {
+		return tx.Commit()
+	}
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+
+	if _, err := tx.Exec(`
+		UPDATE incident_notifications n
+		SET state = $1,
+		    next_attempt_at = NULL,
+		    updated_at = $2
+		FROM incidents i
+		WHERE i.id = n.incident_id
+		  AND i.check_uid = $3
+		  AND n.state NOT IN ($1, $4)
+	`, notificationStateSuperseded, now, checkUID, notificationStateDelivered); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE incidents
+		SET resolved_at = $1
+		WHERE check_uid = $2
+		  AND resolved_at IS NULL
+	`, now, checkUID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE checks
+		SET deleted_at = $1
+		WHERE uid = $2
+	`, now, checkUID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // Incident represents a recorded outage for a check.
@@ -302,7 +392,7 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			i.id,
-			i.check_id,
+			c.id,
 			i.started_at,
 			i.resolved_at,
 			down_n.id,
@@ -320,11 +410,13 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 			up_n.next_attempt_at,
 			up_n.delivered_at
 		FROM incidents i
+		INNER JOIN checks c
+			ON c.uid = i.check_uid
 		LEFT JOIN incident_notifications down_n
 			ON down_n.incident_id = i.id AND down_n.event = $2
 		LEFT JOIN incident_notifications up_n
 			ON up_n.incident_id = i.id AND up_n.event = $3
-		WHERE user_id = $1
+		WHERE i.user_id = $1
 		ORDER BY i.started_at DESC
 		LIMIT $4
 	`, userID, notificationEventDown, notificationEventUp, limit)

@@ -1,17 +1,3 @@
-CREATE TABLE check_results (
-    id         BIGSERIAL PRIMARY KEY,
-    check_id   TEXT NOT NULL,
-    probe_id   TEXT NOT NULL,
-    type       TEXT NOT NULL,
-    target     TEXT NOT NULL,
-    up         BOOLEAN NOT NULL,
-    latency_ms INTEGER NOT NULL,
-    error      TEXT,
-    timestamp  TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX idx_check_results_timestamp ON check_results (timestamp);
-
 CREATE TABLE probes (
     probe_id      TEXT PRIMARY KEY,
     secret_hash   TEXT NOT NULL,
@@ -22,16 +8,62 @@ CREATE TABLE probes (
     CONSTRAINT probes_status_check CHECK (status IN ('active', 'revoked'))
 );
 
+CREATE TABLE users (
+    id            BIGSERIAL PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    is_admin      BOOLEAN NOT NULL DEFAULT false
+);
+
+CREATE TABLE sessions (
+    token      TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE checks (
+    uid              BIGSERIAL PRIMARY KEY,
+    id               TEXT NOT NULL,
+    type             TEXT NOT NULL,
+    target           TEXT NOT NULL,
+    webhook          TEXT NOT NULL DEFAULT '',
+    user_id          INTEGER,
+    interval_seconds INTEGER NOT NULL DEFAULT 30,
+    deleted_at       TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX idx_checks_active_id
+    ON checks (id)
+    WHERE deleted_at IS NULL;
+
+CREATE TABLE check_results (
+    id         BIGSERIAL PRIMARY KEY,
+    check_uid  BIGINT NOT NULL REFERENCES checks(uid),
+    probe_id   TEXT NOT NULL,
+    type       TEXT NOT NULL,
+    target     TEXT NOT NULL,
+    up         BOOLEAN NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    error      TEXT,
+    timestamp  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX idx_check_results_timestamp ON check_results (timestamp);
+CREATE INDEX idx_check_results_check_uid_probe_id_id
+    ON check_results (check_uid, probe_id, id DESC);
+
 CREATE TABLE incidents (
     id          BIGSERIAL PRIMARY KEY,
-    check_id    TEXT NOT NULL,
+    check_uid   BIGINT NOT NULL REFERENCES checks(uid),
     user_id     INTEGER,
     started_at  TIMESTAMPTZ NOT NULL,
     resolved_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_incidents_user_started_at ON incidents (user_id, started_at DESC);
-CREATE UNIQUE INDEX idx_incidents_open_check ON incidents (check_id) WHERE resolved_at IS NULL;
+CREATE UNIQUE INDEX idx_incidents_open_check ON incidents (check_uid) WHERE resolved_at IS NULL;
 
 CREATE TABLE incident_notifications (
     id              BIGSERIAL PRIMARY KEY,
@@ -56,30 +88,6 @@ CREATE UNIQUE INDEX idx_incident_notifications_incident_event
 
 CREATE INDEX idx_incident_notifications_dispatch
     ON incident_notifications (state, next_attempt_at, id);
-
-CREATE TABLE users (
-    id            BIGSERIAL PRIMARY KEY,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL,
-    is_admin      BOOLEAN NOT NULL DEFAULT false
-);
-
-CREATE TABLE sessions (
-    token      TEXT PRIMARY KEY,
-    user_id    INTEGER NOT NULL REFERENCES users(id),
-    created_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE checks (
-    id               TEXT PRIMARY KEY,
-    type             TEXT NOT NULL,
-    target           TEXT NOT NULL,
-    webhook          TEXT NOT NULL DEFAULT '',
-    user_id          INTEGER,
-    interval_seconds INTEGER NOT NULL DEFAULT 30
-);
 
 CREATE TABLE signup_requests (
     id                     BIGSERIAL PRIMARY KEY,

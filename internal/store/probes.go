@@ -167,9 +167,10 @@ func (s *Store) ProbeStatuses(userID int64) ([]ProbeStatus, error) {
 		  AND EXISTS (
 			SELECT 1
 			FROM check_results cr
-			INNER JOIN checks c ON c.id = cr.check_id
+			INNER JOIN checks c ON c.uid = cr.check_uid
 			WHERE cr.probe_id = probes.probe_id
 			  AND c.user_id = $1
+			  AND c.deleted_at IS NULL
 		  )
 		ORDER BY probe_id
 	`, userID)

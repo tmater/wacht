@@ -146,6 +146,98 @@ def test_incidents_api_shape(server, mock):
         cleanup.finish()
 
 
+def test_delete_recreate_preserves_incident_history_without_reopening_status(server, mock):
+    server.wait_for_health()
+    mock.set_state("up")
+    token = server.login()
+    suffix = uuid.uuid4().hex[:8]
+    check_id = f"smoke-incidents-recreate-{suffix}"
+    cleanup = CleanupScope()
+
+    def create_check():
+        server.create_check(
+            token,
+            {
+                "id": check_id,
+                "type": "http",
+                "target": HTTP_TARGET,
+                "interval": 1,
+            },
+        )
+
+    create_check()
+
+    try:
+        with cleanup.preserve_primary_error():
+            wait_for(
+                "recreated-history check to become healthy before outage",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: healthy_status(server, token, check_id),
+            )
+
+            mock.set_state("down")
+
+            opened = wait_for(
+                "delete/recreate outage to open an incident row",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: open_incident(server, token, check_id),
+            )
+            historical_incident = opened["incidents"][0]
+            assert_open_incident(historical_incident, check_id)
+            assert_open_status(opened["status"], historical_incident, check_id)
+
+            server.delete_check(token, check_id)
+
+            deleted_status = status_for_check(server, token, check_id)
+            if deleted_status is not None:
+                raise SmokeError(f"expected deleted check {check_id} to disappear from /status, got {deleted_status}")
+
+            history_after_delete = incidents_for_checks(server, token, check_id)
+            if len(history_after_delete) != 1:
+                raise SmokeError(f"expected 1 preserved incident after delete, got {history_after_delete}")
+            assert_deleted_resolution(history_after_delete[0], check_id)
+            if history_after_delete[0].get("id") != historical_incident.get("id"):
+                raise SmokeError(
+                    f"expected delete to preserve original incident id {historical_incident.get('id')}, got {history_after_delete}"
+                )
+
+            mock.set_state("up")
+            create_check()
+
+            recreated_status = wait_for(
+                "recreated check to return healthy without inherited incident state",
+                timeout_seconds=60,
+                interval_seconds=2,
+                fn=lambda: healthy_status(server, token, check_id),
+            )
+            assert_cleared_status(recreated_status, check_id)
+
+            history_after_recreate = incidents_for_checks(server, token, check_id)
+            if len(history_after_recreate) != 1:
+                raise SmokeError(f"expected 1 preserved incident after recreate, got {history_after_recreate}")
+            assert_deleted_resolution(history_after_recreate[0], check_id)
+            if history_after_recreate[0].get("id") != historical_incident.get("id"):
+                raise SmokeError(
+                    f"expected recreate to keep only preserved historical incident {historical_incident.get('id')}, got {history_after_recreate}"
+                )
+
+            print(
+                json.dumps(
+                    {
+                        "preserved_incident": history_after_recreate[0],
+                        "recreated_status": recreated_status,
+                    },
+                    indent=2,
+                )
+            )
+    finally:
+        cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
+        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.finish()
+
+
 def incidents_for_checks(server, token, *check_ids):
     wanted = set(check_ids)
     return [incident for incident in server.list_incidents(token) if incident.get("check_id") in wanted]
@@ -220,6 +312,22 @@ def assert_resolved_incident(incident, check_id):
         raise SmokeError(f"expected duration_ms int for {check_id}, got {incident}")
     if duration_ms <= 0:
         raise SmokeError(f"expected duration_ms > 0 for {check_id}, got {incident}")
+
+
+def assert_deleted_resolution(incident, check_id):
+    started_at = assert_common_incident_fields(incident, check_id)
+
+    if "resolved_at" not in incident:
+        raise SmokeError(f"expected deleted incident for {check_id} to include resolved_at, got {incident}")
+    resolved_at = parse_timestamp(incident.get("resolved_at"), "resolved_at", check_id)
+    if resolved_at < started_at:
+        raise SmokeError(f"expected resolved_at on or after started_at for deleted {check_id}, got {incident}")
+
+    duration_ms = incident.get("duration_ms")
+    if not isinstance(duration_ms, int):
+        raise SmokeError(f"expected duration_ms int for deleted {check_id}, got {incident}")
+    if duration_ms < 0:
+        raise SmokeError(f"expected duration_ms >= 0 for deleted {check_id}, got {incident}")
 
 
 def assert_common_incident_fields(incident, check_id):
