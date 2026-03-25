@@ -1,4 +1,4 @@
-name: Browser test
+name: Frontend CI
 
 on:
   push:
@@ -10,9 +10,36 @@ permissions:
   contents: read
 
 jobs:
+  frontend:
+    # Run PR CI for the repo owner and Dependabot-authored updates.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login == 'tmater' || github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: wacht-web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: wacht-web
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: wacht-web
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: wacht-web
+        run: npm run build
+
   browser:
     # Run PR CI for the repo owner and Dependabot-authored updates.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login == 'tmater' || github.event.pull_request.user.login == 'dependabot[bot]' }}
+    needs: frontend
     runs-on: ubuntu-latest
 
     steps:

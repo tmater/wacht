@@ -2,6 +2,17 @@ import { useEffect, useState } from 'react'
 import { API_URL, authHeaders } from './api.js'
 import * as ui from './ui.js'
 
+async function loadSignupRequests(onLogout, setRequests, setErr) {
+  try {
+    const res = await fetch(`${API_URL}/api/admin/signup-requests`, { headers: authHeaders() })
+    if (res.status === 401) { onLogout(); return }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    setRequests(await res.json())
+  } catch (e) {
+    setErr(e.message)
+  }
+}
+
 export default function AccountPage({ email, isAdmin, onLogout }) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -81,18 +92,9 @@ function SignupRequests({ onLogout }) {
   const [approved, setApproved] = useState(null) // { email, setupToken, expiresAt }
   const [err, setErr] = useState(null)
 
-  async function load() {
-    try {
-      const res = await fetch(`${API_URL}/api/admin/signup-requests`, { headers: authHeaders() })
-      if (res.status === 401) { onLogout(); return }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setRequests(await res.json())
-    } catch (e) {
-      setErr(e.message)
-    }
-  }
-
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    loadSignupRequests(onLogout, setRequests, setErr)
+  }, [onLogout])
 
   async function handleApprove(id) {
     try {
@@ -103,7 +105,7 @@ function SignupRequests({ onLogout }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setApproved({ email: data.email, setupToken: data.setup_token, expiresAt: data.expires_at })
-      load()
+      await loadSignupRequests(onLogout, setRequests, setErr)
     } catch (e) {
       setErr(e.message)
     }
@@ -116,7 +118,7 @@ function SignupRequests({ onLogout }) {
         headers: authHeaders(),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      load()
+      await loadSignupRequests(onLogout, setRequests, setErr)
     } catch (e) {
       setErr(e.message)
     }
