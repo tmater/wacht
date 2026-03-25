@@ -2,6 +2,12 @@
 # Keep this enabled for private/internal monitoring. Disable it for hosted
 # or managed-probe deployments that must not reach internal networks.
 allow_private_targets: true
+# Reverse-proxy CIDRs trusted to forward client IPs for auth rate limiting.
+# Leave unset to trust only loopback proxies. For Docker/nginx or remote
+# reverse proxies, set this explicitly to the proxy subnet(s). Set to [] to
+# disable forwarded-header trust entirely.
+# trusted_proxies:
+#   - 172.16.0.0/12
 probes:
   - id: probe-1
     secret: changeme-probe-1
