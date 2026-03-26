@@ -1,6 +1,6 @@
 # Wacht
 
-[![CI](https://github.com/tmater/wacht/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/tmater/wacht/actions/workflows/ci.yml)
+[![Go Test](https://github.com/tmater/wacht/actions/workflows/go-test.yml/badge.svg?branch=master)](https://github.com/tmater/wacht/actions/workflows/go-test.yml)
 [![Smoke test](https://github.com/tmater/wacht/actions/workflows/smoke.yml/badge.svg?branch=master)](https://github.com/tmater/wacht/actions/workflows/smoke.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0f172a.svg)](LICENSE)
 [![Status: Early development](https://img.shields.io/badge/status-early%20development-b45309.svg)](https://github.com/tmater/wacht)
