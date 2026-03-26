@@ -6,12 +6,7 @@ import Navbar from './Navbar.jsx'
 import Dashboard from './Dashboard.jsx'
 import AccountPage from './AccountPage.jsx'
 import PublicStatusPage from './PublicStatusPage.jsx'
-
-function stripBasePath(pathname) {
-  const basePath = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')
-  if (!basePath || basePath === '/') return pathname
-  return pathname.startsWith(basePath) ? pathname.slice(basePath.length) || '/' : pathname
-}
+import { stripBasePath } from './paths.js'
 
 function publicStatusSlugFromPath(pathname) {
   const relativePath = stripBasePath(pathname)

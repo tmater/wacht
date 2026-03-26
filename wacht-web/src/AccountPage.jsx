@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { API_URL, authHeaders } from './api.js'
+import { appURL } from './paths.js'
 import * as ui from './ui.js'
 
 async function loadSignupRequests(onLogout, setRequests, setErr) {
@@ -14,8 +15,7 @@ async function loadSignupRequests(onLogout, setRequests, setErr) {
 }
 
 function publicStatusURL(slug) {
-  const base = new URL(import.meta.env.BASE_URL ?? '/', window.location.origin)
-  return new URL(`public/${encodeURIComponent(slug)}`, base).toString()
+  return appURL(`/public/${encodeURIComponent(slug)}`)
 }
 
 export default function AccountPage({ email, isAdmin, onLogout, publicStatusSlug }) {
