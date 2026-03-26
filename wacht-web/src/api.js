@@ -1,4 +1,4 @@
-export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
+export const API_URL = import.meta.env.VITE_API_URL ?? ''
 export const REFRESH_INTERVAL_MS = 30_000
 export const CHECK_TYPES = ['http', 'tcp', 'dns']
 

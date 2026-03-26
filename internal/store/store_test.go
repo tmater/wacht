@@ -86,6 +86,14 @@ func saveResult(t *testing.T, s *Store, checkID, probeID string, up bool) {
 func TestOpenIncident_Deduplication(t *testing.T) {
 	s := newTestStore(t)
 
+	user, err := s.CreateUser("open-dedup@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
 	alreadyOpen, err := s.OpenIncident("check-1")
 	if err != nil {
 		t.Fatalf("first OpenIncident: %v", err)
@@ -159,7 +167,14 @@ func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
 	}
 
 	var openCount int
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM incidents WHERE check_id = $1 AND resolved_at IS NULL`, "check-1").Scan(&openCount); err != nil {
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM incidents i
+		JOIN checks c ON c.uid = i.check_uid
+		WHERE c.id = $1
+		  AND c.deleted_at IS NULL
+		  AND i.resolved_at IS NULL
+	`, "check-1").Scan(&openCount); err != nil {
 		t.Fatalf("count open incidents: %v", err)
 	}
 	if openCount != 1 {
@@ -169,6 +184,14 @@ func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
 
 func TestResolveIncident_AllowsReopening(t *testing.T) {
 	s := newTestStore(t)
+
+	user, err := s.CreateUser("resolve-reopen@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
 
 	if _, err := s.OpenIncident("check-1"); err != nil {
 		t.Fatalf("OpenIncident: %v", err)
@@ -472,6 +495,14 @@ func TestCheckStatuses_UsesOpenIncidentAsDownTruth(t *testing.T) {
 func TestRecentResultsPerProbe_LatestPerProbe(t *testing.T) {
 	s := newTestStore(t)
 
+	user, err := s.CreateUser("recent-per-probe@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
 	// probe-a: two results — first up, then down
 	saveResult(t, s, "check-1", "probe-a", true)
 	saveResult(t, s, "check-1", "probe-a", false)
@@ -502,6 +533,14 @@ func TestRecentResultsPerProbe_LatestPerProbe(t *testing.T) {
 
 func TestRecentResultsByProbe_OrderAndLimit(t *testing.T) {
 	s := newTestStore(t)
+
+	user, err := s.CreateUser("recent-by-probe@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
 
 	// Insert 3 results: up, up, down (oldest to newest)
 	saveResult(t, s, "check-1", "probe-a", true)
@@ -577,6 +616,14 @@ func TestCheckStatuses_ScopedToUser(t *testing.T) {
 
 func TestEvictOldResults_DeletesOldKeepsNew(t *testing.T) {
 	s := newTestStore(t)
+
+	user, err := s.CreateUser("evict-old@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
 
 	// Insert one old result and one recent result.
 	old := proto.CheckResult{
@@ -805,6 +852,14 @@ func TestListIncidents_ScopedToUser(t *testing.T) {
 
 func TestEvictOldResults_NothingToDelete(t *testing.T) {
 	s := newTestStore(t)
+
+	user, err := s.CreateUser("evict-none@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
 
 	saveResult(t, s, "check-1", "probe-a", true) // recent result
 
