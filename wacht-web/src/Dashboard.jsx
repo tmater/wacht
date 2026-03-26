@@ -6,6 +6,30 @@ import CheckRow from './CheckRow.jsx'
 import ProbeRow from './ProbeRow.jsx'
 import IncidentRow from './IncidentRow.jsx'
 
+async function loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError) {
+  try {
+    const [statusRes, checksRes, incidentsRes] = await Promise.all([
+      fetch(`${API_URL}/status`, { headers: authHeaders() }),
+      fetch(`${API_URL}/api/checks`, { headers: authHeaders() }),
+      fetch(`${API_URL}/api/incidents`, { headers: authHeaders() }),
+    ])
+    if (checksRes.status === 401) { onLogout(); return }
+    if (!statusRes.ok) throw new Error(`status HTTP ${statusRes.status}`)
+    if (!checksRes.ok) throw new Error(`checks HTTP ${checksRes.status}`)
+    const statusData = await statusRes.json()
+    const checksData = await checksRes.json()
+    const incidentsData = incidentsRes.ok ? await incidentsRes.json() : []
+    setStatuses(statusData.checks ?? [])
+    setProbes(statusData.probes ?? [])
+    setChecks(checksData ?? [])
+    setIncidents(incidentsData ?? [])
+    setLastUpdated(new Date())
+    setError(null)
+  } catch (e) {
+    setError(e.message)
+  }
+}
+
 export default function Dashboard({ onLogout, showProbes = true }) {
   const [checks, setChecks] = useState([])
   const [statuses, setStatuses] = useState([])
@@ -16,56 +40,29 @@ export default function Dashboard({ onLogout, showProbes = true }) {
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
 
-  async function fetchAll() {
-    try {
-      const [statusRes, checksRes, incidentsRes] = await Promise.all([
-        fetch(`${API_URL}/status`, { headers: authHeaders() }),
-        fetch(`${API_URL}/api/checks`, { headers: authHeaders() }),
-        fetch(`${API_URL}/api/incidents`, { headers: authHeaders() }),
-      ])
-      if (checksRes.status === 401) { onLogout(); return }
-      if (!statusRes.ok) throw new Error(`status HTTP ${statusRes.status}`)
-      if (!checksRes.ok) throw new Error(`checks HTTP ${checksRes.status}`)
-      const statusData = await statusRes.json()
-      const checksData = await checksRes.json()
-      const incidentsData = incidentsRes.ok ? await incidentsRes.json() : []
-      setStatuses(statusData.checks ?? [])
-      setProbes(statusData.probes ?? [])
-      setChecks(checksData ?? [])
-      setIncidents(incidentsData ?? [])
-      setLastUpdated(new Date())
-      setError(null)
-    } catch (e) {
-      setError(e.message)
-    }
-  }
-
   useEffect(() => {
-    fetchAll()
-    const id = setInterval(fetchAll, REFRESH_INTERVAL_MS)
+    loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError)
+    const id = setInterval(() => {
+      loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError)
+    }, REFRESH_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [])
+  }, [onLogout])
 
   async function handleDelete(id) {
     if (!confirm(`Delete check "${id}"?`)) return
     try {
       const res = await fetch(`${API_URL}/api/checks/${id}`, { method: 'DELETE', headers: authHeaders() })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      fetchAll()
+      await loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError)
     } catch (e) {
       setError(e.message)
     }
   }
 
-  async function handleLogoutClick() {
-    await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', headers: authHeaders() })
-    onLogout()
-  }
-
   function handleSaved() {
     setShowAddForm(false)
     setEditingId(null)
-    fetchAll()
+    loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError)
   }
 
   const statusByID = Object.fromEntries(statuses.map(s => [s.check_id, s]))

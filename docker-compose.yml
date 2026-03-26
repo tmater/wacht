@@ -21,7 +21,7 @@ services:
         BINARY: wacht-server
     command: ["--config=/etc/wacht/server.yaml", "--dsn=postgres://wacht:wacht@postgres/wacht?sslmode=disable"]
     volumes:
-      - ./config/server.yaml:/etc/wacht/server.yaml:ro
+      - ${SERVER_CONFIG_PATH:-./config/server.yaml}:/etc/wacht/server.yaml:ro
     expose:
       - "8080"
     depends_on:
@@ -69,7 +69,7 @@ services:
     build:
       context: ./wacht-web
     ports:
-      - "3000:80"
+      - "${WACHT_WEB_PORT:-3000}:80"
     depends_on:
       - server
     restart: unless-stopped

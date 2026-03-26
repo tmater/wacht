@@ -129,6 +129,24 @@ TOKEN=$(curl -s -X POST http://<your-host>:3000/api/auth/login \
 curl -H "Authorization: Bearer $TOKEN" http://<your-host>:3000/status
 ```
 
+## Browser tests
+
+Run the browser suite against a disposable packaged stack:
+
+```sh
+make browser
+```
+
+That boots the normal nginx + server + Postgres path with a dedicated seed
+config from `config/server.browser.yaml`, waits for `http://127.0.0.1:13000`,
+runs the Playwright specs in `wacht-web/tests/`, then tears the stack down.
+
+Override the default browser stack settings if needed:
+
+```sh
+BROWSER_WEB_PORT=14000 BROWSER_PROJECT=my-wacht-browser make browser
+```
+
 ## License
 
 [AGPL-3.0](LICENSE)
