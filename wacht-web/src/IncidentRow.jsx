@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import StatusBadge from './StatusBadge.jsx'
 
 function formatDuration(ms) {
@@ -81,9 +82,19 @@ function trimDuration(duration) {
 export default function IncidentRow({ incident }) {
   const started = new Date(incident.started_at)
   const open = incident.resolved_at == null
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!open || incident.duration_ms != null) {
+      return undefined
+    }
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [incident.duration_ms, open])
+
   const duration = incident.duration_ms != null
     ? trimDuration(formatDuration(incident.duration_ms))
-    : trimDuration(formatDuration(Date.now() - started.getTime()))
+    : trimDuration(formatDuration(now - started.getTime()))
   const deliveryStatus = incidentDeliveryStatus(incident)
 
   return (

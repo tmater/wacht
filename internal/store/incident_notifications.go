@@ -72,6 +72,7 @@ func (s *Store) ClaimDueIncidentNotifications(now, staleBefore time.Time, limit 
 			SELECT n.id
 			FROM incident_notifications n
 			JOIN incidents i ON i.id = n.incident_id
+			JOIN checks c ON c.uid = i.check_uid
 			WHERE (
 				(n.state IN ($1, $2) AND n.next_attempt_at <= $3)
 				OR (n.state = $4 AND n.last_attempt_at <= $5)
@@ -86,10 +87,11 @@ func (s *Store) ClaimDueIncidentNotifications(now, staleBefore time.Time, limit 
 		    attempts = n.attempts + 1,
 		    last_attempt_at = $3,
 		    updated_at = $3
-		FROM due, incidents i
+		FROM due, incidents i, checks c
 		WHERE n.id = due.id
 		  AND i.id = n.incident_id
-		RETURNING n.id, n.incident_id, i.check_id, n.event, n.webhook_url, n.payload, n.attempts
+		  AND c.uid = i.check_uid
+		RETURNING n.id, n.incident_id, c.id, n.event, n.webhook_url, n.payload, n.attempts
 	`, notificationStatePending, notificationStateRetrying, now, notificationStateProcessing, staleBefore, notificationEventDown, limit)
 	if err != nil {
 		return nil, err
@@ -212,9 +214,12 @@ func (s *Store) openIncidentWithNotification(checkID string, request *Notificati
 
 	var incidentID int64
 	err = tx.QueryRow(`
-		INSERT INTO incidents (check_id, user_id, started_at)
-		VALUES ($1, (SELECT user_id FROM checks WHERE id = $1), $2)
-		ON CONFLICT (check_id) WHERE resolved_at IS NULL DO NOTHING
+		INSERT INTO incidents (check_uid, user_id, started_at)
+		SELECT uid, user_id, $2
+		FROM checks
+		WHERE id = $1
+		  AND deleted_at IS NULL
+		ON CONFLICT (check_uid) WHERE resolved_at IS NULL DO NOTHING
 		RETURNING id
 	`, checkID, now).Scan(&incidentID)
 	if err == sql.ErrNoRows {
@@ -245,7 +250,13 @@ func (s *Store) resolveIncidentWithNotification(checkID string, request *Notific
 	err = tx.QueryRow(`
 		UPDATE incidents
 		SET resolved_at = $1
-		WHERE check_id = $2 AND resolved_at IS NULL
+		WHERE check_uid = (
+			SELECT uid
+			FROM checks
+			WHERE id = $2
+			  AND deleted_at IS NULL
+		)
+		  AND resolved_at IS NULL
 		RETURNING id
 	`, now, checkID).Scan(&incidentID)
 	if err == sql.ErrNoRows {

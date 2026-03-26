@@ -30,11 +30,26 @@ export default function App({ appName = 'Wacht', navExtra = null, showProbes = t
     setMeLoaded(false)
   }
 
-  function handleLogout() {
-    clearToken()
-    clearEmail()
-    const loginUrl = import.meta.env.VITE_LOGIN_URL ?? '/'
-    window.location.href = loginUrl
+  async function handleLogout() {
+    try {
+      if (getToken()) {
+        await fetch(`${API_URL}/api/auth/logout`, {
+          method: 'POST',
+          headers: authHeaders(),
+        })
+      }
+    } catch {
+      // Local auth state should still be cleared even if the logout request fails.
+    } finally {
+      clearToken()
+      clearEmail()
+      setTokenState(null)
+      setEmail(null)
+      setIsAdmin(false)
+      setMeLoaded(false)
+      const loginUrl = import.meta.env.VITE_LOGIN_URL ?? '/'
+      window.location.href = loginUrl
+    }
   }
 
   if (!token && setupToken) return <SetupPasswordPage setupToken={setupToken} onComplete={handleLogin} appName={appName} />

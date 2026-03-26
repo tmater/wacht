@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/tmater/wacht/internal/alert"
@@ -24,6 +25,7 @@ type Handler struct {
 	probeProcessor probeProcessor
 	loginLimiter   *rateLimiter
 	signupLimiter  *rateLimiter
+	trustedProxies []netip.Prefix
 }
 
 type notificationJSON struct {
@@ -46,6 +48,7 @@ func New(store *store.Store, cfg *config.ServerConfig) *Handler {
 		probeProcessor: NewProbeProcessor(store),
 		loginLimiter:   newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
 		signupLimiter:  newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
+		trustedProxies: append([]netip.Prefix(nil), cfg.TrustedProxyCIDRs...),
 	}
 }
 
@@ -63,10 +66,10 @@ func (h *Handler) Routes() http.Handler {
 
 	// Public routes — no auth required.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("POST /api/auth/login", h.loginLimiter.middleware(h.handleLogin))
+	mux.HandleFunc("POST /api/auth/login", h.rateLimited(h.loginLimiter, h.handleLogin))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
-	mux.HandleFunc("POST /api/auth/setup-password", h.signupLimiter.middleware(h.handleSetupPassword))
-	mux.HandleFunc("POST /api/auth/request-access", h.signupLimiter.middleware(h.handleRequestAccess))
+	mux.HandleFunc("POST /api/auth/setup-password", h.rateLimited(h.signupLimiter, h.handleSetupPassword))
+	mux.HandleFunc("POST /api/auth/request-access", h.rateLimited(h.signupLimiter, h.handleRequestAccess))
 
 	// Probe routes — per-probe auth.
 	probe := http.NewServeMux()
