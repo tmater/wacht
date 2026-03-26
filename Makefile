@@ -14,7 +14,7 @@ SMOKE_VENV ?= .venv-smoke
 SMOKE_PYTHON = $(SMOKE_VENV)/bin/python3
 SMOKE_STAMP = $(SMOKE_VENV)/.requirements-installed
 
-.PHONY: up down rebuild restart logs test smoke smoke-venv browser browser-up browser-down browser-logs
+.PHONY: up down rebuild restart logs test smoke release-smoke smoke-venv browser browser-up browser-down browser-logs
 
 # Start full dev stack (server + 3 probes + mock)
 up:
@@ -85,3 +85,7 @@ browser:
 		sleep 1; \
 	done; \
 	(cd $(BROWSER_WEB_DIR) && PLAYWRIGHT_BASE_URL=http://127.0.0.1:$(BROWSER_WEB_PORT) E2E_EMAIL=$(BROWSER_EMAIL) E2E_PASSWORD=$(BROWSER_PASSWORD) npm run test:e2e)
+
+# Run the root docker-compose.yml release-install smoke path.
+release-smoke: $(SMOKE_STAMP)
+	$(SMOKE_PYTHON) -m pytest smoke/release/test_install.py -x -s

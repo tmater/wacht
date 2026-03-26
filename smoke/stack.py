@@ -7,11 +7,12 @@ import subprocess
 # ComposeStack owns the smoke stack lifecycle so scenario code only deals with
 # HTTP behavior, not Docker CLI details.
 class ComposeStack:
-    def __init__(self, compose_file, repo_root):
+    def __init__(self, compose_file, repo_root, *, env_overrides=None):
         self.compose_file = str(compose_file)
         self.repo_root = str(repo_root)
         self.docker = os.environ.get("DOCKER", "docker")
-        self.project_name = os.environ.get("SMOKE_COMPOSE_PROJECT", "wacht-smoke")
+        self.env_overrides = dict(env_overrides or {})
+        self.project_name = self.env_overrides.get("COMPOSE_PROJECT_NAME", os.environ.get("SMOKE_COMPOSE_PROJECT", "wacht-smoke"))
 
     def up(self):
         self._run("compose", "-f", self.compose_file, "up", "-d", "--build")
@@ -35,4 +36,5 @@ class ComposeStack:
         # A dedicated project name prevents the smoke stack from colliding with
         # the normal local dev stack.
         env["COMPOSE_PROJECT_NAME"] = self.project_name
+        env.update(self.env_overrides)
         subprocess.run(cmd, cwd=self.repo_root, env=env, check=check)

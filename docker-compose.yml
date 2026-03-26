@@ -36,7 +36,7 @@ services:
         BINARY: wacht-probe
     command: ["--config=/etc/wacht/probe.yaml"]
     volumes:
-      - ./config/probe-1.yaml:/etc/wacht/probe.yaml:ro
+      - ${PROBE_1_CONFIG_PATH:-./config/probe-1.yaml}:/etc/wacht/probe.yaml:ro
     depends_on:
       - server
     restart: unless-stopped
@@ -48,7 +48,7 @@ services:
         BINARY: wacht-probe
     command: ["--config=/etc/wacht/probe.yaml"]
     volumes:
-      - ./config/probe-2.yaml:/etc/wacht/probe.yaml:ro
+      - ${PROBE_2_CONFIG_PATH:-./config/probe-2.yaml}:/etc/wacht/probe.yaml:ro
     depends_on:
       - server
     restart: unless-stopped
@@ -60,7 +60,7 @@ services:
         BINARY: wacht-probe
     command: ["--config=/etc/wacht/probe.yaml"]
     volumes:
-      - ./config/probe-3.yaml:/etc/wacht/probe.yaml:ro
+      - ${PROBE_3_CONFIG_PATH:-./config/probe-3.yaml}:/etc/wacht/probe.yaml:ro
     depends_on:
       - server
     restart: unless-stopped

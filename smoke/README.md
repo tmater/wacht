@@ -42,6 +42,12 @@ Run a single scenario:
 python3 -m pytest smoke/tests -x -s -k startup
 ```
 
+Run the root install path only:
+
+```sh
+make release-smoke
+```
+
 Override the host port if needed:
 
 ```sh

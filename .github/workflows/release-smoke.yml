@@ -1,0 +1,29 @@
+name: Release install smoke
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  release-smoke:
+    # Run PR CI for the repo owner and Dependabot-authored updates.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login == 'tmater' || github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install smoke test dependencies
+        run: python3 -m pip install -r smoke/requirements.txt
+
+      - name: Run release-install smoke test
+        run: python3 -m pytest smoke/release/test_install.py -x -s
