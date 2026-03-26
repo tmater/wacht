@@ -24,6 +24,42 @@ func TestLoadServer_ParsesAllowPrivateTargets(t *testing.T) {
 	}
 }
 
+func TestLoadServer_RejectsShippedSampleSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	data := []byte("probes:\n  - id: probe-1\n    secret: replace-with-a-strong-secret\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := LoadServer(path); err == nil {
+		t.Fatal("LoadServer() error = nil, want shipped sample probe secret rejection")
+	}
+}
+
+func TestLoadServer_RejectsCopiedShippedSampleSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	data := []byte("probes:\n  - id: probe-4\n    secret: replace-with-a-strong-secret\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := LoadServer(path); err == nil {
+		t.Fatal("LoadServer() error = nil, want copied shipped sample probe secret rejection")
+	}
+}
+
+func TestLoadServer_RejectsShippedSeedPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	data := []byte("probes:\n  - id: probe-1\n    secret: s3cr3t\nseed_user:\n  email: admin@wacht.local\n  password: replace-with-a-strong-password\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := LoadServer(path); err == nil {
+		t.Fatal("LoadServer() error = nil, want shipped sample seed password rejection")
+	}
+}
+
 func TestLoadProbe_ParsesAllowPrivateTargets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "probe.yaml")
 	data := []byte("secret: s3cr3t\nserver: http://server:8080\nprobe_id: probe-1\nallow_private_targets: true\n")
@@ -37,6 +73,30 @@ func TestLoadProbe_ParsesAllowPrivateTargets(t *testing.T) {
 	}
 	if !cfg.AllowPrivateTargets {
 		t.Fatal("expected allow_private_targets to be true")
+	}
+}
+
+func TestLoadProbe_RejectsShippedSampleSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.yaml")
+	data := []byte("secret: replace-with-a-strong-secret\nserver: http://server:8080\nprobe_id: probe-1\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := LoadProbe(path); err == nil {
+		t.Fatal("LoadProbe() error = nil, want shipped sample probe secret rejection")
+	}
+}
+
+func TestLoadProbe_RejectsCopiedShippedSampleSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.yaml")
+	data := []byte("secret: replace-with-a-strong-secret\nserver: http://server:8080\nprobe_id: probe-4\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := LoadProbe(path); err == nil {
+		t.Fatal("LoadProbe() error = nil, want copied shipped sample probe secret rejection")
 	}
 }
 

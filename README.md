@@ -25,14 +25,14 @@ Edit `config/server.yaml` — provision each probe with its own secret and confi
 ```yaml
 probes:
   - id: probe-1
-    secret: replace-with-a-strong-secret-1
+    secret: replace-with-a-strong-secret
   - id: probe-2
-    secret: replace-with-a-strong-secret-2
+    secret: replace-with-a-strong-secret
   - id: probe-3
-    secret: replace-with-a-strong-secret-3
+    secret: replace-with-a-strong-secret
 seed_user:
   email: admin@wacht.local
-  password: changeme
+  password: replace-with-a-strong-password
 checks:
   - id: my-site
     type: http
@@ -52,7 +52,7 @@ both the server and the matching probe config.
 Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each probe must use the matching secret provisioned in `config/server.yaml`:
 
 ```yaml
-secret: replace-with-a-strong-secret-1
+secret: replace-with-a-strong-secret
 server: http://server:8080
 probe_id: probe-1
 heartbeat_interval: 30s
@@ -66,7 +66,7 @@ docker compose up -d
 
 The dashboard is available at `http://<your-host>:3000`.
 
-**First login:** open `http://localhost:3000`, sign in with the `seed_user` credentials (`admin@wacht.local` / `changeme`), and change the password immediately. The seed user is only created on first boot when no users exist yet.
+**First login:** open `http://localhost:3000` and sign in with the `seed_user` credentials you configured in `config/server.yaml`. The server refuses to start until the shipped sample secrets and admin password are replaced.
 
 ## Check types
 
@@ -123,7 +123,7 @@ Requests must include a valid session token.
 # Log in and capture the session token:
 TOKEN=$(curl -s -X POST http://<your-host>:3000/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"admin@wacht.local","password":"changeme"}' | jq -r .token)
+  -d '{"email":"admin@wacht.local","password":"<your-configured-admin-password>"}' | jq -r .token)
 
 # Fetch current status:
 curl -H "Authorization: Bearer $TOKEN" http://<your-host>:3000/status

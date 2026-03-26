@@ -130,17 +130,15 @@ def prepare_release_configs(temp_dir: Path) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
 
     server_text = (CONFIG_DIR / "server.yaml").read_text(encoding="utf-8")
-    server_text = server_text.replace("secret: changeme-probe-1", "secret: release-secret-1")
-    server_text = server_text.replace("secret: changeme-probe-2", "secret: release-secret-2")
-    server_text = server_text.replace("secret: changeme-probe-3", "secret: release-secret-3")
+    server_text = server_text.replace("secret: replace-with-a-strong-secret", "secret: release-secret")
     server_text = server_text.replace("email: admin@wacht.local", f"email: {SEED_EMAIL}")
-    server_text = server_text.replace("password: changeme", f"password: {SEED_PASSWORD}")
+    server_text = server_text.replace("password: replace-with-a-strong-password", f"password: {SEED_PASSWORD}")
     server_text = re.sub(r"\nchecks:\n[\s\S]*\Z", "\nchecks: []\n", server_text)
     (config_dir / "server.yaml").write_text(server_text, encoding="utf-8")
 
     for probe_id in ("1", "2", "3"):
         probe_text = (CONFIG_DIR / f"probe-{probe_id}.yaml").read_text(encoding="utf-8")
-        probe_text = probe_text.replace(f"secret: changeme-probe-{probe_id}", f"secret: release-secret-{probe_id}")
+        probe_text = probe_text.replace("secret: replace-with-a-strong-secret", "secret: release-secret")
         (config_dir / f"probe-{probe_id}.yaml").write_text(probe_text, encoding="utf-8")
 
     return config_dir

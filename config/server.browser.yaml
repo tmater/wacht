@@ -4,5 +4,5 @@
 probes: []
 seed_user:
   email: browser@wacht.local
-  password: browserpassword
+  password: browser-password-a13f6d8c
 checks: []

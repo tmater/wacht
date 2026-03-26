@@ -5,7 +5,7 @@ BROWSER_PROJECT ?= wacht-browser
 BROWSER_WEB_PORT ?= 13000
 BROWSER_SERVER_CONFIG ?= $(REPO_ROOT)/config/server.browser.yaml
 BROWSER_EMAIL ?= browser@wacht.local
-BROWSER_PASSWORD ?= browserpassword
+BROWSER_PASSWORD ?= browser-password-a13f6d8c
 BROWSER_SERVICES = postgres server wacht-web
 BROWSER_WEB_DIR = $(REPO_ROOT)/wacht-web
 BROWSER_COMPOSE = COMPOSE_PROJECT_NAME=$(BROWSER_PROJECT) SERVER_CONFIG_PATH=$(BROWSER_SERVER_CONFIG) WACHT_WEB_PORT=$(BROWSER_WEB_PORT) $(DOCKER) compose -f $(REPO_ROOT)/docker-compose.yml

@@ -16,6 +16,8 @@ const (
 	DefaultAuthRateLimitWindow    = time.Minute
 	DefaultProbeOfflineAfter      = 90 * time.Second
 	DefaultProbeHeartbeatInterval = 30 * time.Second
+	DefaultProbeSecret            = "replace-with-a-strong-secret"
+	DefaultSeedPassword           = "replace-with-a-strong-password"
 )
 
 var DefaultTrustedProxies = []string{
@@ -78,10 +80,16 @@ func LoadServer(path string) (*ServerConfig, error) {
 		if probe.Secret == "" {
 			return nil, fmt.Errorf("config: probes[%d].secret is required", i)
 		}
+		if probe.Secret == DefaultProbeSecret {
+			return nil, fmt.Errorf("config: probes[%d].secret must be changed from the shipped sample value", i)
+		}
 		if _, ok := seen[probe.ID]; ok {
 			return nil, fmt.Errorf("config: duplicate probe id %q", probe.ID)
 		}
 		seen[probe.ID] = struct{}{}
+	}
+	if cfg.SeedUser.Password == DefaultSeedPassword {
+		return nil, fmt.Errorf("config: seed_user.password must be changed from the shipped sample value")
 	}
 	if cfg.ProbeOfflineAfter <= 0 {
 		cfg.ProbeOfflineAfter = DefaultProbeOfflineAfter
@@ -126,6 +134,9 @@ func LoadProbe(path string) (*ProbeConfig, error) {
 	}
 	if cfg.ProbeID == "" {
 		return nil, fmt.Errorf("config: probe_id is required")
+	}
+	if cfg.Secret == DefaultProbeSecret {
+		return nil, fmt.Errorf("config: secret must be changed from the shipped sample value")
 	}
 	if cfg.HeartbeatInterval == 0 {
 		cfg.HeartbeatInterval = DefaultProbeHeartbeatInterval

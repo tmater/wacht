@@ -3,14 +3,14 @@
 allow_private_targets: true
 probes:
   - id: probe-1
-    secret: changeme-probe-1
+    secret: dev-secret-1-a7f3c921
   - id: probe-2
-    secret: changeme-probe-2
+    secret: dev-secret-2-f18d44be
   - id: probe-3
-    secret: changeme-probe-3
+    secret: dev-secret-3-c6a28d51
 seed_user:
   email: dev@wacht.local
-  password: devpassword
+  password: dev-password-92b3e4f7
 checks:
   - id: check-up
     type: http

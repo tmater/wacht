@@ -1,0 +1,7 @@
+# Local dev probe config. Hosted/managed probes should keep private targets
+# disabled, but local development needs Docker service access.
+allow_private_targets: true
+secret: dev-secret-3-c6a28d51
+server: http://server:8080
+probe_id: probe-3
+heartbeat_interval: 30s
