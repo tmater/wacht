@@ -153,7 +153,6 @@ Override the default browser stack settings if needed:
 ```sh
 BROWSER_WEB_PORT=14000 BROWSER_PROJECT=my-wacht-browser make browser
 ```
-
 ## License
 
 [AGPL-3.0](LICENSE)
