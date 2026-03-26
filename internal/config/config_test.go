@@ -8,12 +8,19 @@ import (
 	"time"
 )
 
-func TestLoadServer_ParsesAllowPrivateTargets(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("allow_private_targets: true\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+func writeTempConfig(t *testing.T, name, data string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
+	return path
+}
+
+func TestLoadServer_ParsesAllowPrivateTargets(t *testing.T) {
+	path := writeTempConfig(t, "server.yaml", "allow_private_targets: true\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -24,48 +31,34 @@ func TestLoadServer_ParsesAllowPrivateTargets(t *testing.T) {
 	}
 }
 
-func TestLoadServer_RejectsShippedSampleSecrets(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probes:\n  - id: probe-1\n    secret: replace-with-a-strong-secret\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+func TestLoadServer_RejectsShippedSampleValues(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "probe secret",
+			data: "probes:\n  - id: probe-1\n    secret: replace-with-a-strong-password\n",
+		},
+		{
+			name: "seed password",
+			data: "probes:\n  - id: probe-1\n    secret: s3cr3t\nseed_user:\n  email: admin@wacht.local\n  password: replace-with-a-strong-password\n",
+		},
 	}
 
-	if _, err := LoadServer(path); err == nil {
-		t.Fatal("LoadServer() error = nil, want shipped sample probe secret rejection")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfig(t, "server.yaml", tt.data)
 
-func TestLoadServer_RejectsCopiedShippedSampleSecret(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probes:\n  - id: probe-4\n    secret: replace-with-a-strong-secret\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	if _, err := LoadServer(path); err == nil {
-		t.Fatal("LoadServer() error = nil, want copied shipped sample probe secret rejection")
-	}
-}
-
-func TestLoadServer_RejectsShippedSeedPassword(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probes:\n  - id: probe-1\n    secret: s3cr3t\nseed_user:\n  email: admin@wacht.local\n  password: replace-with-a-strong-password\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	if _, err := LoadServer(path); err == nil {
-		t.Fatal("LoadServer() error = nil, want shipped sample seed password rejection")
+			if _, err := LoadServer(path); err == nil {
+				t.Fatalf("LoadServer() error = nil, want shipped sample %s rejection", tt.name)
+			}
+		})
 	}
 }
 
 func TestLoadProbe_ParsesAllowPrivateTargets(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "probe.yaml")
-	data := []byte("secret: s3cr3t\nserver: http://server:8080\nprobe_id: probe-1\nallow_private_targets: true\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "probe.yaml", "secret: s3cr3t\nserver: http://server:8080\nprobe_id: probe-1\nallow_private_targets: true\n")
 
 	cfg, err := LoadProbe(path)
 	if err != nil {
@@ -77,35 +70,27 @@ func TestLoadProbe_ParsesAllowPrivateTargets(t *testing.T) {
 }
 
 func TestLoadProbe_RejectsShippedSampleSecret(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "probe.yaml")
-	data := []byte("secret: replace-with-a-strong-secret\nserver: http://server:8080\nprobe_id: probe-1\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "probe.yaml", "secret: replace-with-a-strong-password\nserver: http://server:8080\nprobe_id: probe-1\n")
 
 	if _, err := LoadProbe(path); err == nil {
 		t.Fatal("LoadProbe() error = nil, want shipped sample probe secret rejection")
 	}
 }
 
-func TestLoadProbe_RejectsCopiedShippedSampleSecret(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "probe.yaml")
-	data := []byte("secret: replace-with-a-strong-secret\nserver: http://server:8080\nprobe_id: probe-4\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+func TestLoadProbeWithOverrides_AppliesSecretOverrideBeforeValidation(t *testing.T) {
+	path := writeTempConfig(t, "probe.yaml", "secret: replace-with-a-strong-password\nserver: http://server:8080\nprobe_id: probe-1\n")
 
-	if _, err := LoadProbe(path); err == nil {
-		t.Fatal("LoadProbe() error = nil, want copied shipped sample probe secret rejection")
+	cfg, err := LoadProbeWithOverrides(path, ProbeConfig{Secret: "dev-probe-secret-a7f3c921"})
+	if err != nil {
+		t.Fatalf("LoadProbeWithOverrides: %v", err)
+	}
+	if cfg.Secret != "dev-probe-secret-a7f3c921" {
+		t.Fatalf("Secret = %q, want override value", cfg.Secret)
 	}
 }
 
 func TestLoadServer_ParsesAuthRateLimit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("auth_rate_limit:\n  requests: 42\n  window: 2m\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "auth_rate_limit:\n  requests: 42\n  window: 2m\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -120,11 +105,7 @@ func TestLoadServer_ParsesAuthRateLimit(t *testing.T) {
 }
 
 func TestLoadServer_DefaultsAuthRateLimit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "probes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -139,11 +120,7 @@ func TestLoadServer_DefaultsAuthRateLimit(t *testing.T) {
 }
 
 func TestLoadServer_DefaultsTrustedProxies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "probes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -167,11 +144,7 @@ func TestLoadServer_DefaultsTrustedProxies(t *testing.T) {
 }
 
 func TestLoadServer_ParsesTrustedProxies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("trusted_proxies:\n  - 203.0.113.0/24\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "trusted_proxies:\n  - 203.0.113.0/24\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -186,11 +159,7 @@ func TestLoadServer_ParsesTrustedProxies(t *testing.T) {
 }
 
 func TestLoadServer_AllowsEmptyTrustedProxies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("trusted_proxies: []\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "trusted_proxies: []\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -205,11 +174,7 @@ func TestLoadServer_AllowsEmptyTrustedProxies(t *testing.T) {
 }
 
 func TestLoadServer_RejectsInvalidTrustedProxyCIDR(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("trusted_proxies:\n  - not-a-cidr\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "trusted_proxies:\n  - not-a-cidr\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	if _, err := LoadServer(path); err == nil {
 		t.Fatal("LoadServer() error = nil, want invalid trusted proxy CIDR")
@@ -217,11 +182,7 @@ func TestLoadServer_RejectsInvalidTrustedProxyCIDR(t *testing.T) {
 }
 
 func TestLoadServer_DefaultsProbeOfflineAfter(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "probes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {
@@ -233,11 +194,7 @@ func TestLoadServer_DefaultsProbeOfflineAfter(t *testing.T) {
 }
 
 func TestLoadServer_ParsesProbeOfflineAfter(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yaml")
-	data := []byte("probe_offline_after: 8s\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	path := writeTempConfig(t, "server.yaml", "probe_offline_after: 8s\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
 
 	cfg, err := LoadServer(path)
 	if err != nil {

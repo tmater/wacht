@@ -17,6 +17,7 @@ import (
 func main() {
 	logger := logx.Configure("wacht-probe")
 	configPath := flag.String("config", "probe.yaml", "path to probe config file")
+	secretOverride := flag.String("secret", "", "override probe secret from config")
 	serverOverride := flag.String("server", "", "override server URL from config")
 	flag.Parse()
 
@@ -25,13 +26,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg, err := config.LoadProbe(*configPath)
+	cfg, err := config.LoadProbeWithOverrides(*configPath, config.ProbeConfig{
+		Secret: *secretOverride,
+		Server: *serverOverride,
+	})
 	if err != nil {
 		fatal("load config failed", "config_path", *configPath, "err", err)
-	}
-
-	if *serverOverride != "" {
-		cfg.Server = *serverOverride
 	}
 
 	logger.Info("probe starting", "probe_id", cfg.ProbeID, "server", cfg.Server, "config_path", *configPath)

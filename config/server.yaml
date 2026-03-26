@@ -10,11 +10,11 @@ allow_private_targets: true
 #   - 172.16.0.0/12
 probes:
   - id: probe-1
-    secret: replace-with-a-strong-secret
+    secret: replace-with-a-strong-password
   - id: probe-2
-    secret: replace-with-a-strong-secret
+    secret: replace-with-a-strong-password
   - id: probe-3
-    secret: replace-with-a-strong-secret
+    secret: replace-with-a-strong-password
 # First admin account — created on first boot when no users exist yet.
 # Set a strong password before first boot.
 seed_user:

@@ -130,7 +130,7 @@ def prepare_release_configs(temp_dir: Path) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
 
     server_text = (CONFIG_DIR / "server.yaml").read_text(encoding="utf-8")
-    server_text = server_text.replace("secret: replace-with-a-strong-secret", "secret: release-secret")
+    server_text = server_text.replace("secret: replace-with-a-strong-password", "secret: release-secret")
     server_text = server_text.replace("email: admin@wacht.local", f"email: {SEED_EMAIL}")
     server_text = server_text.replace("password: replace-with-a-strong-password", f"password: {SEED_PASSWORD}")
     server_text = re.sub(r"\nchecks:\n[\s\S]*\Z", "\nchecks: []\n", server_text)
@@ -138,7 +138,7 @@ def prepare_release_configs(temp_dir: Path) -> Path:
 
     for probe_id in ("1", "2", "3"):
         probe_text = (CONFIG_DIR / f"probe-{probe_id}.yaml").read_text(encoding="utf-8")
-        probe_text = probe_text.replace("secret: replace-with-a-strong-secret", "secret: release-secret")
+        probe_text = probe_text.replace("secret: replace-with-a-strong-password", "secret: release-secret")
         (config_dir / f"probe-{probe_id}.yaml").write_text(probe_text, encoding="utf-8")
 
     return config_dir

@@ -1,7 +1,7 @@
 # Enable this when the probe is expected to monitor private RFC1918, Docker,
 # VPN, or otherwise internal targets. Turn it off for hosted/managed probes.
 allow_private_targets: true
-secret: replace-with-a-strong-secret
+secret: replace-with-a-strong-password
 server: http://server:8080
 probe_id: probe-3
 heartbeat_interval: 30s

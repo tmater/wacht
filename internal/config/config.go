@@ -16,8 +16,7 @@ const (
 	DefaultAuthRateLimitWindow    = time.Minute
 	DefaultProbeOfflineAfter      = 90 * time.Second
 	DefaultProbeHeartbeatInterval = 30 * time.Second
-	DefaultProbeSecret            = "replace-with-a-strong-secret"
-	DefaultSeedPassword           = "replace-with-a-strong-password"
+	DefaultPassword               = "replace-with-a-strong-password"
 )
 
 var DefaultTrustedProxies = []string{
@@ -80,7 +79,7 @@ func LoadServer(path string) (*ServerConfig, error) {
 		if probe.Secret == "" {
 			return nil, fmt.Errorf("config: probes[%d].secret is required", i)
 		}
-		if probe.Secret == DefaultProbeSecret {
+		if probe.Secret == DefaultPassword {
 			return nil, fmt.Errorf("config: probes[%d].secret must be changed from the shipped sample value", i)
 		}
 		if _, ok := seen[probe.ID]; ok {
@@ -88,7 +87,7 @@ func LoadServer(path string) (*ServerConfig, error) {
 		}
 		seen[probe.ID] = struct{}{}
 	}
-	if cfg.SeedUser.Password == DefaultSeedPassword {
+	if cfg.SeedUser.Password == DefaultPassword {
 		return nil, fmt.Errorf("config: seed_user.password must be changed from the shipped sample value")
 	}
 	if cfg.ProbeOfflineAfter <= 0 {
@@ -114,8 +113,27 @@ func LoadServer(path string) (*ServerConfig, error) {
 	return &cfg, nil
 }
 
-// LoadProbe reads and parses a probe.yaml config file.
-func LoadProbe(path string) (*ProbeConfig, error) {
+func validateProbeConfig(cfg *ProbeConfig) error {
+	if cfg.Secret == "" {
+		return fmt.Errorf("config: secret is required")
+	}
+	if cfg.Server == "" {
+		return fmt.Errorf("config: server is required")
+	}
+	if cfg.ProbeID == "" {
+		return fmt.Errorf("config: probe_id is required")
+	}
+	if cfg.Secret == DefaultPassword {
+		return fmt.Errorf("config: secret must be changed from the shipped sample value")
+	}
+	if cfg.HeartbeatInterval == 0 {
+		cfg.HeartbeatInterval = DefaultProbeHeartbeatInterval
+	}
+
+	return nil
+}
+
+func loadProbe(path string, overrides ProbeConfig) (*ProbeConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -126,21 +144,35 @@ func LoadProbe(path string) (*ProbeConfig, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if cfg.Secret == "" {
-		return nil, fmt.Errorf("config: secret is required")
+	if overrides.Secret != "" {
+		cfg.Secret = overrides.Secret
 	}
-	if cfg.Server == "" {
-		return nil, fmt.Errorf("config: server is required")
+	if overrides.Server != "" {
+		cfg.Server = overrides.Server
 	}
-	if cfg.ProbeID == "" {
-		return nil, fmt.Errorf("config: probe_id is required")
+	if overrides.ProbeID != "" {
+		cfg.ProbeID = overrides.ProbeID
 	}
-	if cfg.Secret == DefaultProbeSecret {
-		return nil, fmt.Errorf("config: secret must be changed from the shipped sample value")
+	if overrides.HeartbeatInterval != 0 {
+		cfg.HeartbeatInterval = overrides.HeartbeatInterval
 	}
-	if cfg.HeartbeatInterval == 0 {
-		cfg.HeartbeatInterval = DefaultProbeHeartbeatInterval
+	if overrides.AllowPrivateTargets {
+		cfg.AllowPrivateTargets = true
+	}
+	if err := validateProbeConfig(&cfg); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil
+}
+
+// LoadProbe reads and parses a probe.yaml config file.
+func LoadProbe(path string) (*ProbeConfig, error) {
+	return loadProbe(path, ProbeConfig{})
+}
+
+// LoadProbeWithOverrides reads and parses a probe.yaml config file, then
+// applies explicit runtime overrides before validation.
+func LoadProbeWithOverrides(path string, overrides ProbeConfig) (*ProbeConfig, error) {
+	return loadProbe(path, overrides)
 }

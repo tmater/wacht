@@ -4,16 +4,13 @@ services:
       - ./config/server.dev.yaml:/etc/wacht/server.yaml:ro
 
   probe-1:
-    volumes:
-      - ./config/probe-1.dev.yaml:/etc/wacht/probe.yaml:ro
+    command: ["--config=/etc/wacht/probe.yaml", "--secret=dev-probe-secret-a7f3c921"]
 
   probe-2:
-    volumes:
-      - ./config/probe-2.dev.yaml:/etc/wacht/probe.yaml:ro
+    command: ["--config=/etc/wacht/probe.yaml", "--secret=dev-probe-secret-a7f3c921"]
 
   probe-3:
-    volumes:
-      - ./config/probe-3.dev.yaml:/etc/wacht/probe.yaml:ro
+    command: ["--config=/etc/wacht/probe.yaml", "--secret=dev-probe-secret-a7f3c921"]
 
   mock:
     build:

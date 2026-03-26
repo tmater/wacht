@@ -25,11 +25,11 @@ Edit `config/server.yaml` — provision each probe with its own secret and confi
 ```yaml
 probes:
   - id: probe-1
-    secret: replace-with-a-strong-secret
+    secret: replace-with-a-strong-password
   - id: probe-2
-    secret: replace-with-a-strong-secret
+    secret: replace-with-a-strong-password
   - id: probe-3
-    secret: replace-with-a-strong-secret
+    secret: replace-with-a-strong-password
 seed_user:
   email: admin@wacht.local
   password: replace-with-a-strong-password
@@ -52,7 +52,7 @@ both the server and the matching probe config.
 Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each probe must use the matching secret provisioned in `config/server.yaml`:
 
 ```yaml
-secret: replace-with-a-strong-secret
+secret: replace-with-a-strong-password
 server: http://server:8080
 probe_id: probe-1
 heartbeat_interval: 30s
