@@ -96,11 +96,15 @@ func (h *Handler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-// handleMe returns the current user's email and admin status.
+// handleMe returns the current user's account metadata.
 func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	u := sessionUser(r)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"email": u.Email, "is_admin": u.IsAdmin})
+	json.NewEncoder(w).Encode(map[string]any{
+		"email":              u.Email,
+		"is_admin":           u.IsAdmin,
+		"public_status_slug": u.PublicStatusSlug,
+	})
 }
 
 // rateLimiter is a simple per-IP token bucket rate limiter.
@@ -147,6 +151,10 @@ func (rl *rateLimiter) allow(ip string) bool {
 
 func (h *Handler) rateLimited(rl *rateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rl == nil {
+			next(w, r)
+			return
+		}
 		if !rl.allow(h.clientIP(r)) {
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return

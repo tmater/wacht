@@ -161,6 +161,12 @@ class SmokeClient:
     def get_status(self, token):
         return self.request("GET", "/status", headers=self.auth_headers(token), expected_status=(200,))
 
+    def get_me(self, token):
+        return self.request("GET", "/api/auth/me", headers=self.auth_headers(token), expected_status=(200,))
+
+    def get_public_status(self, slug, expected_status=(200,)):
+        return self.request("GET", f"/api/public/status/{urllib.parse.quote(slug, safe='')}", expected_status=expected_status)
+
     def list_incidents(self, token):
         incidents = self.request("GET", "/api/incidents", headers=self.auth_headers(token), expected_status=(200,))
         if incidents is None:

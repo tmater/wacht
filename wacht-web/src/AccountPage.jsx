@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { API_URL, authHeaders } from './api.js'
+import { appURL } from './paths.js'
 import * as ui from './ui.js'
 
 async function loadSignupRequests(onLogout, setRequests, setErr) {
@@ -13,7 +14,11 @@ async function loadSignupRequests(onLogout, setRequests, setErr) {
   }
 }
 
-export default function AccountPage({ email, isAdmin, onLogout }) {
+function publicStatusURL(slug) {
+  return appURL(`/public/${encodeURIComponent(slug)}`)
+}
+
+export default function AccountPage({ email, isAdmin, onLogout, publicStatusSlug }) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -80,6 +85,28 @@ export default function AccountPage({ email, isAdmin, onLogout }) {
             </button>
           </form>
         </div>
+
+        {publicStatusSlug && (
+          <div className={`${ui.card} p-6 mb-8`}>
+            <h3 className="mb-2 text-sm font-semibold text-gray-100">Public status page</h3>
+            <p className="mb-3 text-xs text-gray-400">Share this read-only page with customers.</p>
+            <p className="mb-4 break-all rounded bg-gray-900 p-3 font-mono text-xs text-gray-300">
+              {publicStatusURL(publicStatusSlug)}
+            </p>
+            <div className="flex items-center gap-3">
+              <a href={publicStatusURL(publicStatusSlug)} target="_blank" rel="noreferrer" className={ui.btn.primary}>
+                Open page
+              </a>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(publicStatusURL(publicStatusSlug))}
+                className={ui.btn.ghost}
+              >
+                Copy link
+              </button>
+            </div>
+          </div>
+        )}
 
         {isAdmin && <SignupRequests onLogout={onLogout} />}
       </div>

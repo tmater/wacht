@@ -29,11 +29,12 @@ type sqlQuerier interface {
 
 // User represents a registered user.
 type User struct {
-	ID           int64
-	Email        string
-	PasswordHash string
-	IsAdmin      bool
-	CreatedAt    time.Time
+	ID               int64
+	Email            string
+	PasswordHash     string
+	PublicStatusSlug string
+	IsAdmin          bool
+	CreatedAt        time.Time
 }
 
 // CreateUser hashes the password and inserts a new user. Returns the created user.
@@ -54,8 +55,8 @@ func (s *Store) CreateAdminUser(email, password string) (*User, error) {
 // AuthenticateUser verifies email+password and returns the user on success.
 func (s *Store) AuthenticateUser(email, password string) (*User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, is_admin, created_at FROM users WHERE email=$1`, normalizeEmail(email)).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, email, password_hash, public_status_slug, is_admin, created_at FROM users WHERE email=$1`, normalizeEmail(email)).
+		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PublicStatusSlug, &u.IsAdmin, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,11 +87,11 @@ func (s *Store) CreateSession(userID int64) (string, error) {
 func (s *Store) GetSessionUser(token string) (*User, error) {
 	var u User
 	err := s.db.QueryRow(`
-		SELECT u.id, u.email, u.password_hash, u.is_admin, u.created_at
+		SELECT u.id, u.email, u.password_hash, u.public_status_slug, u.is_admin, u.created_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token = $1 AND s.expires_at > $2
-	`, token, time.Now().UTC()).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt)
+	`, token, time.Now().UTC()).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PublicStatusSlug, &u.IsAdmin, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -387,15 +388,18 @@ func hashPassword(password string) (string, error) {
 }
 
 func createUserWithPasswordHash(q sqlQuerier, email, passwordHash string, isAdmin bool, now time.Time) (*User, error) {
-	var id int64
+	var (
+		id   int64
+		slug string
+	)
 	err := q.QueryRow(
-		`INSERT INTO users (email, password_hash, is_admin, created_at) VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO users (email, password_hash, is_admin, created_at) VALUES ($1, $2, $3, $4) RETURNING id, public_status_slug`,
 		email, passwordHash, isAdmin, now,
-	).Scan(&id)
+	).Scan(&id, &slug)
 	if err != nil {
 		return nil, err
 	}
-	return &User{ID: id, Email: email, PasswordHash: passwordHash, IsAdmin: isAdmin, CreatedAt: now}, nil
+	return &User{ID: id, Email: email, PasswordHash: passwordHash, PublicStatusSlug: slug, IsAdmin: isAdmin, CreatedAt: now}, nil
 }
 
 func createUserWithPlaceholderPassword(q sqlQuerier, email string, isAdmin bool, now time.Time) (*User, error) {

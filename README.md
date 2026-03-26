@@ -114,7 +114,7 @@ opening notification is superseded and the recovery notification becomes the
 current delivery target instead. Delivery state is visible in incident
 history.
 
-## Status page
+## Status pages
 
 `GET /status` returns the current state of all checks for the authenticated user.
 Requests must include a valid session token.
@@ -128,6 +128,13 @@ TOKEN=$(curl -s -X POST http://<your-host>:3000/api/auth/login \
 # Fetch current status:
 curl -H "Authorization: Bearer $TOKEN" http://<your-host>:3000/status
 ```
+
+Each user also gets one anonymous read-only public page at `/public/{slug}`.
+The dashboard exposes that share URL via the Account page, and the backing JSON
+endpoint is `GET /api/public/status/{slug}`.
+
+The public page intentionally exposes only check IDs and status state. It does
+not include raw targets, webhook URLs, probe details, or incident history.
 
 ## Browser tests
 

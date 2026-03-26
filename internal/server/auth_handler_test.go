@@ -226,6 +226,37 @@ func TestHandleSetupPasswordReturnsJSONOnSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleMeReturnsPublicStatusSlug(t *testing.T) {
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req = req.WithContext(context.WithValue(req.Context(), contextKeyUser, &store.User{
+		ID:               4,
+		Email:            "alice@example.com",
+		PublicStatusSlug: "public-slug",
+		IsAdmin:          true,
+	}))
+	rec := httptest.NewRecorder()
+
+	h.handleMe(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if body["email"] != "alice@example.com" {
+		t.Fatalf("email = %#v, want alice@example.com", body["email"])
+	}
+	if body["public_status_slug"] != "public-slug" {
+		t.Fatalf("public_status_slug = %#v, want public-slug", body["public_status_slug"])
+	}
+	if body["is_admin"] != true {
+		t.Fatalf("is_admin = %#v, want true", body["is_admin"])
+	}
+}
+
 func TestRateLimitedUsesDistinctDirectClientIPs(t *testing.T) {
 	h := &Handler{loginLimiter: newRateLimiter(1, time.Minute)}
 	limited := h.rateLimited(h.loginLimiter, func(w http.ResponseWriter, r *http.Request) {
