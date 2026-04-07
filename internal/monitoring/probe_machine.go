@@ -24,7 +24,7 @@ func NewProbeMachine(probeID string) *ProbeMachine {
 
 // Snapshot returns the current probe runtime state.
 func (m *ProbeMachine) Snapshot() ProbeRuntimeState {
-	return m.state
+	return m.state.clone()
 }
 
 // ReceiveHeartbeat advances the probe state for a fresh heartbeat.

@@ -58,7 +58,9 @@ func (m *CheckMachine) LoseEvidence() (CheckTransition, error) {
 		return CheckTransition{}, err
 	}
 
-	m.state.ExpiresAt = nil
+	m.state.ExpiresAt = time.Time{}
+	m.state.LastOutcome = ""
+	m.state.StreakLen = 0
 	m.state.LastError = ""
 	return transition, nil
 }
@@ -95,24 +97,28 @@ func (m *CheckMachine) fire(trigger CheckTrigger) (CheckTransition, error) {
 // result has been accepted.
 func (m *CheckMachine) recordObservation(up bool, at time.Time, expiresAt *time.Time, message string) {
 	observedAt := at.UTC()
-	m.state.LastResultAt = &observedAt
+	m.state.LastResultAt = observedAt
 	m.state.LastError = message
 
 	if expiresAt == nil {
-		m.state.ExpiresAt = nil
+		m.state.ExpiresAt = time.Time{}
 	} else {
 		expiry := expiresAt.UTC()
-		m.state.ExpiresAt = &expiry
+		m.state.ExpiresAt = expiry
 	}
 
-	if m.state.LastOutcomeUp != nil && *m.state.LastOutcomeUp == up {
+	outcome := CheckStateDown
+	if up {
+		outcome = CheckStateUp
+	}
+
+	if m.state.LastOutcome == outcome {
 		m.state.StreakLen++
 	} else {
 		m.state.StreakLen = 1
 	}
 
-	lastOutcomeUp := up
-	m.state.LastOutcomeUp = &lastOutcomeUp
+	m.state.LastOutcome = outcome
 }
 
 // newCheckStateMachine configures the stateless machine around the per-probe

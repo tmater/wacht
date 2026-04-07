@@ -46,14 +46,14 @@ type ProbeRuntimeState struct {
 
 // CheckExecState stores the current runtime facts for one (check, probe) pair.
 type CheckExecState struct {
-	CheckID       string
-	ProbeID       string
-	LastResultAt  *time.Time
-	LastOutcomeUp *bool
-	StreakLen     int
-	ExpiresAt     *time.Time
-	State         CheckState
-	LastError     string
+	CheckID      string
+	ProbeID      string
+	LastResultAt time.Time
+	LastOutcome  CheckState
+	StreakLen    int
+	ExpiresAt    time.Time
+	State        CheckState
+	LastError    string
 }
 
 // CheckQuorumState is the aggregate runtime state of one check.
@@ -62,6 +62,15 @@ type CheckQuorumState struct {
 	State           QuorumState
 	LastStableState QuorumState
 	IncidentOpen    bool
+}
+
+// clone returns a detached copy of the probe runtime state.
+func (s ProbeRuntimeState) clone() ProbeRuntimeState {
+	if s.LastHeartbeatAt != nil {
+		heartbeatAt := *s.LastHeartbeatAt
+		s.LastHeartbeatAt = &heartbeatAt
+	}
+	return s
 }
 
 // newProbeRuntimeState builds the initial runtime state for a probe.

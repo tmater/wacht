@@ -22,13 +22,13 @@ func TestCheckMachineTransitionsAndMetadata(t *testing.T) {
 	if state.StreakLen != 1 {
 		t.Fatalf("streak = %d, want 1", state.StreakLen)
 	}
-	if state.LastOutcomeUp == nil || *state.LastOutcomeUp {
-		t.Fatal("expected last outcome to be down")
+	if state.LastOutcome != CheckStateDown {
+		t.Fatalf("last outcome = %q, want %q", state.LastOutcome, CheckStateDown)
 	}
 	if state.LastError != "timeout" {
 		t.Fatalf("last error = %q, want %q", state.LastError, "timeout")
 	}
-	if state.ExpiresAt == nil || !state.ExpiresAt.Equal(expiresAt) {
+	if state.ExpiresAt.IsZero() || !state.ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("expiresAt = %v, want %v", state.ExpiresAt, expiresAt)
 	}
 
@@ -58,8 +58,14 @@ func TestCheckMachineTransitionsAndMetadata(t *testing.T) {
 	if transition.To != CheckStateMissing {
 		t.Fatalf("lose evidence transition to = %q, want %q", transition.To, CheckStateMissing)
 	}
-	if got := check.Snapshot().ExpiresAt; got != nil {
+	if got := check.Snapshot().ExpiresAt; !got.IsZero() {
 		t.Fatalf("expiresAt after losing evidence = %v, want nil", got)
+	}
+	if state := check.Snapshot(); state.LastOutcome != "" {
+		t.Fatalf("last outcome after losing evidence = %q, want empty", state.LastOutcome)
+	}
+	if got := check.Snapshot().StreakLen; got != 0 {
+		t.Fatalf("streak after losing evidence = %d, want 0", got)
 	}
 
 	transition, err = check.ObserveUp(at.Add(2*time.Second), &expiresAt)
@@ -84,5 +90,31 @@ func TestCheckMachineSupportsExplicitReentryCases(t *testing.T) {
 	}
 	if _, err := check.MarkError("still bad"); err != nil {
 		t.Fatalf("MarkError reentry: %v", err)
+	}
+}
+
+func TestCheckMachineSnapshotReturnsDetachedCopy(t *testing.T) {
+	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	expiresAt := at.Add(30 * time.Second)
+	check := NewCheckMachine("check-a", "probe-a")
+
+	if _, err := check.ObserveDown(at, &expiresAt, "timeout"); err != nil {
+		t.Fatalf("ObserveDown: %v", err)
+	}
+
+	snapshot := check.Snapshot()
+	snapshot.LastOutcome = CheckStateUp
+	snapshot.LastResultAt = at.Add(time.Hour)
+	snapshot.ExpiresAt = at.Add(2 * time.Hour)
+
+	state := check.Snapshot()
+	if state.LastOutcome != CheckStateDown {
+		t.Fatal("machine last outcome was mutated through snapshot")
+	}
+	if state.LastResultAt.IsZero() || !state.LastResultAt.Equal(at) {
+		t.Fatalf("machine last result at = %v, want %v", state.LastResultAt, at)
+	}
+	if state.ExpiresAt.IsZero() || !state.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("machine expiresAt = %v, want %v", state.ExpiresAt, expiresAt)
 	}
 }
