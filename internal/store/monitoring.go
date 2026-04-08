@@ -136,12 +136,12 @@ func (s *Store) LatestMonitoringSnapshot() (*MonitoringSnapshot, error) {
 // It returns the persisted write with generated IDs filled in, plus whether the
 // incident side effect actually changed durable state.
 func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, bool, error) {
-	if len(write.JournalRecords) == 0 && write.Snapshot == nil && write.IncidentCheckID == "" {
-		return MonitoringWrite{}, false, nil
-	}
-
 	if write.IncidentCheckID == "" && (write.ResolveIncident || write.IncidentNotification != nil) {
 		return MonitoringWrite{}, false, ErrInvalidMonitoringIncidentWrite
+	}
+
+	if len(write.JournalRecords) == 0 && write.Snapshot == nil && write.IncidentCheckID == "" {
+		return MonitoringWrite{}, false, nil
 	}
 
 	tx, err := s.db.BeginTx(context.Background(), nil)

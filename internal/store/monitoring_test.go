@@ -225,6 +225,27 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	}
 }
 
+func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
+	s := newTestStore(t)
+
+	_, _, err := s.PersistMonitoringWrite(MonitoringWrite{
+		ResolveIncident: true,
+	})
+	if !errors.Is(err, ErrInvalidMonitoringIncidentWrite) {
+		t.Fatalf("ResolveIncident-only error = %v, want ErrInvalidMonitoringIncidentWrite", err)
+	}
+
+	_, _, err = s.PersistMonitoringWrite(MonitoringWrite{
+		IncidentNotification: &NotificationRequest{
+			WebhookURL: "https://hooks.example.com/wacht",
+			Payload:    []byte(`{"status":"down"}`),
+		},
+	})
+	if !errors.Is(err, ErrInvalidMonitoringIncidentWrite) {
+		t.Fatalf("IncidentNotification-only error = %v, want ErrInvalidMonitoringIncidentWrite", err)
+	}
+}
+
 func assertJSONEqual(t *testing.T, got, want json.RawMessage) {
 	t.Helper()
 
