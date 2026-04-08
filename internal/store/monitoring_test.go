@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// TestAppendMonitoringJournalAndLoadTail verifies ordered journal replay
+// reads after appending recovery records.
 func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
 	s := newTestStore(t)
 
@@ -64,6 +66,8 @@ func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
 	}
 }
 
+// TestLatestMonitoringSnapshotReturnsNewest verifies that snapshot reads return
+// the newest captured runtime image.
 func TestLatestMonitoringSnapshotReturnsNewest(t *testing.T) {
 	s := newTestStore(t)
 
@@ -113,6 +117,8 @@ func TestLatestMonitoringSnapshotReturnsNewest(t *testing.T) {
 	}
 }
 
+// TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically verifies the
+// existing atomic write boundary for journal, snapshot, and incident writes.
 func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T) {
 	s := newTestStore(t)
 
@@ -193,6 +199,51 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 	}
 }
 
+// TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically verifies that the
+// heartbeat journal record and compatibility metadata update commit together.
+func TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.SeedProbes([]ProbeSeed{{ProbeID: "probe-a", Secret: "secret-a"}}); err != nil {
+		t.Fatalf("SeedProbes: %v", err)
+	}
+
+	heartbeatAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	write, _, err := s.PersistMonitoringWrite(MonitoringWrite{
+		JournalRecords: []MonitoringJournalRecord{
+			{
+				Kind:       "receive_heartbeat",
+				ProbeID:    "probe-a",
+				OccurredAt: heartbeatAt,
+			},
+		},
+		ProbeHeartbeatID: "probe-a",
+		ProbeHeartbeatAt: heartbeatAt,
+	})
+	if err != nil {
+		t.Fatalf("PersistMonitoringWrite: %v", err)
+	}
+	if len(write.JournalRecords) != 1 {
+		t.Fatalf("journal records = %d, want 1", len(write.JournalRecords))
+	}
+	if !write.ProbeHeartbeatAt.Equal(heartbeatAt) {
+		t.Fatalf("ProbeHeartbeatAt = %s, want %s", write.ProbeHeartbeatAt, heartbeatAt)
+	}
+
+	probe, err := s.AuthenticateProbe("probe-a", "secret-a")
+	if err != nil {
+		t.Fatalf("AuthenticateProbe: %v", err)
+	}
+	if probe == nil {
+		t.Fatal("expected probe, got nil")
+	}
+	if probe.LastSeenAt == nil || !probe.LastSeenAt.Equal(heartbeatAt) {
+		t.Fatalf("LastSeenAt = %v, want %v", probe.LastSeenAt, heartbeatAt)
+	}
+}
+
+// TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction verifies that an
+// invalid incident side effect aborts the full monitoring write.
 func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	s := newTestStore(t)
 
@@ -240,6 +291,8 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	}
 }
 
+// TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs verifies input
+// validation for incomplete incident-only or heartbeat-only writes.
 func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
 	s := newTestStore(t)
 
@@ -259,8 +312,17 @@ func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
 	if !errors.Is(err, ErrInvalidMonitoringIncidentWrite) {
 		t.Fatalf("IncidentNotification-only error = %v, want ErrInvalidMonitoringIncidentWrite", err)
 	}
+
+	_, _, err = s.PersistMonitoringWrite(MonitoringWrite{
+		ProbeHeartbeatAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+	})
+	if !errors.Is(err, ErrInvalidMonitoringProbeWrite) {
+		t.Fatalf("ProbeHeartbeatAt-only error = %v, want ErrInvalidMonitoringProbeWrite", err)
+	}
 }
 
+// assertJSONEqual compares snapshot payloads structurally so tests ignore
+// insignificant formatting differences.
 func assertJSONEqual(t *testing.T, got, want json.RawMessage) {
 	t.Helper()
 

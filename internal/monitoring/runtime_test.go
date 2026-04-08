@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+// TestNewRuntimeInitializesMachineRegistries verifies the runtime boot shape
+// for active checks and probes.
 func TestNewRuntimeInitializesMachineRegistries(t *testing.T) {
 	runtime := NewRuntime(
 		[]string{"check-a", "check-b", "check-a", ""},
@@ -46,6 +48,8 @@ func TestNewRuntimeInitializesMachineRegistries(t *testing.T) {
 	}
 }
 
+// TestRuntimeRoutesHeartbeatToProbeMachine verifies that heartbeat routing
+// updates the owning probe runtime state.
 func TestRuntimeRoutesHeartbeatToProbeMachine(t *testing.T) {
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
 	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
@@ -67,6 +71,8 @@ func TestRuntimeRoutesHeartbeatToProbeMachine(t *testing.T) {
 	}
 }
 
+// TestRuntimeObserveCheckDownRecomputesQuorum verifies that repeated down
+// observations update both child state and aggregate quorum.
 func TestRuntimeObserveCheckDownRecomputesQuorum(t *testing.T) {
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b", "probe-c"})
 	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
@@ -100,6 +106,8 @@ func TestRuntimeObserveCheckDownRecomputesQuorum(t *testing.T) {
 	}
 }
 
+// TestRuntimeLoseEvidenceTurnsStableCheckIntoError verifies that missing
+// evidence degrades a previously stable quorum into error.
 func TestRuntimeLoseEvidenceTurnsStableCheckIntoError(t *testing.T) {
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b", "probe-c"})
 	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
@@ -137,6 +145,141 @@ func TestRuntimeLoseEvidenceTurnsStableCheckIntoError(t *testing.T) {
 	}
 }
 
+// TestRuntimeExpireHeartbeatInvalidatesAssignedCheckEvidence verifies that a
+// stale probe heartbeat removes that probe's quorum contribution immediately.
+func TestRuntimeExpireHeartbeatInvalidatesAssignedCheckEvidence(t *testing.T) {
+	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b", "probe-c"})
+	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	expiresAt := at.Add(30 * time.Second)
+
+	for _, probeID := range []string{"probe-a", "probe-b"} {
+		if _, err := runtime.ObserveCheckUp("check-a", probeID, at, &expiresAt); err != nil {
+			t.Fatalf("ObserveCheckUp %s first: %v", probeID, err)
+		}
+	}
+	secondAt := at.Add(time.Second)
+	secondExpiry := secondAt.Add(30 * time.Second)
+	for _, probeID := range []string{"probe-a", "probe-b"} {
+		if _, err := runtime.ObserveCheckUp("check-a", probeID, secondAt, &secondExpiry); err != nil {
+			t.Fatalf("ObserveCheckUp %s second: %v", probeID, err)
+		}
+	}
+
+	if _, err := runtime.ReceiveHeartbeat("probe-a", at); err != nil {
+		t.Fatalf("ReceiveHeartbeat probe-a: %v", err)
+	}
+	if _, err := runtime.ReceiveHeartbeat("probe-b", at); err != nil {
+		t.Fatalf("ReceiveHeartbeat probe-b: %v", err)
+	}
+	if _, err := runtime.ExpireHeartbeat("probe-a"); err != nil {
+		t.Fatalf("ExpireHeartbeat: %v", err)
+	}
+
+	check, err := runtime.CheckSnapshot("check-a", "probe-a")
+	if err != nil {
+		t.Fatalf("CheckSnapshot() error = %v", err)
+	}
+	if check.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	}
+	if check.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
+	}
+
+	quorum, err := runtime.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot() error = %v", err)
+	}
+	if quorum.State != QuorumStateError {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateError)
+	}
+	if quorum.LastStableState != QuorumStateUp {
+		t.Fatalf("last stable state = %q, want %q", quorum.LastStableState, QuorumStateUp)
+	}
+}
+
+// TestRuntimeMarkProbeErrorInvalidatesAssignedChecksUntilFreshResults
+// verifies that probe-wide runtime failure propagates to assigned checks
+// without being cleared by heartbeat recovery alone.
+func TestRuntimeMarkProbeErrorInvalidatesAssignedChecksUntilFreshResults(t *testing.T) {
+	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b", "probe-c"})
+	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	expiresAt := at.Add(30 * time.Second)
+
+	for _, probeID := range []string{"probe-a", "probe-b"} {
+		if _, err := runtime.ObserveCheckUp("check-a", probeID, at, &expiresAt); err != nil {
+			t.Fatalf("ObserveCheckUp %s first: %v", probeID, err)
+		}
+	}
+	secondAt := at.Add(time.Second)
+	secondExpiry := secondAt.Add(30 * time.Second)
+	for _, probeID := range []string{"probe-a", "probe-b"} {
+		if _, err := runtime.ObserveCheckUp("check-a", probeID, secondAt, &secondExpiry); err != nil {
+			t.Fatalf("ObserveCheckUp %s second: %v", probeID, err)
+		}
+	}
+
+	thirdAt := at.Add(2 * time.Second)
+	thirdExpiry := thirdAt.Add(30 * time.Second)
+	for _, probeID := range []string{"probe-a", "probe-b"} {
+		if _, err := runtime.ObserveCheckDown("check-a", probeID, thirdAt, &thirdExpiry, "timeout"); err != nil {
+			t.Fatalf("ObserveCheckDown %s first: %v", probeID, err)
+		}
+	}
+
+	fourthAt := at.Add(3 * time.Second)
+	fourthExpiry := fourthAt.Add(30 * time.Second)
+	for _, probeID := range []string{"probe-a", "probe-b"} {
+		if _, err := runtime.ObserveCheckDown("check-a", probeID, fourthAt, &fourthExpiry, "timeout"); err != nil {
+			t.Fatalf("ObserveCheckDown %s second: %v", probeID, err)
+		}
+	}
+
+	if _, err := runtime.MarkProbeError("probe-a", "transport failed"); err != nil {
+		t.Fatalf("MarkProbeError: %v", err)
+	}
+
+	check, err := runtime.CheckSnapshot("check-a", "probe-a")
+	if err != nil {
+		t.Fatalf("CheckSnapshot() error = %v", err)
+	}
+	if check.State != CheckStateError {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateError)
+	}
+	if check.LastError != "transport failed" {
+		t.Fatalf("last error = %q, want transport failed", check.LastError)
+	}
+
+	quorum, err := runtime.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot() error = %v", err)
+	}
+	if quorum.State != QuorumStateError {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateError)
+	}
+	if quorum.LastStableState != QuorumStateDown {
+		t.Fatalf("last stable state = %q, want %q", quorum.LastStableState, QuorumStateDown)
+	}
+	if !quorum.IncidentOpen {
+		t.Fatal("IncidentOpen = false, want true")
+	}
+
+	recoveredAt := at.Add(2 * time.Minute)
+	if _, err := runtime.ReceiveHeartbeat("probe-a", recoveredAt); err != nil {
+		t.Fatalf("ReceiveHeartbeat recovery: %v", err)
+	}
+
+	check, err = runtime.CheckSnapshot("check-a", "probe-a")
+	if err != nil {
+		t.Fatalf("CheckSnapshot() after recovery error = %v", err)
+	}
+	if check.State != CheckStateError {
+		t.Fatalf("check state after recovery = %q, want %q", check.State, CheckStateError)
+	}
+}
+
+// TestRuntimeErrorsForUnknownEntities verifies the runtime's stable error
+// contract for missing probes, checks, and assignments.
 func TestRuntimeErrorsForUnknownEntities(t *testing.T) {
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
 
