@@ -75,10 +75,18 @@ func TestRuntimeObserveCheckDownRecomputesQuorum(t *testing.T) {
 	if _, err := runtime.ObserveCheckDown("check-a", "probe-a", at, &expiresAt, "timeout"); err != nil {
 		t.Fatalf("ObserveCheckDown probe-a: %v", err)
 	}
-
-	update, err := runtime.ObserveCheckDown("check-a", "probe-b", at, &expiresAt, "timeout")
-	if err != nil {
+	if _, err := runtime.ObserveCheckDown("check-a", "probe-b", at, &expiresAt, "timeout"); err != nil {
 		t.Fatalf("ObserveCheckDown probe-b: %v", err)
+	}
+
+	secondAt := at.Add(time.Second)
+	secondExpiry := secondAt.Add(30 * time.Second)
+	if _, err := runtime.ObserveCheckDown("check-a", "probe-a", secondAt, &secondExpiry, "timeout"); err != nil {
+		t.Fatalf("ObserveCheckDown probe-a second: %v", err)
+	}
+	update, err := runtime.ObserveCheckDown("check-a", "probe-b", secondAt, &secondExpiry, "timeout")
+	if err != nil {
+		t.Fatalf("ObserveCheckDown probe-b second: %v", err)
 	}
 
 	if update.CheckTransition.To != CheckStateDown {
@@ -102,6 +110,14 @@ func TestRuntimeLoseEvidenceTurnsStableCheckIntoError(t *testing.T) {
 	}
 	if _, err := runtime.ObserveCheckUp("check-a", "probe-b", at, &expiresAt); err != nil {
 		t.Fatalf("ObserveCheckUp probe-b: %v", err)
+	}
+	secondAt := at.Add(time.Second)
+	secondExpiry := secondAt.Add(30 * time.Second)
+	if _, err := runtime.ObserveCheckUp("check-a", "probe-a", secondAt, &secondExpiry); err != nil {
+		t.Fatalf("ObserveCheckUp probe-a second: %v", err)
+	}
+	if _, err := runtime.ObserveCheckUp("check-a", "probe-b", secondAt, &secondExpiry); err != nil {
+		t.Fatalf("ObserveCheckUp probe-b second: %v", err)
 	}
 
 	if _, err := runtime.RecomputeCheck("check-a"); err != nil {

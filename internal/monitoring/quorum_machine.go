@@ -127,7 +127,7 @@ func (m *QuorumMachine) Recompute() QuorumTransition {
 
 	var upVotes, downVotes int
 	for _, check := range m.checks {
-		switch check.Snapshot().State {
+		switch quorumContribution(check.Snapshot(), current) {
 		case CheckStateUp:
 			upVotes++
 		case CheckStateDown:
@@ -150,10 +150,44 @@ func (m *QuorumMachine) Recompute() QuorumTransition {
 		next.State = QuorumStateError
 	}
 
+	switch {
+	case current.LastStableState == QuorumStateUp && next.LastStableState == QuorumStateDown:
+		next.IncidentOpen = true
+	case current.LastStableState == QuorumStateDown && next.LastStableState == QuorumStateUp:
+		next.IncidentOpen = false
+	}
+
 	m.state = next
 	return QuorumTransition{
 		From:            current.State,
 		To:              next.State,
 		LastStableState: next.LastStableState,
 	}
+}
+
+// quorumContribution maps one child check runtime to the vote it should cast
+// during aggregate recompute. Down transitions still require consecutive
+// evidence, while up transitions are only gated when resolving an open
+// incident.
+func quorumContribution(check CheckExecState, current CheckQuorumState) CheckState {
+	switch check.LastOutcome {
+	case CheckStateDown:
+		if check.StreakLen >= consecutiveEvidenceThreshold {
+			return CheckStateDown
+		}
+	case CheckStateUp:
+		if current.IncidentOpen && check.StreakLen < consecutiveEvidenceThreshold {
+			return CheckStateMissing
+		}
+		if !check.LastResultAt.IsZero() {
+			return CheckStateUp
+		}
+	}
+	return CheckStateMissing
+}
+
+// quorumThreshold returns the strict-majority threshold for the assigned probe
+// count owned by one quorum machine.
+func quorumThreshold(totalAssigned int) int {
+	return totalAssigned/2 + 1
 }

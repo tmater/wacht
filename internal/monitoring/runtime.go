@@ -189,12 +189,6 @@ func (r *Runtime) RecomputeCheck(checkID string) (CheckQuorumState, error) {
 	return quorum.Snapshot(), nil
 }
 
-// quorumThreshold returns the strict-majority threshold for the assigned probe
-// count.
-func quorumThreshold(totalAssigned int) int {
-	return totalAssigned/2 + 1
-}
-
 // uniqueIDs removes empty and duplicate IDs while preserving first-seen order.
 func uniqueIDs(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
