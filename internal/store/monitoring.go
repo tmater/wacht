@@ -12,18 +12,22 @@ import (
 var (
 	// ErrInvalidMonitoringJournalKind reports a blank journal kind.
 	ErrInvalidMonitoringJournalKind = errors.New("store: invalid monitoring journal kind")
-	// ErrInvalidMonitoringPayload reports malformed or empty JSON payloads.
+	// ErrInvalidMonitoringPayload reports malformed or empty snapshot JSON payloads.
 	ErrInvalidMonitoringPayload = errors.New("store: invalid monitoring payload")
 	// ErrInvalidMonitoringIncidentWrite reports an incomplete incident write.
 	ErrInvalidMonitoringIncidentWrite = errors.New("store: invalid monitoring incident write")
 )
 
 // MonitoringJournalRecord is one append-only replay entry for rebuilding
-// monitoring runtime transitions after restart.
+// monitoring runtime transitions after restart. Its typed fields are the
+// durable journal contract for probe and check events.
 type MonitoringJournalRecord struct {
 	ID         int64
 	Kind       string
-	Payload    json.RawMessage
+	CheckID    string
+	ProbeID    string
+	Message    string
+	ExpiresAt  *time.Time
 	OccurredAt time.Time
 	RecordedAt time.Time
 }
@@ -73,7 +77,7 @@ func (s *Store) MonitoringJournalAfter(afterID int64) ([]MonitoringJournalRecord
 	}
 
 	rows, err := s.db.Query(`
-		SELECT id, kind, payload, occurred_at, recorded_at
+		SELECT id, kind, check_id, probe_id, message, expires_at, occurred_at, recorded_at
 		FROM monitoring_journal
 		WHERE id > $1
 		ORDER BY id ASC
@@ -85,9 +89,37 @@ func (s *Store) MonitoringJournalAfter(afterID int64) ([]MonitoringJournalRecord
 
 	var records []MonitoringJournalRecord
 	for rows.Next() {
-		var record MonitoringJournalRecord
-		if err := rows.Scan(&record.ID, &record.Kind, &record.Payload, &record.OccurredAt, &record.RecordedAt); err != nil {
+		var (
+			record    MonitoringJournalRecord
+			checkID   sql.NullString
+			probeID   sql.NullString
+			message   sql.NullString
+			expiresAt sql.NullTime
+		)
+		if err := rows.Scan(
+			&record.ID,
+			&record.Kind,
+			&checkID,
+			&probeID,
+			&message,
+			&expiresAt,
+			&record.OccurredAt,
+			&record.RecordedAt,
+		); err != nil {
 			return nil, err
+		}
+		if checkID.Valid {
+			record.CheckID = checkID.String
+		}
+		if probeID.Valid {
+			record.ProbeID = probeID.String
+		}
+		if message.Valid {
+			record.Message = message.String
+		}
+		if expiresAt.Valid {
+			expiry := expiresAt.Time
+			record.ExpiresAt = &expiry
 		}
 		records = append(records, record)
 	}
@@ -195,12 +227,10 @@ func appendMonitoringJournalTx(tx *sql.Tx, record MonitoringJournalRecord) (Moni
 	if record.Kind == "" {
 		return MonitoringJournalRecord{}, ErrInvalidMonitoringJournalKind
 	}
-
-	payload, err := normalizeMonitoringPayload(record.Payload)
-	if err != nil {
-		return MonitoringJournalRecord{}, err
-	}
-	record.Payload = payload
+	record.CheckID = strings.TrimSpace(record.CheckID)
+	record.ProbeID = strings.TrimSpace(record.ProbeID)
+	record.Message = strings.TrimSpace(record.Message)
+	record.ExpiresAt = normalizeOptionalTime(record.ExpiresAt)
 
 	record.RecordedAt = normalizeTime(record.RecordedAt)
 	if record.OccurredAt.IsZero() {
@@ -209,11 +239,13 @@ func appendMonitoringJournalTx(tx *sql.Tx, record MonitoringJournalRecord) (Moni
 		record.OccurredAt = normalizeTime(record.OccurredAt)
 	}
 
-	err = tx.QueryRow(`
-		INSERT INTO monitoring_journal (kind, payload, occurred_at, recorded_at)
-		VALUES ($1, $2::jsonb, $3, $4)
+	err := tx.QueryRow(`
+		INSERT INTO monitoring_journal (
+			kind, check_id, probe_id, message, expires_at, occurred_at, recorded_at
+		)
+		VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5, $6, $7)
 		RETURNING id
-	`, record.Kind, string(record.Payload), record.OccurredAt, record.RecordedAt).Scan(&record.ID)
+	`, record.Kind, record.CheckID, record.ProbeID, record.Message, record.ExpiresAt, record.OccurredAt, record.RecordedAt).Scan(&record.ID)
 	if err != nil {
 		return MonitoringJournalRecord{}, err
 	}
@@ -271,4 +303,13 @@ func normalizeTime(t time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return t.UTC()
+}
+
+func normalizeOptionalTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+
+	normalized := t.UTC()
+	return &normalized
 }

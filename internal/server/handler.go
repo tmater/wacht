@@ -11,6 +11,7 @@ import (
 	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
+	"github.com/tmater/wacht/internal/monitoring"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/proto"
 	"github.com/tmater/wacht/internal/store"
@@ -19,6 +20,7 @@ import (
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
 	store          *store.Store
+	monitoring     *monitoring.Runtime
 	config         *config.ServerConfig
 	webhooks       *alert.Sender
 	authProcessor  authProcessor
@@ -29,6 +31,8 @@ type Handler struct {
 	trustedProxies []netip.Prefix
 }
 
+// notificationJSON is the API response shape for one durable incident
+// notification summary.
 type notificationJSON struct {
 	State         string  `json:"state"`
 	Attempts      int     `json:"attempts"`
@@ -39,10 +43,11 @@ type notificationJSON struct {
 }
 
 // New creates a new Handler.
-func New(store *store.Store, cfg *config.ServerConfig) *Handler {
+func New(store *store.Store, monitoringRuntime *monitoring.Runtime, cfg *config.ServerConfig) *Handler {
 	authRateLimit := cfg.AuthRateLimit
 	return &Handler{
 		store:          store,
+		monitoring:     monitoringRuntime,
 		config:         cfg,
 		webhooks:       alert.NewSender(store, network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
 		authProcessor:  NewAuthProcessor(store),

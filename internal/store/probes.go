@@ -140,6 +140,31 @@ type ProbeStatus struct {
 	LastSeenAt *time.Time
 }
 
+// ActiveProbeIDs returns all active probe IDs ordered for deterministic
+// runtime bootstrap.
+func (s *Store) ActiveProbeIDs() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT probe_id
+		FROM probes
+		WHERE status = 'active'
+		ORDER BY probe_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var probeIDs []string
+	for rows.Next() {
+		var probeID string
+		if err := rows.Scan(&probeID); err != nil {
+			return nil, err
+		}
+		probeIDs = append(probeIDs, probeID)
+	}
+	return probeIDs, rows.Err()
+}
+
 // AllProbeStatuses returns the last_seen_at for all active probes. Internal
 // server maintenance code uses this global view.
 func (s *Store) AllProbeStatuses() ([]ProbeStatus, error) {

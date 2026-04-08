@@ -11,6 +11,7 @@ import (
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/logx"
+	"github.com/tmater/wacht/internal/monitoring"
 	"github.com/tmater/wacht/internal/network"
 	"github.com/tmater/wacht/internal/server"
 	"github.com/tmater/wacht/internal/store"
@@ -95,7 +96,12 @@ func main() {
 		fatal("seed checks failed", "err", err)
 	}
 
-	h := server.New(db, cfg)
+	monitoringRuntime, err := monitoring.LoadRuntime(db)
+	if err != nil {
+		fatal("load monitoring runtime failed", "err", err)
+	}
+
+	h := server.New(db, monitoringRuntime, cfg)
 	defer h.Close()
 
 	go staleProbeLoop(db)
