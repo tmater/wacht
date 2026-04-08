@@ -204,16 +204,9 @@ func scanIncidentNotification(
 	return summary
 }
 
-func (s *Store) openIncidentWithNotification(checkID string, request *NotificationRequest) (bool, error) {
-	now := time.Now().UTC()
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
+func openIncidentWithNotificationTx(tx *sql.Tx, checkID string, request *NotificationRequest, now time.Time) (bool, error) {
 	var incidentID int64
-	err = tx.QueryRow(`
+	err := tx.QueryRow(`
 		INSERT INTO incidents (check_uid, user_id, started_at)
 		SELECT uid, user_id, $2
 		FROM checks
@@ -232,13 +225,10 @@ func (s *Store) openIncidentWithNotification(checkID string, request *Notificati
 	if err := insertIncidentNotification(tx, incidentID, notificationEventDown, request, now); err != nil {
 		return false, err
 	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
 	return false, nil
 }
 
-func (s *Store) resolveIncidentWithNotification(checkID string, request *NotificationRequest) (bool, error) {
+func (s *Store) openIncidentWithNotification(checkID string, request *NotificationRequest) (bool, error) {
 	now := time.Now().UTC()
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
@@ -246,8 +236,20 @@ func (s *Store) resolveIncidentWithNotification(checkID string, request *Notific
 	}
 	defer tx.Rollback()
 
+	alreadyOpen, err := openIncidentWithNotificationTx(tx, checkID, request, now)
+	if err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return alreadyOpen, nil
+}
+
+func resolveIncidentWithNotificationTx(tx *sql.Tx, checkID string, request *NotificationRequest, now time.Time) (bool, error) {
 	var incidentID int64
-	err = tx.QueryRow(`
+	err := tx.QueryRow(`
 		UPDATE incidents
 		SET resolved_at = $1
 		WHERE check_uid = (
@@ -281,8 +283,24 @@ func (s *Store) resolveIncidentWithNotification(checkID string, request *Notific
 	if err := insertIncidentNotification(tx, incidentID, notificationEventUp, request, now); err != nil {
 		return false, err
 	}
+	return true, nil
+}
+
+func (s *Store) resolveIncidentWithNotification(checkID string, request *NotificationRequest) (bool, error) {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	resolved, err := resolveIncidentWithNotificationTx(tx, checkID, request, now)
+	if err != nil {
+		return false, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
-	return true, nil
+	return resolved, nil
 }
