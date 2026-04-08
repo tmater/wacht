@@ -61,7 +61,10 @@ CREATE INDEX idx_check_results_check_uid_probe_id_id
 CREATE TABLE monitoring_journal (
     id          BIGSERIAL PRIMARY KEY,
     kind        TEXT NOT NULL,
-    payload     JSONB NOT NULL,
+    check_id    TEXT,
+    probe_id    TEXT,
+    message     TEXT NOT NULL DEFAULT '',
+    expires_at  TIMESTAMPTZ,
     occurred_at TIMESTAMPTZ NOT NULL,
     recorded_at TIMESTAMPTZ NOT NULL
 );

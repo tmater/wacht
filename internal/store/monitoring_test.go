@@ -15,8 +15,8 @@ func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
 	secondOccurredAt := firstOccurredAt.Add(2 * time.Minute)
 
 	first, err := s.AppendMonitoringJournal(MonitoringJournalRecord{
-		Kind:       "probe_heartbeat",
-		Payload:    json.RawMessage(`{"probe_id":"probe-a"}`),
+		Kind:       "receive_heartbeat",
+		ProbeID:    "probe-a",
 		OccurredAt: firstOccurredAt,
 	})
 	if err != nil {
@@ -24,8 +24,10 @@ func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
 	}
 
 	second, err := s.AppendMonitoringJournal(MonitoringJournalRecord{
-		Kind:       "check_transition",
-		Payload:    json.RawMessage(`{"check_id":"check-1","state":"down"}`),
+		Kind:       "observe_down",
+		CheckID:    "check-1",
+		ProbeID:    "probe-b",
+		Message:    "timeout",
 		OccurredAt: secondOccurredAt,
 	})
 	if err != nil {
@@ -45,7 +47,15 @@ func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
 	if tail[0].Kind != second.Kind {
 		t.Fatalf("tail[0].Kind = %q, want %q", tail[0].Kind, second.Kind)
 	}
-	assertJSONEqual(t, tail[0].Payload, second.Payload)
+	if tail[0].CheckID != second.CheckID {
+		t.Fatalf("tail[0].CheckID = %q, want %q", tail[0].CheckID, second.CheckID)
+	}
+	if tail[0].ProbeID != second.ProbeID {
+		t.Fatalf("tail[0].ProbeID = %q, want %q", tail[0].ProbeID, second.ProbeID)
+	}
+	if tail[0].Message != second.Message {
+		t.Fatalf("tail[0].Message = %q, want %q", tail[0].Message, second.Message)
+	}
 	if !tail[0].OccurredAt.Equal(secondOccurredAt) {
 		t.Fatalf("tail[0].OccurredAt = %s, want %s", tail[0].OccurredAt, secondOccurredAt)
 	}
@@ -58,8 +68,9 @@ func TestLatestMonitoringSnapshotReturnsNewest(t *testing.T) {
 	s := newTestStore(t)
 
 	journal, err := s.AppendMonitoringJournal(MonitoringJournalRecord{
-		Kind:       "quorum_transition",
-		Payload:    json.RawMessage(`{"check_id":"check-1","state":"up"}`),
+		Kind:       "observe_up",
+		CheckID:    "check-1",
+		ProbeID:    "probe-a",
 		OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 	})
 	if err != nil {
@@ -116,8 +127,10 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 	result, incidentApplied, err := s.PersistMonitoringWrite(MonitoringWrite{
 		JournalRecords: []MonitoringJournalRecord{
 			{
-				Kind:       "quorum_transition",
-				Payload:    json.RawMessage(`{"check_id":"check-1","from":"pending","to":"down"}`),
+				Kind:       "observe_down",
+				CheckID:    "check-1",
+				ProbeID:    "probe-a",
+				Message:    "timeout",
 				OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 			},
 		},
@@ -194,8 +207,10 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	_, _, err = s.PersistMonitoringWrite(MonitoringWrite{
 		JournalRecords: []MonitoringJournalRecord{
 			{
-				Kind:       "quorum_transition",
-				Payload:    json.RawMessage(`{"check_id":"check-1","from":"pending","to":"down"}`),
+				Kind:       "observe_down",
+				CheckID:    "check-1",
+				ProbeID:    "probe-a",
+				Message:    "timeout",
 				OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 			},
 		},
