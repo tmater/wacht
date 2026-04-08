@@ -18,7 +18,7 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Store handles persistence of check results.
+// Store handles persistence for metadata, incidents, and monitoring recovery.
 type Store struct {
 	db *sql.DB
 }
