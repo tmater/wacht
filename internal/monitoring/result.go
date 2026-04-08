@@ -111,6 +111,55 @@ func monitoringWriteForResult(
 		},
 	}
 
+	return monitoringWriteForCheckEvent(check, quorum, previousQuorum, currentQuorum, write)
+}
+
+// evidenceExpiresAt returns the freshness deadline for one accepted probe
+// result using the check interval as the base cadence.
+func evidenceExpiresAt(check checks.Check, observedAt time.Time) time.Time {
+	intervalSeconds := check.Interval
+	if intervalSeconds <= 0 {
+		intervalSeconds = checks.DefaultInterval
+	}
+	return observedAt.UTC().Add(2 * time.Duration(intervalSeconds) * time.Second)
+}
+
+// resultTriggerKind maps one probe result to the matching persisted check
+// trigger name.
+func resultTriggerKind(result proto.CheckResult) string {
+	if result.Up {
+		return string(CheckTriggerObserveUp)
+	}
+	return string(CheckTriggerObserveDown)
+}
+
+// ensureQuorumLocked returns the quorum machine for one check, creating it on
+// demand so checks added after boot can start reporting before the next
+// restart.
+func (r *Runtime) ensureQuorumLocked(checkID string) *QuorumMachine {
+	quorum, ok := r.quorums[checkID]
+	if ok {
+		return quorum
+	}
+
+	probeIDs := make([]string, 0, len(r.probes))
+	for probeID := range r.probes {
+		probeIDs = append(probeIDs, probeID)
+	}
+	sort.Strings(probeIDs)
+
+	quorum = NewQuorumMachine(checkID, probeIDs)
+	r.quorums[checkID] = quorum
+	return quorum
+}
+
+func monitoringWriteForCheckEvent(
+	check checks.Check,
+	quorum *QuorumMachine,
+	previousQuorum CheckQuorumState,
+	currentQuorum CheckQuorumState,
+	write store.MonitoringWrite,
+) (store.MonitoringWrite, error) {
 	switch {
 	case previousQuorum.LastStableState == QuorumStateUp && currentQuorum.LastStableState == QuorumStateDown:
 		request, err := notificationRequest(check, "down", quorum)
@@ -169,43 +218,4 @@ func quorumCounts(quorum *QuorumMachine) (down int, total int) {
 		}
 	}
 	return down, total
-}
-
-// evidenceExpiresAt returns the freshness deadline for one accepted probe
-// result using the check interval as the base cadence.
-func evidenceExpiresAt(check checks.Check, observedAt time.Time) time.Time {
-	intervalSeconds := check.Interval
-	if intervalSeconds <= 0 {
-		intervalSeconds = checks.DefaultInterval
-	}
-	return observedAt.UTC().Add(2 * time.Duration(intervalSeconds) * time.Second)
-}
-
-// resultTriggerKind maps one probe result to the matching persisted check
-// trigger name.
-func resultTriggerKind(result proto.CheckResult) string {
-	if result.Up {
-		return string(CheckTriggerObserveUp)
-	}
-	return string(CheckTriggerObserveDown)
-}
-
-// ensureQuorumLocked returns the quorum machine for one check, creating it on
-// demand so checks added after boot can start reporting before the next
-// restart.
-func (r *Runtime) ensureQuorumLocked(checkID string) *QuorumMachine {
-	quorum, ok := r.quorums[checkID]
-	if ok {
-		return quorum
-	}
-
-	probeIDs := make([]string, 0, len(r.probes))
-	for probeID := range r.probes {
-		probeIDs = append(probeIDs, probeID)
-	}
-	sort.Strings(probeIDs)
-
-	quorum = NewQuorumMachine(checkID, probeIDs)
-	r.quorums[checkID] = quorum
-	return quorum
 }
