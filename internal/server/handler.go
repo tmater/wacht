@@ -51,7 +51,7 @@ func New(store *store.Store, monitoringRuntime *monitoring.Runtime, cfg *config.
 		config:         cfg,
 		webhooks:       alert.NewSender(store, network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
 		authProcessor:  NewAuthProcessor(store),
-		probeProcessor: NewProbeProcessor(store),
+		probeProcessor: NewProbeProcessor(store, monitoringRuntime),
 		loginLimiter:   newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
 		signupLimiter:  newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
 		publicLimiter:  newRateLimiter(60, time.Minute),

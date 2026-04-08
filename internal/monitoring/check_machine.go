@@ -7,6 +7,8 @@ import (
 	"github.com/qmuntal/stateless"
 )
 
+const consecutiveEvidenceThreshold = 2
+
 // CheckMachine owns the per-(check, probe) runtime state and transitions.
 type CheckMachine struct {
 	state CheckExecState
@@ -30,24 +32,12 @@ func (m *CheckMachine) Snapshot() CheckExecState {
 
 // ObserveUp applies a fresh successful result for this (check, probe) pair.
 func (m *CheckMachine) ObserveUp(at time.Time, expiresAt *time.Time) (CheckTransition, error) {
-	transition, err := m.fire(CheckTriggerObserveUp)
-	if err != nil {
-		return CheckTransition{}, err
-	}
-
-	m.recordObservation(true, at, expiresAt, "")
-	return transition, nil
+	return m.observe(CheckTriggerObserveUp, CheckStateUp, at, expiresAt, "")
 }
 
 // ObserveDown applies a fresh failing result for this (check, probe) pair.
 func (m *CheckMachine) ObserveDown(at time.Time, expiresAt *time.Time, message string) (CheckTransition, error) {
-	transition, err := m.fire(CheckTriggerObserveDown)
-	if err != nil {
-		return CheckTransition{}, err
-	}
-
-	m.recordObservation(false, at, expiresAt, message)
-	return transition, nil
+	return m.observe(CheckTriggerObserveDown, CheckStateDown, at, expiresAt, message)
 }
 
 // LoseEvidence marks the check state missing because its evidence is no longer
@@ -72,8 +62,34 @@ func (m *CheckMachine) MarkError(message string) (CheckTransition, error) {
 		return CheckTransition{}, err
 	}
 
+	m.bumpOutcome(CheckStateError)
 	m.state.LastError = message
 	return transition, nil
+}
+
+// observe validates one fresh up/down observation, records it, and maps the
+// raw streak metadata to the contribution state that should count toward quorum.
+func (m *CheckMachine) observe(
+	trigger CheckTrigger,
+	outcome CheckState,
+	at time.Time,
+	expiresAt *time.Time,
+	message string,
+) (CheckTransition, error) {
+	from := m.state.State
+	if _, err := m.fire(trigger); err != nil {
+		return CheckTransition{}, err
+	}
+
+	m.recordObservation(outcome, at, expiresAt, message)
+	m.state.State = m.contributionStateFor(outcome)
+
+	return CheckTransition{
+		From:    from,
+		To:      m.state.State,
+		Trigger: trigger,
+		Reentry: from == m.state.State,
+	}, nil
 }
 
 // fire sends one trigger through the check state machine and returns the
@@ -84,18 +100,17 @@ func (m *CheckMachine) fire(trigger CheckTrigger) (CheckTransition, error) {
 		return CheckTransition{}, err
 	}
 
-	to := m.state.State
 	return CheckTransition{
 		From:    from,
-		To:      to,
+		To:      m.state.State,
 		Trigger: trigger,
-		Reentry: from == to,
+		Reentry: from == m.state.State,
 	}, nil
 }
 
 // recordObservation updates the stored execution metadata after a fresh probe
 // result has been accepted.
-func (m *CheckMachine) recordObservation(up bool, at time.Time, expiresAt *time.Time, message string) {
+func (m *CheckMachine) recordObservation(outcome CheckState, at time.Time, expiresAt *time.Time, message string) {
 	observedAt := at.UTC()
 	m.state.LastResultAt = observedAt
 	m.state.LastError = message
@@ -107,18 +122,27 @@ func (m *CheckMachine) recordObservation(up bool, at time.Time, expiresAt *time.
 		m.state.ExpiresAt = expiry
 	}
 
-	outcome := CheckStateDown
-	if up {
-		outcome = CheckStateUp
-	}
+	m.bumpOutcome(outcome)
+}
 
+// bumpOutcome advances the consecutive-evidence counter for the latest raw
+// per-probe execution outcome.
+func (m *CheckMachine) bumpOutcome(outcome CheckState) {
 	if m.state.LastOutcome == outcome {
 		m.state.StreakLen++
 	} else {
 		m.state.StreakLen = 1
 	}
-
 	m.state.LastOutcome = outcome
+}
+
+// contributionStateFor returns the per-probe check state that should count
+// toward quorum after applying the consecutive-evidence rule.
+func (m *CheckMachine) contributionStateFor(outcome CheckState) CheckState {
+	if m.state.StreakLen < consecutiveEvidenceThreshold {
+		return CheckStateMissing
+	}
+	return outcome
 }
 
 // newCheckStateMachine configures the stateless machine around the per-probe

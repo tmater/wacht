@@ -7,15 +7,15 @@ import (
 
 func TestCheckMachineTransitionsAndMetadata(t *testing.T) {
 	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	expiresAt := at.Add(30 * time.Second)
 	check := NewCheckMachine("check-a", "probe-a")
 
+	expiresAt := at.Add(30 * time.Second)
 	transition, err := check.ObserveDown(at, &expiresAt, "timeout")
 	if err != nil {
 		t.Fatalf("ObserveDown: %v", err)
 	}
-	if transition.From != CheckStateMissing || transition.To != CheckStateDown {
-		t.Fatalf("first down transition = %+v, want missing -> down", transition)
+	if transition.From != CheckStateMissing || transition.To != CheckStateMissing {
+		t.Fatalf("first down transition = %+v, want missing -> missing", transition)
 	}
 
 	state := check.Snapshot()
@@ -32,12 +32,13 @@ func TestCheckMachineTransitionsAndMetadata(t *testing.T) {
 		t.Fatalf("expiresAt = %v, want %v", state.ExpiresAt, expiresAt)
 	}
 
-	transition, err = check.ObserveDown(at.Add(time.Second), &expiresAt, "timeout")
+	secondExpiry := at.Add(time.Second + 30*time.Second)
+	transition, err = check.ObserveDown(at.Add(time.Second), &secondExpiry, "timeout")
 	if err != nil {
 		t.Fatalf("ObserveDown reentry: %v", err)
 	}
-	if !transition.Reentry {
-		t.Fatal("expected repeated down observation to be reentry")
+	if transition.From != CheckStateMissing || transition.To != CheckStateDown {
+		t.Fatalf("second down transition = %+v, want missing -> down", transition)
 	}
 	if got := check.Snapshot().StreakLen; got != 2 {
 		t.Fatalf("streak after repeated down = %d, want 2", got)
@@ -68,15 +69,25 @@ func TestCheckMachineTransitionsAndMetadata(t *testing.T) {
 		t.Fatalf("streak after losing evidence = %d, want 0", got)
 	}
 
-	transition, err = check.ObserveUp(at.Add(2*time.Second), &expiresAt)
+	thirdExpiry := at.Add(2*time.Second + 30*time.Second)
+	transition, err = check.ObserveUp(at.Add(2*time.Second), &thirdExpiry)
 	if err != nil {
 		t.Fatalf("ObserveUp: %v", err)
 	}
-	if transition.From != CheckStateMissing || transition.To != CheckStateUp {
-		t.Fatalf("up transition = %+v, want missing -> up", transition)
+	if transition.From != CheckStateMissing || transition.To != CheckStateMissing {
+		t.Fatalf("first up transition = %+v, want missing -> missing", transition)
 	}
 	if got := check.Snapshot().StreakLen; got != 1 {
 		t.Fatalf("streak after direction change = %d, want 1", got)
+	}
+
+	fourthExpiry := at.Add(3*time.Second + 30*time.Second)
+	transition, err = check.ObserveUp(at.Add(3*time.Second), &fourthExpiry)
+	if err != nil {
+		t.Fatalf("ObserveUp second: %v", err)
+	}
+	if transition.From != CheckStateMissing || transition.To != CheckStateUp {
+		t.Fatalf("second up transition = %+v, want missing -> up", transition)
 	}
 }
 

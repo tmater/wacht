@@ -13,9 +13,18 @@ func TestQuorumMachineRecompute(t *testing.T) {
 	if _, err := quorum.ObserveDown("probe-a", at, &expiresAt, "timeout"); err != nil {
 		t.Fatalf("ObserveDown probe-a: %v", err)
 	}
-	update, err := quorum.ObserveDown("probe-b", at, &expiresAt, "timeout")
+	if _, err := quorum.ObserveDown("probe-b", at, &expiresAt, "timeout"); err != nil {
+		t.Fatalf("ObserveDown probe-b first: %v", err)
+	}
+
+	secondAt := at.Add(time.Second)
+	secondExpiry := secondAt.Add(30 * time.Second)
+	if _, err := quorum.ObserveDown("probe-a", secondAt, &secondExpiry, "timeout"); err != nil {
+		t.Fatalf("ObserveDown probe-a second: %v", err)
+	}
+	update, err := quorum.ObserveDown("probe-b", secondAt, &secondExpiry, "timeout")
 	if err != nil {
-		t.Fatalf("ObserveDown probe-b: %v", err)
+		t.Fatalf("ObserveDown probe-b second: %v", err)
 	}
 
 	transition := update.QuorumTransition
