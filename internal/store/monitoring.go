@@ -14,6 +14,8 @@ var (
 	ErrInvalidMonitoringJournalKind = errors.New("store: invalid monitoring journal kind")
 	// ErrInvalidMonitoringPayload reports malformed or empty snapshot JSON payloads.
 	ErrInvalidMonitoringPayload = errors.New("store: invalid monitoring payload")
+	// ErrInvalidMonitoringProbeWrite reports an incomplete probe heartbeat write.
+	ErrInvalidMonitoringProbeWrite = errors.New("store: invalid monitoring probe write")
 	// ErrInvalidMonitoringIncidentWrite reports an incomplete incident write.
 	ErrInvalidMonitoringIncidentWrite = errors.New("store: invalid monitoring incident write")
 )
@@ -46,6 +48,8 @@ type MonitoringSnapshot struct {
 type MonitoringWrite struct {
 	JournalRecords       []MonitoringJournalRecord
 	Snapshot             *MonitoringSnapshot
+	ProbeHeartbeatID     string
+	ProbeHeartbeatAt     time.Time
 	IncidentCheckID      string
 	ResolveIncident      bool
 	IncidentNotification *NotificationRequest
@@ -168,11 +172,14 @@ func (s *Store) LatestMonitoringSnapshot() (*MonitoringSnapshot, error) {
 // It returns the persisted write with generated IDs filled in, plus whether the
 // incident side effect actually changed durable state.
 func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, bool, error) {
+	if write.ProbeHeartbeatID == "" && !write.ProbeHeartbeatAt.IsZero() {
+		return MonitoringWrite{}, false, ErrInvalidMonitoringProbeWrite
+	}
 	if write.IncidentCheckID == "" && (write.ResolveIncident || write.IncidentNotification != nil) {
 		return MonitoringWrite{}, false, ErrInvalidMonitoringIncidentWrite
 	}
 
-	if len(write.JournalRecords) == 0 && write.Snapshot == nil && write.IncidentCheckID == "" {
+	if len(write.JournalRecords) == 0 && write.Snapshot == nil && write.ProbeHeartbeatID == "" && write.IncidentCheckID == "" {
 		return MonitoringWrite{}, false, nil
 	}
 
@@ -206,6 +213,14 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 		persisted.Snapshot = &saved
 	}
 
+	if write.ProbeHeartbeatID != "" {
+		heartbeatAt, err := updateProbeHeartbeatTx(tx, write.ProbeHeartbeatID, write.ProbeHeartbeatAt)
+		if err != nil {
+			return MonitoringWrite{}, false, err
+		}
+		persisted.ProbeHeartbeatAt = heartbeatAt
+	}
+
 	incidentApplied, err := applyMonitoringIncidentTx(
 		tx,
 		write.IncidentCheckID,
@@ -222,6 +237,8 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 	return persisted, incidentApplied, nil
 }
 
+// appendMonitoringJournalTx normalizes and appends one recovery journal record
+// inside an existing transaction.
 func appendMonitoringJournalTx(tx *sql.Tx, record MonitoringJournalRecord) (MonitoringJournalRecord, error) {
 	record.Kind = strings.TrimSpace(record.Kind)
 	if record.Kind == "" {
@@ -252,6 +269,8 @@ func appendMonitoringJournalTx(tx *sql.Tx, record MonitoringJournalRecord) (Moni
 	return record, nil
 }
 
+// appendMonitoringSnapshotTx normalizes and appends one runtime snapshot
+// inside an existing transaction.
 func appendMonitoringSnapshotTx(tx *sql.Tx, snapshot MonitoringSnapshot) (MonitoringSnapshot, error) {
 	payload, err := normalizeMonitoringPayload(snapshot.Payload)
 	if err != nil {
@@ -274,6 +293,8 @@ func appendMonitoringSnapshotTx(tx *sql.Tx, snapshot MonitoringSnapshot) (Monito
 	return snapshot, nil
 }
 
+// applyMonitoringIncidentTx applies the optional incident side effect for a
+// monitoring write inside an existing transaction.
 func applyMonitoringIncidentTx(tx *sql.Tx, checkID string, resolve bool, request *NotificationRequest) (bool, error) {
 	if checkID == "" {
 		return false, nil
@@ -290,6 +311,8 @@ func applyMonitoringIncidentTx(tx *sql.Tx, checkID string, resolve bool, request
 	return !alreadyOpen, nil
 }
 
+// normalizeMonitoringPayload trims and validates snapshot payload JSON before
+// it is written to the database.
 func normalizeMonitoringPayload(payload json.RawMessage) (json.RawMessage, error) {
 	payload = json.RawMessage(strings.TrimSpace(string(payload)))
 	if !json.Valid(payload) {
@@ -298,6 +321,8 @@ func normalizeMonitoringPayload(payload json.RawMessage) (json.RawMessage, error
 	return payload, nil
 }
 
+// normalizeTime coerces zero or local times into a UTC timestamp suitable for
+// durable monitoring records.
 func normalizeTime(t time.Time) time.Time {
 	if t.IsZero() {
 		return time.Now().UTC()
@@ -305,6 +330,7 @@ func normalizeTime(t time.Time) time.Time {
 	return t.UTC()
 }
 
+// normalizeOptionalTime applies normalizeTime to optional timestamps.
 func normalizeOptionalTime(t *time.Time) *time.Time {
 	if t == nil {
 		return nil

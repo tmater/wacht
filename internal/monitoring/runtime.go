@@ -109,7 +109,15 @@ func (r *Runtime) ExpireHeartbeat(probeID string) (ProbeTransition, error) {
 	if !ok {
 		return ProbeTransition{}, ErrUnknownProbe
 	}
-	return probe.ExpireHeartbeat()
+
+	transition, err := probe.ExpireHeartbeat()
+	if err != nil {
+		return ProbeTransition{}, err
+	}
+	if err := r.applyProbeDegradationLocked(probeID, ProbeStateOffline, ""); err != nil {
+		return ProbeTransition{}, err
+	}
+	return transition, nil
 }
 
 // MarkProbeError routes a probe error to the owning probe machine.
@@ -121,7 +129,15 @@ func (r *Runtime) MarkProbeError(probeID, message string) (ProbeTransition, erro
 	if !ok {
 		return ProbeTransition{}, ErrUnknownProbe
 	}
-	return probe.MarkError(message)
+
+	transition, err := probe.MarkError(message)
+	if err != nil {
+		return ProbeTransition{}, err
+	}
+	if err := r.applyProbeDegradationLocked(probeID, ProbeStateError, message); err != nil {
+		return ProbeTransition{}, err
+	}
+	return transition, nil
 }
 
 // ObserveCheckUp routes a successful result to the owning quorum machine.

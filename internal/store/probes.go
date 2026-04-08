@@ -23,6 +23,7 @@ type Probe struct {
 	LastSeenAt   *time.Time
 }
 
+// hashProbeSecret derives the stored secret hash for probe authentication.
 func hashProbeSecret(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
@@ -126,12 +127,16 @@ func (s *Store) RegisterProbe(probeID, version string) error {
 
 // UpdateProbeHeartbeat updates last_seen_at for an active, authenticated probe.
 func (s *Store) UpdateProbeHeartbeat(probeID string) error {
-	_, err := s.db.Exec(`
-		UPDATE probes
-		SET last_seen_at = $1
-		WHERE probe_id = $2 AND status = 'active'
-	`, time.Now().UTC(), probeID)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := updateProbeHeartbeatTx(tx, probeID, time.Now().UTC()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ProbeStatus holds a probe's last_seen_at for staleness checks.
@@ -224,4 +229,19 @@ func scanProbeStatuses(rows *sql.Rows) ([]ProbeStatus, error) {
 		statuses = append(statuses, ps)
 	}
 	return statuses, rows.Err()
+}
+
+// updateProbeHeartbeatTx refreshes a probe's compatibility last-seen metadata
+// inside an existing transaction.
+func updateProbeHeartbeatTx(tx *sql.Tx, probeID string, at time.Time) (time.Time, error) {
+	heartbeatAt := normalizeTime(at)
+	_, err := tx.Exec(`
+		UPDATE probes
+		SET last_seen_at = $1
+		WHERE probe_id = $2 AND status = 'active'
+	`, heartbeatAt, probeID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return heartbeatAt, nil
 }

@@ -14,17 +14,16 @@ import (
 
 type fakeProbeStore struct {
 	registerProbeFn          func(probeID, version string) error
-	updateProbeHeartbeatFn   func(probeID string) error
 	getCheckFn               func(id string) (*checks.Check, error)
 	saveResultFn             func(r proto.CheckResult) error
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
 	registerProbeID          string
 	registerVersion          string
-	heartbeatProbeID         string
 	savedResults             []proto.CheckResult
 	persistedWrites          []store.MonitoringWrite
 }
 
+// RegisterProbe records register calls made by probe processor tests.
 func (f *fakeProbeStore) RegisterProbe(probeID, version string) error {
 	f.registerProbeID = probeID
 	f.registerVersion = version
@@ -34,14 +33,7 @@ func (f *fakeProbeStore) RegisterProbe(probeID, version string) error {
 	return nil
 }
 
-func (f *fakeProbeStore) UpdateProbeHeartbeat(probeID string) error {
-	f.heartbeatProbeID = probeID
-	if f.updateProbeHeartbeatFn != nil {
-		return f.updateProbeHeartbeatFn(probeID)
-	}
-	return nil
-}
-
+// GetCheck returns stubbed check metadata for probe processor tests.
 func (f *fakeProbeStore) GetCheck(id string) (*checks.Check, error) {
 	if f.getCheckFn != nil {
 		return f.getCheckFn(id)
@@ -49,6 +41,7 @@ func (f *fakeProbeStore) GetCheck(id string) (*checks.Check, error) {
 	return nil, nil
 }
 
+// SaveResult records compatibility result writes for probe processor tests.
 func (f *fakeProbeStore) SaveResult(r proto.CheckResult) error {
 	f.savedResults = append(f.savedResults, r)
 	if f.saveResultFn != nil {
@@ -57,6 +50,8 @@ func (f *fakeProbeStore) SaveResult(r proto.CheckResult) error {
 	return nil
 }
 
+// PersistMonitoringWrite records runtime persistence writes for probe
+// processor tests.
 func (f *fakeProbeStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
 	f.persistedWrites = append(f.persistedWrites, write)
 	if f.persistMonitoringWriteFn != nil {
@@ -65,6 +60,8 @@ func (f *fakeProbeStore) PersistMonitoringWrite(write store.MonitoringWrite) (st
 	return write, false, nil
 }
 
+// processSequence feeds a deterministic result stream through the probe
+// processor so tests can focus on aggregate outcomes.
 func processSequence(t *testing.T, p *ProbeProcessor, checkID string, steps []struct {
 	probeID string
 	up      bool
@@ -85,6 +82,8 @@ func processSequence(t *testing.T, p *ProbeProcessor, checkID string, steps []st
 	}
 }
 
+// TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe verifies that the HTTP
+// heartbeat adapter delegates to runtime-owned monitoring writes.
 func TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe(t *testing.T) {
 	s := &fakeProbeStore{}
 	p := NewProbeProcessor(s, monitoring.NewRuntime(nil, []string{"probe-1"}))
@@ -93,11 +92,40 @@ func TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
 	}
-	if s.heartbeatProbeID != "probe-1" {
-		t.Fatalf("UpdateProbeHeartbeat probeID = %q, want probe-1", s.heartbeatProbeID)
+	if len(s.persistedWrites) != 1 {
+		t.Fatalf("persisted writes = %d, want 1", len(s.persistedWrites))
+	}
+	write := s.persistedWrites[0]
+	if len(write.JournalRecords) != 1 {
+		t.Fatalf("journal records = %d, want 1", len(write.JournalRecords))
+	}
+	if write.JournalRecords[0].Kind != string(monitoring.ProbeTriggerReceiveHeartbeat) {
+		t.Fatalf("journal kind = %q, want %q", write.JournalRecords[0].Kind, monitoring.ProbeTriggerReceiveHeartbeat)
+	}
+	if write.JournalRecords[0].ProbeID != "probe-1" {
+		t.Fatalf("journal ProbeID = %q, want probe-1", write.JournalRecords[0].ProbeID)
+	}
+	if write.ProbeHeartbeatID != "probe-1" {
+		t.Fatalf("ProbeHeartbeatID = %q, want probe-1", write.ProbeHeartbeatID)
+	}
+	if write.ProbeHeartbeatAt.IsZero() {
+		t.Fatal("expected ProbeHeartbeatAt to be set")
+	}
+
+	probeState, err := p.runtime.ProbeSnapshot("probe-1")
+	if err != nil {
+		t.Fatalf("ProbeSnapshot() error = %v", err)
+	}
+	if probeState.State != monitoring.ProbeStateOnline {
+		t.Fatalf("probe state = %q, want %q", probeState.State, monitoring.ProbeStateOnline)
+	}
+	if probeState.LastHeartbeatAt == nil {
+		t.Fatal("expected LastHeartbeatAt to be set")
 	}
 }
 
+// TestProbeProcessorRegisterRecordsVersion verifies that registration still
+// writes probe startup metadata directly.
 func TestProbeProcessorRegisterRecordsVersion(t *testing.T) {
 	s := &fakeProbeStore{}
 	p := NewProbeProcessor(s, monitoring.NewRuntime(nil, []string{"probe-1"}))
@@ -114,6 +142,8 @@ func TestProbeProcessorRegisterRecordsVersion(t *testing.T) {
 	}
 }
 
+// TestProbeProcessorProcessNormalizesResultAndCreatesQuorum verifies result
+// normalization and first-time quorum creation on ingestion.
 func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
@@ -185,6 +215,8 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	}
 }
 
+// TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition verifies
+// durable incident opening on a stable runtime-owned outage transition.
 func TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
@@ -237,6 +269,8 @@ func TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition(t *testing
 	}
 }
 
+// TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition
+// verifies durable incident resolution on a stable recovery transition.
 func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
@@ -293,6 +327,8 @@ func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *test
 	}
 }
 
+// TestProbeProcessorProcessRejectsInvalidProbeID verifies that authenticated
+// probe identity cannot be overridden by request payloads.
 func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
@@ -309,6 +345,8 @@ func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	}
 }
 
+// TestProbeProcessorProcessRejectsUnknownCheckID verifies that ingestion
+// rejects results for checks missing from store metadata.
 func TestProbeProcessorProcessRejectsUnknownCheckID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
@@ -324,6 +362,8 @@ func TestProbeProcessorProcessRejectsUnknownCheckID(t *testing.T) {
 	}
 }
 
+// TestProbeProcessorProcessPropagatesSaveError verifies that compatibility
+// persistence failures still surface to the caller.
 func TestProbeProcessorProcessPropagatesSaveError(t *testing.T) {
 	saveErr := errors.New("write failed")
 	s := &fakeProbeStore{
