@@ -42,22 +42,6 @@ CREATE UNIQUE INDEX idx_checks_active_id
     ON checks (id)
     WHERE deleted_at IS NULL;
 
-CREATE TABLE check_results (
-    id         BIGSERIAL PRIMARY KEY,
-    check_uid  BIGINT NOT NULL REFERENCES checks(uid),
-    probe_id   TEXT NOT NULL,
-    type       TEXT NOT NULL,
-    target     TEXT NOT NULL,
-    up         BOOLEAN NOT NULL,
-    latency_ms INTEGER NOT NULL,
-    error      TEXT,
-    timestamp  TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX idx_check_results_timestamp ON check_results (timestamp);
-CREATE INDEX idx_check_results_check_uid_probe_id_id
-    ON check_results (check_uid, probe_id, id DESC);
-
 CREATE TABLE monitoring_journal (
     id          BIGSERIAL PRIMARY KEY,
     kind        TEXT NOT NULL,
@@ -67,14 +51,6 @@ CREATE TABLE monitoring_journal (
     expires_at  TIMESTAMPTZ,
     occurred_at TIMESTAMPTZ NOT NULL,
     recorded_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE monitoring_snapshots (
-    id              BIGSERIAL PRIMARY KEY,
-    last_journal_id BIGINT NOT NULL DEFAULT 0,
-    payload         JSONB NOT NULL,
-    captured_at     TIMESTAMPTZ NOT NULL,
-    CONSTRAINT monitoring_snapshots_last_journal_id_check CHECK (last_journal_id >= 0)
 );
 
 CREATE TABLE incidents (

@@ -58,13 +58,29 @@ func newTestStore(t *testing.T) *Store {
 
 	// Wipe all tables so tests don't interfere with each other.
 	_, err = s.db.Exec(`
-		TRUNCATE incident_notifications, signup_requests, monitoring_snapshots, monitoring_journal, check_results, incidents, sessions, checks, users, probes RESTART IDENTITY CASCADE
+		TRUNCATE incident_notifications, signup_requests, monitoring_journal, incidents, sessions, checks, users, probes RESTART IDENTITY CASCADE
 	`)
 	if err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}
 
 	return s
+}
+
+func openIncidentForTest(s *Store, checkID string) (bool, error) {
+	return s.openIncidentWithNotification(checkID, nil)
+}
+
+func openIncidentWithNotificationForTest(s *Store, checkID string, request *NotificationRequest) (bool, error) {
+	return s.openIncidentWithNotification(checkID, request)
+}
+
+func resolveIncidentForTest(s *Store, checkID string) (bool, error) {
+	return s.resolveIncidentWithNotification(checkID, nil)
+}
+
+func resolveIncidentWithNotificationForTest(s *Store, checkID string, request *NotificationRequest) (bool, error) {
+	return s.resolveIncidentWithNotification(checkID, request)
 }
 
 func TestOpenIncident_Deduplication(t *testing.T) {
@@ -78,7 +94,7 @@ func TestOpenIncident_Deduplication(t *testing.T) {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	alreadyOpen, err := s.OpenIncident("check-1")
+	alreadyOpen, err := openIncidentForTest(s, "check-1")
 	if err != nil {
 		t.Fatalf("first OpenIncident: %v", err)
 	}
@@ -86,7 +102,7 @@ func TestOpenIncident_Deduplication(t *testing.T) {
 		t.Fatal("expected alreadyOpen=false on first call, got true")
 	}
 
-	alreadyOpen, err = s.OpenIncident("check-1")
+	alreadyOpen, err = openIncidentForTest(s, "check-1")
 	if err != nil {
 		t.Fatalf("second OpenIncident: %v", err)
 	}
@@ -116,7 +132,7 @@ func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
 	for range workers {
 		go func() {
 			defer wg.Done()
-			alreadyOpen, err := s.OpenIncident("check-1")
+			alreadyOpen, err := openIncidentForTest(s, "check-1")
 			if err != nil {
 				errs <- err
 				return
@@ -177,10 +193,10 @@ func TestResolveIncident_AllowsReopening(t *testing.T) {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	if _, err := s.OpenIncident("check-1"); err != nil {
+	if _, err := openIncidentForTest(s, "check-1"); err != nil {
 		t.Fatalf("OpenIncident: %v", err)
 	}
-	resolved, err := s.ResolveIncident("check-1")
+	resolved, err := resolveIncidentForTest(s, "check-1")
 	if err != nil {
 		t.Fatalf("ResolveIncident: %v", err)
 	}
@@ -188,7 +204,7 @@ func TestResolveIncident_AllowsReopening(t *testing.T) {
 		t.Fatal("expected ResolveIncident to report a resolved incident")
 	}
 
-	alreadyOpen, err := s.OpenIncident("check-1")
+	alreadyOpen, err := openIncidentForTest(s, "check-1")
 	if err != nil {
 		t.Fatalf("second OpenIncident: %v", err)
 	}
@@ -200,7 +216,7 @@ func TestResolveIncident_AllowsReopening(t *testing.T) {
 func TestResolveIncident_NoOpenIncident(t *testing.T) {
 	s := newTestStore(t)
 
-	resolved, err := s.ResolveIncident("check-1")
+	resolved, err := resolveIncidentForTest(s, "check-1")
 	if err != nil {
 		t.Fatalf("ResolveIncident: %v", err)
 	}
@@ -220,7 +236,7 @@ func TestOpenIncidentWithNotification_CreatesDurableDownNotification(t *testing.
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	alreadyOpen, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+	alreadyOpen, err := openIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"down"}`),
 	})
@@ -272,13 +288,13 @@ func TestResolveIncidentWithNotification_SupersedesPendingDownNotification(t *te
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+	if _, err := openIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"down"}`),
 	}); err != nil {
 		t.Fatalf("OpenIncidentWithNotification: %v", err)
 	}
-	resolved, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+	resolved, err := resolveIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"up"}`),
 	})
@@ -330,7 +346,7 @@ func TestMarkIncidentNotificationRetry_SupersedesDownAfterResolve(t *testing.T) 
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+	if _, err := openIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"down"}`),
 	}); err != nil {
@@ -342,7 +358,7 @@ func TestMarkIncidentNotificationRetry_SupersedesDownAfterResolve(t *testing.T) 
 		t.Fatalf("query notification id: %v", err)
 	}
 
-	if _, err := s.ResolveIncident("check-1"); err != nil {
+	if _, err := resolveIncidentForTest(s, "check-1"); err != nil {
 		t.Fatalf("ResolveIncident: %v", err)
 	}
 	if err := s.MarkIncidentNotificationRetry(notificationID, time.Now().UTC(), time.Now().UTC().Add(time.Minute), "boom"); err != nil {
@@ -369,7 +385,7 @@ func TestMarkIncidentNotificationDelivered_DoesNotOverrideSupersededDownNotifica
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+	if _, err := openIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"down"}`),
 	}); err != nil {
@@ -385,7 +401,7 @@ func TestMarkIncidentNotificationDelivered_DoesNotOverrideSupersededDownNotifica
 		t.Fatalf("expected 1 claimed job, got %d", len(jobs))
 	}
 
-	if _, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+	if _, err := resolveIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"up"}`),
 	}); err != nil {
@@ -429,7 +445,7 @@ func TestStatusCheckViews_ReturnAllChecksWithIncidentTimestamps(t *testing.T) {
 		t.Fatalf("CreateCheck pending-check: %v", err)
 	}
 
-	if _, err := s.OpenIncident("down-check"); err != nil {
+	if _, err := openIncidentForTest(s, "down-check"); err != nil {
 		t.Fatalf("OpenIncident: %v", err)
 	}
 
@@ -472,7 +488,7 @@ func TestStatusCheckViews_ScopedToUser(t *testing.T) {
 	if err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
-	if _, err := s.OpenIncident("bob-check"); err != nil {
+	if _, err := openIncidentForTest(s, "bob-check"); err != nil {
 		t.Fatalf("OpenIncident bob: %v", err)
 	}
 
@@ -527,7 +543,7 @@ func TestPublicStatusCheckViews_DistinguishesUnknownSlugAndNoChecks(t *testing.T
 	if err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
-	if _, err := s.OpenIncident("down-check"); err != nil {
+	if _, err := openIncidentForTest(s, "down-check"); err != nil {
 		t.Fatalf("OpenIncident: %v", err)
 	}
 
@@ -575,21 +591,21 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 	}
 
 	// Open and resolve two incidents, then open a third (still open).
-	if _, err := s.OpenIncident("check-1"); err != nil {
+	if _, err := openIncidentForTest(s, "check-1"); err != nil {
 		t.Fatalf("OpenIncident check-1: %v", err)
 	}
-	if _, err := s.ResolveIncident("check-1"); err != nil {
+	if _, err := resolveIncidentForTest(s, "check-1"); err != nil {
 		t.Fatalf("ResolveIncident check-1: %v", err)
 	}
 
-	if _, err := s.OpenIncident("check-2"); err != nil {
+	if _, err := openIncidentForTest(s, "check-2"); err != nil {
 		t.Fatalf("OpenIncident check-2: %v", err)
 	}
-	if _, err := s.ResolveIncident("check-2"); err != nil {
+	if _, err := resolveIncidentForTest(s, "check-2"); err != nil {
 		t.Fatalf("ResolveIncident check-2: %v", err)
 	}
 
-	if _, err := s.OpenIncident("check-1"); err != nil {
+	if _, err := openIncidentForTest(s, "check-1"); err != nil {
 		t.Fatalf("OpenIncident check-1 (second): %v", err)
 	}
 
@@ -628,13 +644,13 @@ func TestListIncidents_IncludesNotificationSummary(t *testing.T) {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	if _, err := s.OpenIncidentWithNotification("check-1", &NotificationRequest{
+	if _, err := openIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"down"}`),
 	}); err != nil {
 		t.Fatalf("OpenIncidentWithNotification: %v", err)
 	}
-	if _, err := s.ResolveIncidentWithNotification("check-1", &NotificationRequest{
+	if _, err := resolveIncidentWithNotificationForTest(s, "check-1", &NotificationRequest{
 		WebhookURL: "https://hooks.example.com/wacht",
 		Payload:    []byte(`{"status":"up"}`),
 	}); err != nil {
@@ -676,10 +692,10 @@ func TestListIncidents_RespectsLimit(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if _, err := s.OpenIncident("check-1"); err != nil {
+		if _, err := openIncidentForTest(s, "check-1"); err != nil {
 			t.Fatalf("OpenIncident: %v", err)
 		}
-		if _, err := s.ResolveIncident("check-1"); err != nil {
+		if _, err := resolveIncidentForTest(s, "check-1"); err != nil {
 			t.Fatalf("ResolveIncident: %v", err)
 		}
 	}
@@ -712,10 +728,10 @@ func TestListIncidents_ScopedToUser(t *testing.T) {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
 
-	if _, err := s.OpenIncident("alice-check"); err != nil {
+	if _, err := openIncidentForTest(s, "alice-check"); err != nil {
 		t.Fatalf("OpenIncident alice: %v", err)
 	}
-	if _, err := s.OpenIncident("bob-check"); err != nil {
+	if _, err := openIncidentForTest(s, "bob-check"); err != nil {
 		t.Fatalf("OpenIncident bob: %v", err)
 	}
 

@@ -1,40 +1,44 @@
 package store
 
 import (
-	"encoding/json"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 )
 
-// TestAppendMonitoringJournalAndLoadTail verifies ordered journal replay
-// reads after appending recovery records.
-func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
+// TestPersistMonitoringWriteAndLoadTail verifies ordered journal replay reads
+// after appending runtime recovery records through the live write path.
+func TestPersistMonitoringWriteAndLoadTail(t *testing.T) {
 	s := newTestStore(t)
 
 	firstOccurredAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	secondOccurredAt := firstOccurredAt.Add(2 * time.Minute)
 
-	first, err := s.AppendMonitoringJournal(MonitoringJournalRecord{
-		Kind:       "receive_heartbeat",
-		ProbeID:    "probe-a",
-		OccurredAt: firstOccurredAt,
+	firstWrite, err := s.PersistMonitoringWrite(MonitoringWrite{
+		JournalRecords: []MonitoringJournalRecord{{
+			Kind:       "receive_heartbeat",
+			ProbeID:    "probe-a",
+			OccurredAt: firstOccurredAt,
+		}},
 	})
 	if err != nil {
-		t.Fatalf("AppendMonitoringJournal first: %v", err)
+		t.Fatalf("PersistMonitoringWrite first: %v", err)
 	}
+	first := firstWrite.JournalRecords[0]
 
-	second, err := s.AppendMonitoringJournal(MonitoringJournalRecord{
-		Kind:       "observe_down",
-		CheckID:    "check-1",
-		ProbeID:    "probe-b",
-		Message:    "timeout",
-		OccurredAt: secondOccurredAt,
+	secondWrite, err := s.PersistMonitoringWrite(MonitoringWrite{
+		JournalRecords: []MonitoringJournalRecord{{
+			Kind:       "observe_down",
+			CheckID:    "check-1",
+			ProbeID:    "probe-b",
+			Message:    "timeout",
+			OccurredAt: secondOccurredAt,
+		}},
 	})
 	if err != nil {
-		t.Fatalf("AppendMonitoringJournal second: %v", err)
+		t.Fatalf("PersistMonitoringWrite second: %v", err)
 	}
+	second := secondWrite.JournalRecords[0]
 
 	tail, err := s.MonitoringJournalAfter(first.ID)
 	if err != nil {
@@ -66,59 +70,9 @@ func TestAppendMonitoringJournalAndLoadTail(t *testing.T) {
 	}
 }
 
-// TestLatestMonitoringSnapshotReturnsNewest verifies that snapshot reads return
-// the newest captured runtime image.
-func TestLatestMonitoringSnapshotReturnsNewest(t *testing.T) {
-	s := newTestStore(t)
-
-	journal, err := s.AppendMonitoringJournal(MonitoringJournalRecord{
-		Kind:       "observe_up",
-		CheckID:    "check-1",
-		ProbeID:    "probe-a",
-		OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("AppendMonitoringJournal: %v", err)
-	}
-
-	if _, err := s.AppendMonitoringSnapshot(MonitoringSnapshot{
-		LastJournalID: 0,
-		Payload:       json.RawMessage(`{"runtime":"older"}`),
-		CapturedAt:    time.Date(2026, time.January, 2, 3, 5, 0, 0, time.UTC),
-	}); err != nil {
-		t.Fatalf("AppendMonitoringSnapshot older: %v", err)
-	}
-
-	newest, err := s.AppendMonitoringSnapshot(MonitoringSnapshot{
-		LastJournalID: journal.ID,
-		Payload:       json.RawMessage(`{"runtime":"newer"}`),
-		CapturedAt:    time.Date(2026, time.January, 2, 3, 6, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("AppendMonitoringSnapshot newer: %v", err)
-	}
-
-	got, err := s.LatestMonitoringSnapshot()
-	if err != nil {
-		t.Fatalf("LatestMonitoringSnapshot: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected snapshot, got nil")
-	}
-	if got.ID != newest.ID {
-		t.Fatalf("got snapshot ID %d, want %d", got.ID, newest.ID)
-	}
-	if got.LastJournalID != journal.ID {
-		t.Fatalf("got LastJournalID %d, want %d", got.LastJournalID, journal.ID)
-	}
-	assertJSONEqual(t, got.Payload, newest.Payload)
-	if !got.CapturedAt.Equal(newest.CapturedAt) {
-		t.Fatalf("got CapturedAt %s, want %s", got.CapturedAt, newest.CapturedAt)
-	}
-}
-
 // TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically verifies the
-// existing atomic write boundary for journal, snapshot, and incident writes.
+// existing atomic write boundary for journal, probe metadata, and incident
+// writes.
 func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T) {
 	s := newTestStore(t)
 
@@ -130,7 +84,7 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	result, incidentApplied, err := s.PersistMonitoringWrite(MonitoringWrite{
+	result, err := s.PersistMonitoringWrite(MonitoringWrite{
 		JournalRecords: []MonitoringJournalRecord{
 			{
 				Kind:       "observe_down",
@@ -139,11 +93,6 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 				Message:    "timeout",
 				OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 			},
-		},
-		Snapshot: &MonitoringSnapshot{
-			LastJournalID: 0,
-			Payload:       json.RawMessage(`{"runtime":"captured"}`),
-			CapturedAt:    time.Date(2026, time.January, 2, 3, 4, 6, 0, time.UTC),
 		},
 		IncidentCheckID: "check-1",
 		IncidentNotification: &NotificationRequest{
@@ -158,15 +107,6 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 	if len(result.JournalRecords) != 1 {
 		t.Fatalf("expected 1 journal record, got %d", len(result.JournalRecords))
 	}
-	if result.Snapshot == nil {
-		t.Fatal("expected snapshot result")
-	}
-	if result.Snapshot.LastJournalID != result.JournalRecords[0].ID {
-		t.Fatalf("expected snapshot LastJournalID %d, got %d", result.JournalRecords[0].ID, result.Snapshot.LastJournalID)
-	}
-	if !incidentApplied {
-		t.Fatal("expected incidentApplied=true")
-	}
 
 	var journalCount int
 	if err := s.db.QueryRow(`SELECT COUNT(1) FROM monitoring_journal`).Scan(&journalCount); err != nil {
@@ -174,14 +114,6 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 	}
 	if journalCount != 1 {
 		t.Fatalf("expected 1 journal row, got %d", journalCount)
-	}
-
-	var snapshotCount int
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM monitoring_snapshots`).Scan(&snapshotCount); err != nil {
-		t.Fatalf("count monitoring_snapshots: %v", err)
-	}
-	if snapshotCount != 1 {
-		t.Fatalf("expected 1 snapshot row, got %d", snapshotCount)
 	}
 
 	var openIncidents int
@@ -209,7 +141,7 @@ func TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically(t *testing.T) {
 	}
 
 	heartbeatAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
-	write, _, err := s.PersistMonitoringWrite(MonitoringWrite{
+	write, err := s.PersistMonitoringWrite(MonitoringWrite{
 		JournalRecords: []MonitoringJournalRecord{
 			{
 				Kind:       "receive_heartbeat",
@@ -255,7 +187,7 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	_, _, err = s.PersistMonitoringWrite(MonitoringWrite{
+	_, err = s.PersistMonitoringWrite(MonitoringWrite{
 		JournalRecords: []MonitoringJournalRecord{
 			{
 				Kind:       "observe_down",
@@ -296,14 +228,14 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
 	s := newTestStore(t)
 
-	_, _, err := s.PersistMonitoringWrite(MonitoringWrite{
+	_, err := s.PersistMonitoringWrite(MonitoringWrite{
 		ResolveIncident: true,
 	})
 	if !errors.Is(err, ErrInvalidMonitoringIncidentWrite) {
 		t.Fatalf("ResolveIncident-only error = %v, want ErrInvalidMonitoringIncidentWrite", err)
 	}
 
-	_, _, err = s.PersistMonitoringWrite(MonitoringWrite{
+	_, err = s.PersistMonitoringWrite(MonitoringWrite{
 		IncidentNotification: &NotificationRequest{
 			WebhookURL: "https://hooks.example.com/wacht",
 			Payload:    []byte(`{"status":"down"}`),
@@ -313,30 +245,10 @@ func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
 		t.Fatalf("IncidentNotification-only error = %v, want ErrInvalidMonitoringIncidentWrite", err)
 	}
 
-	_, _, err = s.PersistMonitoringWrite(MonitoringWrite{
+	_, err = s.PersistMonitoringWrite(MonitoringWrite{
 		ProbeHeartbeatAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 	})
 	if !errors.Is(err, ErrInvalidMonitoringProbeWrite) {
 		t.Fatalf("ProbeHeartbeatAt-only error = %v, want ErrInvalidMonitoringProbeWrite", err)
-	}
-}
-
-// assertJSONEqual compares snapshot payloads structurally so tests ignore
-// insignificant formatting differences.
-func assertJSONEqual(t *testing.T, got, want json.RawMessage) {
-	t.Helper()
-
-	var gotValue any
-	if err := json.Unmarshal(got, &gotValue); err != nil {
-		t.Fatalf("unmarshal got JSON: %v", err)
-	}
-
-	var wantValue any
-	if err := json.Unmarshal(want, &wantValue); err != nil {
-		t.Fatalf("unmarshal want JSON: %v", err)
-	}
-
-	if !reflect.DeepEqual(gotValue, wantValue) {
-		t.Fatalf("got JSON %s, want %s", got, want)
 	}
 }

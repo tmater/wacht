@@ -16,7 +16,7 @@ import (
 // resultStore is the persistence surface needed for runtime-owned result
 // ingestion.
 type resultStore interface {
-	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
 }
 
 // ApplyResult updates runtime-owned monitoring state and durably records the
@@ -85,7 +85,7 @@ func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result
 		return err
 	}
 
-	if _, _, err := st.PersistMonitoringWrite(write); err != nil {
+	if _, err := st.PersistMonitoringWrite(write); err != nil {
 		child.state = previousCheck
 		quorum.state = previousQuorum
 		return err

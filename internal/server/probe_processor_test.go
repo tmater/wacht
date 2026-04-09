@@ -14,7 +14,7 @@ import (
 type fakeProbeStore struct {
 	registerProbeFn          func(probeID, version string) error
 	getCheckFn               func(id string) (*checks.Check, error)
-	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	registerProbeID          string
 	registerVersion          string
 	persistedWrites          []store.MonitoringWrite
@@ -40,12 +40,12 @@ func (f *fakeProbeStore) GetCheck(id string) (*checks.Check, error) {
 
 // PersistMonitoringWrite records runtime persistence writes for probe
 // processor tests.
-func (f *fakeProbeStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
+func (f *fakeProbeStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error) {
 	f.persistedWrites = append(f.persistedWrites, write)
 	if f.persistMonitoringWriteFn != nil {
 		return f.persistMonitoringWriteFn(write)
 	}
-	return write, false, nil
+	return write, nil
 }
 
 // processSequence feeds a deterministic result stream through the probe
@@ -342,8 +342,8 @@ func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
 			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
 			return &check, nil
 		},
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
-			return store.MonitoringWrite{}, false, persistErr
+		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
+			return store.MonitoringWrite{}, persistErr
 		},
 	}
 

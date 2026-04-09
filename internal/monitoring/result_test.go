@@ -11,16 +11,16 @@ import (
 )
 
 type fakeResultStore struct {
-	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	persistedWrites          []store.MonitoringWrite
 }
 
-func (f *fakeResultStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
+func (f *fakeResultStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error) {
 	f.persistedWrites = append(f.persistedWrites, write)
 	if f.persistMonitoringWriteFn != nil {
 		return f.persistMonitoringWriteFn(write)
 	}
-	return write, false, nil
+	return write, nil
 }
 
 func applyResultSequence(t *testing.T, runtime *Runtime, st *fakeResultStore, check checks.Check, results []proto.CheckResult) {
@@ -35,8 +35,8 @@ func applyResultSequence(t *testing.T, runtime *Runtime, st *fakeResultStore, ch
 func TestApplyResultRollsBackRuntimeWhenPersistFails(t *testing.T) {
 	persistErr := errors.New("persist failed")
 	st := &fakeResultStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
-			return store.MonitoringWrite{}, false, persistErr
+		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
+			return store.MonitoringWrite{}, persistErr
 		},
 	}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
