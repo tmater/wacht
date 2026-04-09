@@ -11,18 +11,8 @@ import (
 )
 
 type fakeResultStore struct {
-	saveResultFn             func(r proto.CheckResult) error
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
-	savedResults             []proto.CheckResult
 	persistedWrites          []store.MonitoringWrite
-}
-
-func (f *fakeResultStore) SaveResult(r proto.CheckResult) error {
-	f.savedResults = append(f.savedResults, r)
-	if f.saveResultFn != nil {
-		return f.saveResultFn(r)
-	}
-	return nil
 }
 
 func (f *fakeResultStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {

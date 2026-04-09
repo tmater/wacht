@@ -14,8 +14,8 @@ type heartbeatStore interface {
 }
 
 // ApplyHeartbeat updates runtime-owned probe liveness, persists the matching
-// recovery journal record, and refreshes legacy probe metadata needed by older
-// read paths.
+// recovery journal record, and refreshes the persisted probe heartbeat
+// timestamp used by metadata reads.
 func ApplyHeartbeat(runtime *Runtime, st heartbeatStore, probeID string, at time.Time) error {
 	if runtime == nil {
 		return fmt.Errorf("monitoring: runtime is required")
@@ -28,7 +28,7 @@ func ApplyHeartbeat(runtime *Runtime, st heartbeatStore, probeID string, at time
 }
 
 // applyHeartbeat advances one probe's runtime state and persists the matching
-// recovery and compatibility writes as one unit.
+// recovery and probe metadata writes as one unit.
 func (r *Runtime) applyHeartbeat(st heartbeatStore, probeID string, at time.Time) error {
 	heartbeatAt := at.UTC()
 

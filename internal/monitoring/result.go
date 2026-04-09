@@ -13,26 +13,20 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-// resultStore is the persistence surface needed for result ingestion during the
-// refactor period while legacy result rows still support old read paths.
+// resultStore is the persistence surface needed for runtime-owned result
+// ingestion.
 type resultStore interface {
-	SaveResult(r proto.CheckResult) error
 	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
 }
 
-// ApplyResult persists the compatibility raw result row, updates runtime-owned
-// monitoring state, and durably records the resulting journal and incident
-// side effects.
+// ApplyResult updates runtime-owned monitoring state and durably records the
+// resulting journal and incident side effects.
 func ApplyResult(runtime *Runtime, st resultStore, check checks.Check, result proto.CheckResult) error {
 	if runtime == nil {
 		return fmt.Errorf("monitoring: runtime is required")
 	}
 	if st == nil {
 		return fmt.Errorf("monitoring: store is required")
-	}
-
-	if err := st.SaveResult(result); err != nil {
-		return err
 	}
 
 	return runtime.applyObservedResult(st, check, result)
@@ -72,7 +66,19 @@ func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result
 		return err
 	}
 
-	write, err := monitoringWriteForResult(check, result, expiresAt, quorum, previousQuorum, update.Quorum)
+	write := store.MonitoringWrite{
+		JournalRecords: []store.MonitoringJournalRecord{
+			{
+				Kind:       resultTriggerKind(result),
+				CheckID:    check.ID,
+				ProbeID:    result.ProbeID,
+				Message:    strings.TrimSpace(result.Error),
+				ExpiresAt:  &expiresAt,
+				OccurredAt: result.Timestamp,
+			},
+		},
+	}
+	write, err = monitoringWriteForCheckEvent(check, quorum, previousQuorum, update.Quorum, write)
 	if err != nil {
 		child.state = previousCheck
 		quorum.state = previousQuorum
@@ -86,32 +92,6 @@ func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result
 	}
 
 	return nil
-}
-
-// monitoringWriteForResult derives the durable journal entry and any incident
-// side effect that corresponds to one accepted probe result.
-func monitoringWriteForResult(
-	check checks.Check,
-	result proto.CheckResult,
-	expiresAt time.Time,
-	quorum *QuorumMachine,
-	previousQuorum CheckQuorumState,
-	currentQuorum CheckQuorumState,
-) (store.MonitoringWrite, error) {
-	write := store.MonitoringWrite{
-		JournalRecords: []store.MonitoringJournalRecord{
-			{
-				Kind:       resultTriggerKind(result),
-				CheckID:    check.ID,
-				ProbeID:    result.ProbeID,
-				Message:    strings.TrimSpace(result.Error),
-				ExpiresAt:  &expiresAt,
-				OccurredAt: result.Timestamp,
-			},
-		},
-	}
-
-	return monitoringWriteForCheckEvent(check, quorum, previousQuorum, currentQuorum, write)
 }
 
 // evidenceExpiresAt returns the freshness deadline for one accepted probe

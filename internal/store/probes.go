@@ -125,26 +125,6 @@ func (s *Store) RegisterProbe(probeID, version string) error {
 	return err
 }
 
-// UpdateProbeHeartbeat updates last_seen_at for an active, authenticated probe.
-func (s *Store) UpdateProbeHeartbeat(probeID string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := updateProbeHeartbeatTx(tx, probeID, time.Now().UTC()); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// ProbeStatus holds a probe's last_seen_at for staleness checks.
-type ProbeStatus struct {
-	ProbeID    string
-	LastSeenAt *time.Time
-}
-
 // ActiveProbeIDs returns all active probe IDs ordered for deterministic
 // runtime bootstrap.
 func (s *Store) ActiveProbeIDs() ([]string, error) {
@@ -170,68 +150,7 @@ func (s *Store) ActiveProbeIDs() ([]string, error) {
 	return probeIDs, rows.Err()
 }
 
-// AllProbeStatuses returns the last_seen_at for all active probes. Internal
-// server maintenance code uses this global view.
-func (s *Store) AllProbeStatuses() ([]ProbeStatus, error) {
-	rows, err := s.db.Query(`
-		SELECT probe_id, last_seen_at
-		FROM probes
-		WHERE status = 'active'
-		ORDER BY probe_id
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanProbeStatuses(rows)
-}
-
-// ProbeStatuses returns the last_seen_at for active probes that have reported
-// on checks owned by userID.
-func (s *Store) ProbeStatuses(userID int64) ([]ProbeStatus, error) {
-	rows, err := s.db.Query(`
-		SELECT probe_id, last_seen_at
-		FROM probes
-		WHERE status = 'active'
-		  AND EXISTS (
-			SELECT 1
-			FROM check_results cr
-			INNER JOIN checks c ON c.uid = cr.check_uid
-			WHERE cr.probe_id = probes.probe_id
-			  AND c.user_id = $1
-			  AND c.deleted_at IS NULL
-		  )
-		ORDER BY probe_id
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanProbeStatuses(rows)
-}
-
-func scanProbeStatuses(rows *sql.Rows) ([]ProbeStatus, error) {
-	var statuses []ProbeStatus
-	for rows.Next() {
-		var (
-			ps       ProbeStatus
-			lastSeen sql.NullTime
-		)
-		if err := rows.Scan(&ps.ProbeID, &lastSeen); err != nil {
-			return nil, err
-		}
-		if lastSeen.Valid {
-			t := lastSeen.Time
-			ps.LastSeenAt = &t
-		}
-		statuses = append(statuses, ps)
-	}
-	return statuses, rows.Err()
-}
-
-// updateProbeHeartbeatTx refreshes a probe's compatibility last-seen metadata
+// updateProbeHeartbeatTx refreshes a probe's persisted last-seen metadata
 // inside an existing transaction.
 func updateProbeHeartbeatTx(tx *sql.Tx, probeID string, at time.Time) (time.Time, error) {
 	heartbeatAt := normalizeTime(at)

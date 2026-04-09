@@ -12,7 +12,6 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/tmater/wacht/internal/checks"
-	"github.com/tmater/wacht/internal/proto"
 )
 
 //go:embed migrations/*.sql
@@ -30,7 +29,7 @@ func New(dsn string) (*Store, error) {
 		return nil, err
 	}
 
-	if err := runMigrations(db, dsn); err != nil {
+	if err := runMigrations(db); err != nil {
 		return nil, err
 	}
 
@@ -38,7 +37,7 @@ func New(dsn string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func runMigrations(db *sql.DB, dsn string) error {
+func runMigrations(db *sql.DB) error {
 	src, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
 		return err
@@ -60,108 +59,6 @@ func runMigrations(db *sql.DB, dsn string) error {
 	return nil
 }
 
-// SaveResult persists a check result to the database.
-func (s *Store) SaveResult(r proto.CheckResult) error {
-	var resultID int64
-	err := s.db.QueryRow(`
-		INSERT INTO check_results (check_uid, probe_id, type, target, up, latency_ms, error, timestamp)
-		SELECT uid, $2, $3, $4, $5, $6, $7, $8
-		FROM checks
-		WHERE id = $1 AND deleted_at IS NULL
-		RETURNING id
-	`,
-		r.CheckID,
-		r.ProbeID,
-		r.Type,
-		r.Target,
-		r.Up,
-		r.Latency/time.Millisecond,
-		r.Error,
-		r.Timestamp,
-	).Scan(&resultID)
-	return err
-}
-
-// RecentResultsByProbe returns the last n results for a specific probe+check,
-// ordered newest first. Used for consecutive failure detection.
-func (s *Store) RecentResultsByProbe(checkID, probeID string, n int) ([]proto.CheckResult, error) {
-	rows, err := s.db.Query(`
-		SELECT probe_id, up
-		FROM check_results
-		WHERE check_uid = (
-			SELECT uid
-			FROM checks
-			WHERE id = $1 AND deleted_at IS NULL
-		)
-		  AND probe_id = $2
-		ORDER BY id DESC
-		LIMIT $3
-	`, checkID, probeID, n)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []proto.CheckResult
-	for rows.Next() {
-		var r proto.CheckResult
-		if err := rows.Scan(&r.ProbeID, &r.Up); err != nil {
-			return nil, err
-		}
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
-
-// RecentResultsPerProbe returns the most recent result for each probe that has
-// reported for the given check_id. This is used for quorum evaluation.
-func (s *Store) RecentResultsPerProbe(checkID string) ([]proto.CheckResult, error) {
-	rows, err := s.db.Query(`
-		SELECT probe_id, up
-		FROM check_results
-		WHERE id IN (
-			SELECT MAX(id)
-			FROM check_results
-			WHERE check_uid = (
-				SELECT uid
-				FROM checks
-				WHERE id = $1 AND deleted_at IS NULL
-			)
-			GROUP BY probe_id
-		)
-	`, checkID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []proto.CheckResult
-	for rows.Next() {
-		var r proto.CheckResult
-		if err := rows.Scan(&r.ProbeID, &r.Up); err != nil {
-			return nil, err
-		}
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
-
-// CheckStatus holds the current state of a check for the status page.
-type CheckStatus struct {
-	CheckID       string
-	Target        string
-	Up            bool
-	IncidentSince *time.Time // non-nil when an incident is open
-}
-
-// PublicCheckStatus holds the public-safe state of a check for a public status
-// page. Unlike the authenticated status view, this never exposes targets.
-type PublicCheckStatus struct {
-	CheckID       string
-	Status        string
-	IncidentSince *time.Time
-}
-
 // StatusCheckView holds the metadata and durable incident timestamp needed to
 // render one authenticated status row from runtime-owned state.
 type StatusCheckView struct {
@@ -175,93 +72,6 @@ type StatusCheckView struct {
 type PublicStatusCheckView struct {
 	CheckID       string
 	IncidentSince *time.Time
-}
-
-// CheckStatuses returns the current status for each reported check owned by
-// userID, joined with any open incident.
-func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
-	rows, err := s.db.Query(`
-		SELECT c.id, c.target, i.started_at
-		FROM checks c
-		INNER JOIN (
-			SELECT DISTINCT check_uid
-			FROM check_results
-		) reported ON reported.check_uid = c.uid
-		LEFT JOIN incidents i
-			ON i.check_uid = c.uid AND i.resolved_at IS NULL
-		WHERE c.user_id = $1
-		  AND c.deleted_at IS NULL
-		ORDER BY c.id
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var statuses []CheckStatus
-	for rows.Next() {
-		var cs CheckStatus
-		var startedAt *time.Time
-		if err := rows.Scan(&cs.CheckID, &cs.Target, &startedAt); err != nil {
-			return nil, err
-		}
-		cs.Up = startedAt == nil
-		cs.IncidentSince = startedAt
-		statuses = append(statuses, cs)
-	}
-	return statuses, rows.Err()
-}
-
-// PublicCheckStatuses returns the public-safe status view for the user matched
-// by slug. The boolean reports whether the slug exists at all so callers can
-// distinguish "no checks yet" from "unknown page".
-func (s *Store) PublicCheckStatuses(slug string) ([]PublicCheckStatus, bool, error) {
-	var userID int64
-	err := s.db.QueryRow(`SELECT id FROM users WHERE public_status_slug = $1`, slug).Scan(&userID)
-	if err == sql.ErrNoRows {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-
-	rows, err := s.db.Query(`
-		SELECT c.id,
-		       CASE
-		           WHEN reported.check_uid IS NULL THEN 'pending'
-		           WHEN i.started_at IS NULL THEN 'up'
-		           ELSE 'down'
-		       END AS status,
-		       i.started_at
-		FROM checks c
-		LEFT JOIN (
-			SELECT DISTINCT check_uid
-			FROM check_results
-		) reported ON reported.check_uid = c.uid
-		LEFT JOIN incidents i
-			ON i.check_uid = c.uid AND i.resolved_at IS NULL
-		WHERE c.user_id = $1
-		  AND c.deleted_at IS NULL
-		ORDER BY c.id
-	`, userID)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-
-	var statuses []PublicCheckStatus
-	for rows.Next() {
-		var (
-			status    PublicCheckStatus
-			startedAt *time.Time
-		)
-		if err := rows.Scan(&status.CheckID, &status.Status, &startedAt); err != nil {
-			return nil, false, err
-		}
-		status.IncidentSince = startedAt
-		statuses = append(statuses, status)
-	}
-	return statuses, true, rows.Err()
 }
 
 // StatusCheckViews returns all active checks owned by userID plus any open
@@ -618,16 +428,6 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 		incidents = append(incidents, inc)
 	}
 	return incidents, rows.Err()
-}
-
-// EvictOldResults deletes check_results older than the given cutoff.
-// Returns the number of rows deleted.
-func (s *Store) EvictOldResults(cutoff time.Time) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM check_results WHERE timestamp < $1`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
 }
 
 // Close closes the database connection.

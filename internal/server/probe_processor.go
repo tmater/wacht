@@ -15,17 +15,13 @@ import (
 type probeStore interface {
 	RegisterProbe(probeID, version string) error
 	GetCheck(id string) (*checks.Check, error)
-	SaveResult(r proto.CheckResult) error
 	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
 }
-
-// ProbeResultOutcome is the normalized result of processing one probe result.
-type ProbeResultOutcome struct{}
 
 type probeProcessor interface {
 	Heartbeat(probe *store.Probe, req probeapi.HeartbeatRequest) error
 	Register(probe *store.Probe, req probeapi.RegisterRequest) error
-	Process(probe *store.Probe, incoming proto.CheckResult) (ProbeResultOutcome, error)
+	Process(probe *store.Probe, incoming proto.CheckResult) error
 }
 
 type ProbeProcessor struct {
@@ -67,22 +63,22 @@ func (p *ProbeProcessor) Register(probe *store.Probe, req probeapi.RegisterReque
 
 // Process validates and normalizes one probe result before handing it off to
 // runtime-owned monitoring logic.
-func (p *ProbeProcessor) Process(probe *store.Probe, incoming proto.CheckResult) (ProbeResultOutcome, error) {
+func (p *ProbeProcessor) Process(probe *store.Probe, incoming proto.CheckResult) error {
 	if probe == nil {
-		return ProbeResultOutcome{}, fmt.Errorf("probe is required")
+		return fmt.Errorf("probe is required")
 	}
 
 	check, result, err := p.normalize(probe, incoming)
 	if err != nil {
-		return ProbeResultOutcome{}, err
+		return err
 	}
 
 	slog.Default().Debug("probe result received", "component", "probe", "check_id", result.CheckID, "probe_id", result.ProbeID, "up", result.Up)
 
 	if err := monitoring.ApplyResult(p.runtime, p.store, *check, result); err != nil {
-		return ProbeResultOutcome{}, fmt.Errorf("apply result: %w", err)
+		return fmt.Errorf("apply result: %w", err)
 	}
-	return ProbeResultOutcome{}, nil
+	return nil
 }
 
 // normalize resolves check metadata and stamps the accepted probe result with
