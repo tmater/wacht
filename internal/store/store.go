@@ -162,6 +162,21 @@ type PublicCheckStatus struct {
 	IncidentSince *time.Time
 }
 
+// StatusCheckView holds the metadata and durable incident timestamp needed to
+// render one authenticated status row from runtime-owned state.
+type StatusCheckView struct {
+	CheckID       string
+	Target        string
+	IncidentSince *time.Time
+}
+
+// PublicStatusCheckView holds the public-safe metadata and durable incident
+// timestamp needed to render one public status row from runtime-owned state.
+type PublicStatusCheckView struct {
+	CheckID       string
+	IncidentSince *time.Time
+}
+
 // CheckStatuses returns the current status for each reported check owned by
 // userID, joined with any open incident.
 func (s *Store) CheckStatuses(userID int64) ([]CheckStatus, error) {
@@ -247,6 +262,81 @@ func (s *Store) PublicCheckStatuses(slug string) ([]PublicCheckStatus, bool, err
 		statuses = append(statuses, status)
 	}
 	return statuses, true, rows.Err()
+}
+
+// StatusCheckViews returns all active checks owned by userID plus any open
+// incident timestamp. Runtime-owned status APIs merge this metadata with
+// monitoring state in memory.
+func (s *Store) StatusCheckViews(userID int64) ([]StatusCheckView, error) {
+	rows, err := s.db.Query(`
+		SELECT c.id, c.target, i.started_at
+		FROM checks c
+		LEFT JOIN incidents i
+			ON i.check_uid = c.uid AND i.resolved_at IS NULL
+		WHERE c.user_id = $1
+		  AND c.deleted_at IS NULL
+		ORDER BY c.id
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var views []StatusCheckView
+	for rows.Next() {
+		var (
+			view      StatusCheckView
+			startedAt *time.Time
+		)
+		if err := rows.Scan(&view.CheckID, &view.Target, &startedAt); err != nil {
+			return nil, err
+		}
+		view.IncidentSince = startedAt
+		views = append(views, view)
+	}
+	return views, rows.Err()
+}
+
+// PublicStatusCheckViews returns all active checks for the user matched by
+// slug, plus any open incident timestamp. The boolean reports whether the slug
+// exists at all so callers can distinguish "no checks yet" from "unknown page".
+func (s *Store) PublicStatusCheckViews(slug string) ([]PublicStatusCheckView, bool, error) {
+	var userID int64
+	err := s.db.QueryRow(`SELECT id FROM users WHERE public_status_slug = $1`, slug).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT c.id, i.started_at
+		FROM checks c
+		LEFT JOIN incidents i
+			ON i.check_uid = c.uid AND i.resolved_at IS NULL
+		WHERE c.user_id = $1
+		  AND c.deleted_at IS NULL
+		ORDER BY c.id
+	`, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	var views []PublicStatusCheckView
+	for rows.Next() {
+		var (
+			view      PublicStatusCheckView
+			startedAt *time.Time
+		)
+		if err := rows.Scan(&view.CheckID, &startedAt); err != nil {
+			return nil, false, err
+		}
+		view.IncidentSince = startedAt
+		views = append(views, view)
+	}
+	return views, true, rows.Err()
 }
 
 // OpenIncident records a new incident for checkID. Returns true if an incident
@@ -377,11 +467,13 @@ func (s *Store) UpdateCheck(c checks.Check, userID int64) error {
 	return err
 }
 
-// DeleteCheck removes a check owned by userID.
-func (s *Store) DeleteCheck(id string, userID int64) error {
+// DeleteCheck removes a check owned by userID. It returns whether an active
+// owned check was deleted; unauthorized, missing, or already-deleted checks are
+// treated as idempotent no-ops.
+func (s *Store) DeleteCheck(id string, userID int64) (bool, error) {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 
@@ -395,10 +487,10 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		FOR UPDATE
 	`, id, userID).Scan(&checkUID)
 	if err == sql.ErrNoRows {
-		return tx.Commit()
+		return false, tx.Commit()
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	now := time.Now().UTC()
@@ -413,7 +505,7 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		  AND i.check_uid = $3
 		  AND n.state NOT IN ($1, $4)
 	`, notificationStateSuperseded, now, checkUID, notificationStateDelivered); err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := tx.Exec(`
@@ -422,7 +514,7 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		WHERE check_uid = $2
 		  AND resolved_at IS NULL
 	`, now, checkUID); err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := tx.Exec(`
@@ -430,10 +522,13 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		SET deleted_at = $1
 		WHERE uid = $2
 	`, now, checkUID); err != nil {
-		return err
+		return false, err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Incident represents a recorded outage for a check.

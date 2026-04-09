@@ -614,6 +614,45 @@ func TestCheckStatuses_ScopedToUser(t *testing.T) {
 	}
 }
 
+func TestStatusCheckViews_ReturnAllChecksWithIncidentTimestamps(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("status-check-views@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck down-check: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("pending-check", "http", "https://pending.example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck pending-check: %v", err)
+	}
+
+	if _, err := s.OpenIncident("down-check"); err != nil {
+		t.Fatalf("OpenIncident: %v", err)
+	}
+
+	views, err := s.StatusCheckViews(user.ID)
+	if err != nil {
+		t.Fatalf("StatusCheckViews: %v", err)
+	}
+	if len(views) != 2 {
+		t.Fatalf("expected 2 views, got %d", len(views))
+	}
+	if views[0].CheckID != "down-check" || views[0].Target != "https://down.example.com" {
+		t.Fatalf("views[0] = %#v, want down-check metadata", views[0])
+	}
+	if views[0].IncidentSince == nil {
+		t.Fatal("expected down-check incident timestamp")
+	}
+	if views[1].CheckID != "pending-check" || views[1].Target != "https://pending.example.com" {
+		t.Fatalf("views[1] = %#v, want pending-check metadata", views[1])
+	}
+	if views[1].IncidentSince != nil {
+		t.Fatal("expected pending-check to omit incident timestamp")
+	}
+}
+
 func TestPublicCheckStatuses_UsesPendingUpAndDownStates(t *testing.T) {
 	s := newTestStore(t)
 
@@ -667,6 +706,61 @@ func TestPublicCheckStatuses_UsesPendingUpAndDownStates(t *testing.T) {
 	}
 	if got := byID["up-check"].Status; got != "up" {
 		t.Fatalf("up-check status = %q, want up", got)
+	}
+}
+
+func TestPublicStatusCheckViews_DistinguishesUnknownSlugAndNoChecks(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("public-status-check-views@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	views, found, err := s.PublicStatusCheckViews(user.PublicStatusSlug)
+	if err != nil {
+		t.Fatalf("PublicStatusCheckViews existing slug: %v", err)
+	}
+	if !found {
+		t.Fatal("expected existing slug to resolve")
+	}
+	if len(views) != 0 {
+		t.Fatalf("expected no views for a user with no checks, got %d", len(views))
+	}
+
+	if err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+	if _, err := s.OpenIncident("down-check"); err != nil {
+		t.Fatalf("OpenIncident: %v", err)
+	}
+
+	views, found, err = s.PublicStatusCheckViews(user.PublicStatusSlug)
+	if err != nil {
+		t.Fatalf("PublicStatusCheckViews populated slug: %v", err)
+	}
+	if !found {
+		t.Fatal("expected populated slug to resolve")
+	}
+	if len(views) != 1 {
+		t.Fatalf("expected 1 view, got %d", len(views))
+	}
+	if views[0].CheckID != "down-check" {
+		t.Fatalf("views[0].CheckID = %q, want down-check", views[0].CheckID)
+	}
+	if views[0].IncidentSince == nil {
+		t.Fatal("expected down-check incident timestamp")
+	}
+
+	views, found, err = s.PublicStatusCheckViews("missing-slug")
+	if err != nil {
+		t.Fatalf("PublicStatusCheckViews missing slug: %v", err)
+	}
+	if found {
+		t.Fatal("expected missing slug to report found=false")
+	}
+	if len(views) != 0 {
+		t.Fatalf("expected no views for missing slug, got %d", len(views))
 	}
 }
 

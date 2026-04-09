@@ -2,9 +2,8 @@ import StatusBadge from './StatusBadge.jsx'
 import * as ui from './ui.js'
 
 export default function CheckRow({ check, statusCheck, probesUp, probesTotal, onEdit }) {
-  const up = statusCheck?.status === 'up'
-  const hasStatus = !!statusCheck
-  const badgeStatus = !hasStatus ? 'pending' : up ? 'up' : 'down'
+  const badgeStatus = statusCheck?.status ?? 'pending'
+  const incidentLabel = badgeStatus === 'down' ? 'down since' : 'incident since'
 
   return (
     <div className="flex items-center gap-4 py-2">
@@ -12,7 +11,7 @@ export default function CheckRow({ check, statusCheck, probesUp, probesTotal, on
       <div className="flex-1 min-w-0 flex items-center gap-2">
         <p className="font-mono text-xs text-gray-500 truncate">{check.target}</p>
         {statusCheck?.incident_since && (
-          <p className="text-xs text-red-400 shrink-0">down since {new Date(statusCheck.incident_since).toLocaleString()}</p>
+          <p className="text-xs text-red-400 shrink-0">{incidentLabel} {new Date(statusCheck.incident_since).toLocaleString()}</p>
         )}
       </div>
       <div className="flex items-center gap-4 shrink-0">

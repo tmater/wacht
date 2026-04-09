@@ -38,6 +38,14 @@ func TestCheckCRUD(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
+	deleted, err := s.DeleteCheck("missing-check", user.ID)
+	if err != nil {
+		t.Fatalf("DeleteCheck missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteCheck missing = true, want false")
+	}
+
 	// Create
 	c := testCheck("c1", "http", "https://example.com")
 	if err := s.CreateCheck(c, user.ID); err != nil {
@@ -74,8 +82,12 @@ func TestCheckCRUD(t *testing.T) {
 	}
 
 	// Delete
-	if err := s.DeleteCheck("c1", user.ID); err != nil {
+	deleted, err = s.DeleteCheck("c1", user.ID)
+	if err != nil {
 		t.Fatalf("DeleteCheck: %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteCheck = false, want true")
 	}
 	got, err = s.GetCheck("c1")
 	if err != nil {
@@ -83,6 +95,14 @@ func TestCheckCRUD(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("expected nil after delete, got %+v", got)
+	}
+
+	deleted, err = s.DeleteCheck("c1", user.ID)
+	if err != nil {
+		t.Fatalf("DeleteCheck second: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteCheck second = true, want false")
 	}
 }
 
@@ -113,8 +133,12 @@ func TestCheckCrossUserIsolation(t *testing.T) {
 	}
 
 	// Bob must not be able to delete Alice's check.
-	if err := s.DeleteCheck("alice-check", bob.ID); err != nil {
+	deleted, err := s.DeleteCheck("alice-check", bob.ID)
+	if err != nil {
 		t.Fatalf("DeleteCheck returned error: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteCheck = true for non-owner, want false")
 	}
 	// Check must still exist.
 	got, err := s.GetCheck("alice-check")
@@ -176,8 +200,12 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 		t.Fatalf("OpenIncidentWithNotification: %v", err)
 	}
 
-	if err := s.DeleteCheck("reused-check", alice.ID); err != nil {
+	deleted, err := s.DeleteCheck("reused-check", alice.ID)
+	if err != nil {
 		t.Fatalf("DeleteCheck alice: %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteCheck = false, want true")
 	}
 
 	var (

@@ -67,9 +67,11 @@ export default function Dashboard({ onLogout, showProbes = true }) {
 
   const statusByID = Object.fromEntries(statuses.map(s => [s.check_id, s]))
   const allUp = statuses.length > 0 && statuses.every(s => s.status === 'up')
-  const downCount = statuses.filter(s => s.status !== 'up').length
+  const downCount = statuses.filter(s => s.status === 'down').length
+  const errorCount = statuses.filter(s => s.status === 'error').length
+  const pendingCount = statuses.filter(s => s.status === 'pending').length
   const probesTotal = probes.length
-  const probesUp = probes.filter(p => p.online).length
+  const probesUp = probes.filter(p => p.status === 'online').length
 
   return (
     <div className={ui.page}>
@@ -85,7 +87,15 @@ export default function Dashboard({ onLogout, showProbes = true }) {
             <p className="text-sm text-gray-400">
               {allUp
                 ? <span className="font-semibold text-green-400">All checks passing</span>
-                : <span className="font-semibold text-red-400">{downCount} check{downCount !== 1 ? 's' : ''} down</span>
+                : (
+                  <span className="font-semibold text-gray-200">
+                    {downCount > 0 && <span className="text-red-400">{downCount} check{downCount !== 1 ? 's' : ''} down</span>}
+                    {downCount > 0 && errorCount > 0 && ' · '}
+                    {errorCount > 0 && <span className="text-amber-300">{errorCount} check{errorCount !== 1 ? 's' : ''} degraded</span>}
+                    {((downCount > 0 || errorCount > 0) && pendingCount > 0) && ' · '}
+                    {pendingCount > 0 && <span className="text-gray-400">{pendingCount} pending</span>}
+                  </span>
+                )
               }
               <span className="text-gray-600"> · {statuses.length} total</span>
             </p>
