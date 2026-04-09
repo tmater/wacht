@@ -44,6 +44,7 @@ export default function PublicStatusPage({ slug, appName = 'Wacht' }) {
 
   const allOperational = checks.length > 0 && checks.every(check => check.status === 'up')
   const downCount = checks.filter(check => check.status === 'down').length
+  const errorCount = checks.filter(check => check.status === 'error').length
   const pendingCount = checks.filter(check => check.status === 'pending').length
 
   return (
@@ -65,7 +66,8 @@ export default function PublicStatusPage({ slug, appName = 'Wacht' }) {
                 {checks.length === 0 && 'No checks published yet.'}
                 {allOperational && 'All checks operational.'}
                 {downCount > 0 && `${downCount} check${downCount !== 1 ? 's' : ''} down.`}
-                {downCount === 0 && !allOperational && pendingCount > 0 && `${pendingCount} check${pendingCount !== 1 ? 's are' : ' is'} still pending.`}
+                {downCount === 0 && errorCount > 0 && `Monitoring degraded for ${errorCount} check${errorCount !== 1 ? 's' : ''}.`}
+                {downCount === 0 && errorCount === 0 && !allOperational && pendingCount > 0 && `${pendingCount} check${pendingCount !== 1 ? 's are' : ' is'} still pending.`}
               </p>
               {lastUpdated && <p className="mt-2 text-xs text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</p>}
             </div>
@@ -78,7 +80,8 @@ export default function PublicStatusPage({ slug, appName = 'Wacht' }) {
                   <p className="min-w-0 flex-1 truncate font-mono text-sm text-gray-100">{check.check_id}</p>
                   {check.incident_since && (
                     <p className="shrink-0 text-xs text-red-400">
-                      down since {new Date(check.incident_since).toLocaleString()}
+                      {check.status === 'down' ? 'down since ' : 'incident since '}
+                      {new Date(check.incident_since).toLocaleString()}
                     </p>
                   )}
                   <StatusBadge status={check.status} />

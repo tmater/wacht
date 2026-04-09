@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -86,6 +87,63 @@ func (r *Runtime) QuorumSnapshot(checkID string) (CheckQuorumState, error) {
 		return CheckQuorumState{}, ErrUnknownCheck
 	}
 	return quorum.Snapshot(), nil
+}
+
+// EnsureCheck creates an explicit pending quorum entry for one check when the
+// runtime does not already know about it.
+func (r *Runtime) EnsureCheck(checkID string) CheckQuorumState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.ensureQuorumLocked(checkID).Snapshot()
+}
+
+// RemoveCheck drops one check's runtime state after the owning metadata has
+// been deleted.
+func (r *Runtime) RemoveCheck(checkID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.quorums, checkID)
+}
+
+// QuorumSnapshots returns aggregate runtime state for the requested checks in
+// input order. Missing checks are surfaced as explicit pending state so callers
+// do not have to reconstruct "no runtime evidence yet" elsewhere.
+func (r *Runtime) QuorumSnapshots(checkIDs []string) []CheckQuorumState {
+	checkIDs = uniqueIDs(checkIDs)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]CheckQuorumState, 0, len(checkIDs))
+	for _, checkID := range checkIDs {
+		quorum, ok := r.quorums[checkID]
+		if !ok {
+			out = append(out, newCheckQuorumState(checkID))
+			continue
+		}
+		out = append(out, quorum.Snapshot())
+	}
+	return out
+}
+
+// ProbeSnapshots returns all probe runtime states ordered by probe ID.
+func (r *Runtime) ProbeSnapshots() []ProbeRuntimeState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	probeIDs := make([]string, 0, len(r.probes))
+	for probeID := range r.probes {
+		probeIDs = append(probeIDs, probeID)
+	}
+	sort.Strings(probeIDs)
+
+	out := make([]ProbeRuntimeState, 0, len(probeIDs))
+	for _, probeID := range probeIDs {
+		out = append(out, r.probes[probeID].Snapshot())
+	}
+	return out
 }
 
 // ReceiveHeartbeat routes a fresh heartbeat to the owning probe machine.

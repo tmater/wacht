@@ -126,63 +126,21 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	logger := requestLogger(r)
 
-	statuses, err := h.store.CheckStatuses(user.ID)
+	checks, probes, err := buildAuthenticatedStatusResponse(h.monitoring, h.store, user.ID)
 	if err != nil {
-		logger.Error("query check statuses failed", "component", "status", "err", err)
+		logger.Error("build status response failed", "component", "status", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
-	}
-
-	probeStatuses, err := h.store.ProbeStatuses(user.ID)
-	if err != nil {
-		logger.Error("query probe statuses failed", "component", "status", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	type checkJSON struct {
-		CheckID       string  `json:"check_id"`
-		Target        string  `json:"target"`
-		Status        string  `json:"status"`
-		IncidentSince *string `json:"incident_since,omitempty"`
-	}
-
-	type probeJSON struct {
-		ProbeID    string  `json:"probe_id"`
-		Online     bool    `json:"online"`
-		LastSeenAt *string `json:"last_seen_at,omitempty"`
-	}
-
-	checks := make([]checkJSON, 0, len(statuses))
-	for _, cs := range statuses {
-		cj := checkJSON{
-			CheckID: cs.CheckID,
-			Target:  cs.Target,
-			Status:  "up",
-		}
-		if !cs.Up {
-			cj.Status = "down"
-		}
-		if cs.IncidentSince != nil {
-			s := cs.IncidentSince.UTC().Format(time.RFC3339)
-			cj.IncidentSince = &s
-		}
-		checks = append(checks, cj)
-	}
-
-	probes := make([]probeJSON, 0, len(probeStatuses))
-	for _, ps := range probeStatuses {
-		var lastSeenAt *string
-		online := probeOnline(ps.LastSeenAt, h.probeOfflineAfter())
-		if ps.LastSeenAt != nil {
-			s := ps.LastSeenAt.UTC().Format(time.RFC3339)
-			lastSeenAt = &s
-		}
-		probes = append(probes, probeJSON{ProbeID: ps.ProbeID, Online: online, LastSeenAt: lastSeenAt})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks, "probes": probes}); err != nil {
+	if err := json.NewEncoder(w).Encode(struct {
+		Checks []statusCheckDTO `json:"checks"`
+		Probes []statusProbeDTO `json:"probes"`
+	}{
+		Checks: checks,
+		Probes: probes,
+	}); err != nil {
 		logger.Warn("encode status response failed", "component", "status", "err", err)
 	}
 }
@@ -192,9 +150,9 @@ func (h *Handler) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	logger := requestLogger(r)
 
-	statuses, found, err := h.store.PublicCheckStatuses(slug)
+	checks, found, err := buildPublicStatusResponse(h.monitoring, h.store, slug)
 	if err != nil {
-		logger.Error("query public statuses failed", "component", "public_status", "slug", slug, "err", err)
+		logger.Error("build public status response failed", "component", "public_status", "slug", slug, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -203,27 +161,12 @@ func (h *Handler) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type checkJSON struct {
-		CheckID       string  `json:"check_id"`
-		Status        string  `json:"status"`
-		IncidentSince *string `json:"incident_since,omitempty"`
-	}
-
-	checks := make([]checkJSON, 0, len(statuses))
-	for _, status := range statuses {
-		item := checkJSON{
-			CheckID: status.CheckID,
-			Status:  status.Status,
-		}
-		if status.IncidentSince != nil {
-			ts := status.IncidentSince.UTC().Format(time.RFC3339)
-			item.IncidentSince = &ts
-		}
-		checks = append(checks, item)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"checks": checks}); err != nil {
+	if err := json.NewEncoder(w).Encode(struct {
+		Checks []statusCheckDTO `json:"checks"`
+	}{
+		Checks: checks,
+	}); err != nil {
 		logger.Warn("encode public status response failed", "component", "public_status", "slug", slug, "err", err)
 	}
 }
@@ -303,6 +246,9 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if h.monitoring != nil {
+		h.monitoring.EnsureCheck(check.ID)
+	}
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -357,6 +303,9 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 		logger.Error("delete check failed", "component", "checks", "check_id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if h.monitoring != nil {
+		h.monitoring.RemoveCheck(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -14,7 +14,9 @@ OBSERVATION_SECONDS = 12
 
 
 # Prove a flapping target does not open an incident or fire a webhook while it
-# oscillates during an observation window.
+# oscillates during an observation window. The runtime-owned read model may
+# show transient pending/up/error/down states here, but it must not create
+# durable alerting side effects.
 def test_flapping(server, mock):
     server.wait_for_health()
     mock.clear_webhooks()
@@ -57,8 +59,6 @@ def assert_no_alerts_during_flapping(server, mock, token, check_id, seconds):
         status = status_for_check(server, token, check_id)
         if status is None:
             raise SmokeError(f"flapping check {check_id} disappeared from /status")
-        if status.get("status") != "up":
-            raise SmokeError(f"expected flapping check {check_id} to remain up, got {status}")
         if status.get("incident_since") is not None:
             raise SmokeError(f"expected no open incident for flapping check {check_id}, got {status}")
 

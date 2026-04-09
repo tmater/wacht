@@ -1,6 +1,7 @@
 const styles = {
   up:       'bg-green-900 text-green-300',
   down:     'bg-red-900 text-red-300',
+  error:    'bg-amber-900 text-amber-300',
   pending:  'bg-gray-700 text-gray-400',
   open:     'bg-red-900 text-red-300',
   resolved: 'bg-gray-700 text-gray-400',
