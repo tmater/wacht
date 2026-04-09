@@ -171,23 +171,6 @@ func (h *Handler) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) probeOfflineAfter() time.Duration {
-	if h == nil || h.config == nil || h.config.ProbeOfflineAfter <= 0 {
-		return config.DefaultProbeOfflineAfter
-	}
-	return h.config.ProbeOfflineAfter
-}
-
-func probeOnline(lastSeenAt *time.Time, offlineAfter time.Duration) bool {
-	if lastSeenAt == nil {
-		return false
-	}
-	if offlineAfter <= 0 {
-		offlineAfter = config.DefaultProbeOfflineAfter
-	}
-	return time.Since(*lastSeenAt) < offlineAfter
-}
-
 // handleProbeChecks returns the probe-visible check set. This currently stays
 // global for all authenticated probes, but strips server-only metadata.
 func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
@@ -371,7 +354,7 @@ func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if _, err := h.probeProcessor.Process(probe, result); err != nil {
+	if err := h.probeProcessor.Process(probe, result); err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}

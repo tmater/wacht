@@ -200,7 +200,7 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 }
 
 // TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically verifies that the
-// heartbeat journal record and compatibility metadata update commit together.
+// heartbeat journal record and persisted probe metadata update commit together.
 func TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically(t *testing.T) {
 	s := newTestStore(t)
 

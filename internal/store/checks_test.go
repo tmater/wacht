@@ -192,7 +192,6 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
 
-	saveResult(t, s, "reused-check", "probe-a", false)
 	if _, err := s.OpenIncidentWithNotification("reused-check", &NotificationRequest{
 		WebhookURL: check.Webhook,
 		Payload:    []byte(`{"status":"down"}`),
@@ -236,14 +235,6 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 		t.Fatalf("expected 2 check generations after recreate, got %d", totalChecks)
 	}
 
-	results, err := s.RecentResultsPerProbe("reused-check")
-	if err != nil {
-		t.Fatalf("RecentResultsPerProbe after recreate: %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected no historical results after recreate, got %d", len(results))
-	}
-
 	aliceIncidents, err := s.ListIncidents(alice.ID, 10)
 	if err != nil {
 		t.Fatalf("ListIncidents alice: %v", err)
@@ -269,22 +260,17 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 		t.Fatalf("expected recreated check to have no inherited incidents, got %d", len(bobIncidents))
 	}
 
-	saveResult(t, s, "reused-check", "probe-b", true)
-
-	statuses, err := s.CheckStatuses(bob.ID)
+	views, err := s.StatusCheckViews(bob.ID)
 	if err != nil {
-		t.Fatalf("CheckStatuses bob: %v", err)
+		t.Fatalf("StatusCheckViews bob: %v", err)
 	}
-	if len(statuses) != 1 {
-		t.Fatalf("expected 1 recreated status, got %d", len(statuses))
+	if len(views) != 1 {
+		t.Fatalf("expected 1 recreated view, got %d", len(views))
 	}
-	if statuses[0].CheckID != "reused-check" {
-		t.Fatalf("expected reused-check status, got %s", statuses[0].CheckID)
+	if views[0].CheckID != "reused-check" {
+		t.Fatalf("expected reused-check view, got %s", views[0].CheckID)
 	}
-	if !statuses[0].Up {
-		t.Fatal("expected recreated check to stay healthy without stale incident state")
-	}
-	if statuses[0].IncidentSince != nil {
+	if views[0].IncidentSince != nil {
 		t.Fatal("expected no stale incident timestamp after recreate")
 	}
 

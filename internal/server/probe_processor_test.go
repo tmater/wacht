@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"testing"
-	"time"
 
 	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
@@ -15,11 +14,9 @@ import (
 type fakeProbeStore struct {
 	registerProbeFn          func(probeID, version string) error
 	getCheckFn               func(id string) (*checks.Check, error)
-	saveResultFn             func(r proto.CheckResult) error
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
 	registerProbeID          string
 	registerVersion          string
-	savedResults             []proto.CheckResult
 	persistedWrites          []store.MonitoringWrite
 }
 
@@ -39,15 +36,6 @@ func (f *fakeProbeStore) GetCheck(id string) (*checks.Check, error) {
 		return f.getCheckFn(id)
 	}
 	return nil, nil
-}
-
-// SaveResult records compatibility result writes for probe processor tests.
-func (f *fakeProbeStore) SaveResult(r proto.CheckResult) error {
-	f.savedResults = append(f.savedResults, r)
-	if f.saveResultFn != nil {
-		return f.saveResultFn(r)
-	}
-	return nil
 }
 
 // PersistMonitoringWrite records runtime persistence writes for probe
@@ -72,7 +60,7 @@ func processSequence(t *testing.T, p *ProbeProcessor, checkID string, steps []st
 		if !step.up {
 			message = "timeout"
 		}
-		if _, err := p.Process(&store.Probe{ProbeID: step.probeID}, proto.CheckResult{
+		if err := p.Process(&store.Probe{ProbeID: step.probeID}, proto.CheckResult{
 			CheckID: checkID,
 			Up:      step.up,
 			Error:   message,
@@ -155,38 +143,15 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	runtime := monitoring.NewRuntime(nil, []string{"probe-1", "probe-2", "probe-3"})
 	p := NewProbeProcessor(s, runtime)
 
-	outcome, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
+	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
 		Up:      true,
 	})
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if outcome != (ProbeResultOutcome{}) {
-		t.Fatalf("Process() outcome = %#v, want empty outcome", outcome)
-	}
-	if len(s.savedResults) != 1 {
-		t.Fatalf("saved results = %d, want 1", len(s.savedResults))
-	}
 	if len(s.persistedWrites) != 1 {
 		t.Fatalf("persisted writes = %d, want 1", len(s.persistedWrites))
-	}
-
-	saved := s.savedResults[0]
-	if saved.ProbeID != "probe-1" {
-		t.Fatalf("saved ProbeID = %q, want probe-1", saved.ProbeID)
-	}
-	if saved.Type != string(checks.CheckHTTP) {
-		t.Fatalf("saved Type = %q, want %q", saved.Type, checks.CheckHTTP)
-	}
-	if saved.Target != "https://example.com" {
-		t.Fatalf("saved Target = %q, want normalized target", saved.Target)
-	}
-	if saved.Timestamp.IsZero() {
-		t.Fatalf("saved Timestamp should be set")
-	}
-	if time.Since(saved.Timestamp) > time.Minute {
-		t.Fatalf("saved Timestamp = %s, want recent timestamp", saved.Timestamp)
 	}
 
 	journal := s.persistedWrites[0].JournalRecords
@@ -201,6 +166,12 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	}
 	if journal[0].ProbeID != "probe-1" {
 		t.Fatalf("journal ProbeID = %q, want probe-1", journal[0].ProbeID)
+	}
+	if journal[0].OccurredAt.IsZero() {
+		t.Fatal("expected journal OccurredAt to be set from normalized result timestamp")
+	}
+	if journal[0].ExpiresAt == nil || !journal[0].ExpiresAt.After(journal[0].OccurredAt) {
+		t.Fatalf("ExpiresAt = %v, want future expiry", journal[0].ExpiresAt)
 	}
 	if s.persistedWrites[0].IncidentCheckID != "" {
 		t.Fatalf("IncidentCheckID = %q, want empty", s.persistedWrites[0].IncidentCheckID)
@@ -332,7 +303,7 @@ func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *test
 func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
-	_, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
+	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
 		ProbeID: "probe-2",
 	})
@@ -350,7 +321,7 @@ func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 func TestProbeProcessorProcessRejectsUnknownCheckID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
-	_, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
+	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "missing",
 	})
 	var badRequest *badRequestError
@@ -362,32 +333,38 @@ func TestProbeProcessorProcessRejectsUnknownCheckID(t *testing.T) {
 	}
 }
 
-// TestProbeProcessorProcessPropagatesSaveError verifies that compatibility
+// TestProbeProcessorProcessPropagatesPersistError verifies that runtime
 // persistence failures still surface to the caller.
-func TestProbeProcessorProcessPropagatesSaveError(t *testing.T) {
-	saveErr := errors.New("write failed")
+func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
+	persistErr := errors.New("write failed")
 	s := &fakeProbeStore{
 		getCheckFn: func(id string) (*checks.Check, error) {
 			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
 			return &check, nil
 		},
-		saveResultFn: func(r proto.CheckResult) error {
-			return saveErr
+		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
+			return store.MonitoringWrite{}, false, persistErr
 		},
 	}
 
-	p := NewProbeProcessor(s, monitoring.NewRuntime(nil, []string{"probe-1"}))
-	_, err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
+	runtime := monitoring.NewRuntime(nil, []string{"probe-1"})
+	p := NewProbeProcessor(s, runtime)
+	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "site",
 		Up:      true,
 	})
-	if !errors.Is(err, saveErr) {
-		t.Fatalf("Process() error = %v, want %v", err, saveErr)
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("Process() error = %v, want %v", err, persistErr)
 	}
-	if len(s.savedResults) != 1 {
-		t.Fatalf("saved results = %d, want 1 attempted save", len(s.savedResults))
+	if len(s.persistedWrites) != 1 {
+		t.Fatalf("persisted writes = %d, want 1 attempted persist", len(s.persistedWrites))
 	}
-	if len(s.persistedWrites) != 0 {
-		t.Fatalf("persisted writes = %d, want 0", len(s.persistedWrites))
+
+	quorum, qErr := runtime.QuorumSnapshot("site")
+	if qErr != nil {
+		t.Fatalf("QuorumSnapshot() error = %v", qErr)
+	}
+	if quorum.State != monitoring.QuorumStatePending {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, monitoring.QuorumStatePending)
 	}
 }
