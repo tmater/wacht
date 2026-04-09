@@ -467,11 +467,13 @@ func (s *Store) UpdateCheck(c checks.Check, userID int64) error {
 	return err
 }
 
-// DeleteCheck removes a check owned by userID.
-func (s *Store) DeleteCheck(id string, userID int64) error {
+// DeleteCheck removes a check owned by userID. It returns whether an active
+// owned check was deleted; unauthorized, missing, or already-deleted checks are
+// treated as idempotent no-ops.
+func (s *Store) DeleteCheck(id string, userID int64) (bool, error) {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 
@@ -485,10 +487,10 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		FOR UPDATE
 	`, id, userID).Scan(&checkUID)
 	if err == sql.ErrNoRows {
-		return tx.Commit()
+		return false, tx.Commit()
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	now := time.Now().UTC()
@@ -503,7 +505,7 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		  AND i.check_uid = $3
 		  AND n.state NOT IN ($1, $4)
 	`, notificationStateSuperseded, now, checkUID, notificationStateDelivered); err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := tx.Exec(`
@@ -512,7 +514,7 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		WHERE check_uid = $2
 		  AND resolved_at IS NULL
 	`, now, checkUID); err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := tx.Exec(`
@@ -520,10 +522,13 @@ func (s *Store) DeleteCheck(id string, userID int64) error {
 		SET deleted_at = $1
 		WHERE uid = $2
 	`, now, checkUID); err != nil {
-		return err
+		return false, err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Incident represents a recorded outage for a check.

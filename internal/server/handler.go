@@ -299,12 +299,13 @@ func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
 	id := r.PathValue("id")
 	logger := requestLogger(r)
-	if err := h.store.DeleteCheck(id, user.ID); err != nil {
+	deleted, err := h.store.DeleteCheck(id, user.ID)
+	if err != nil {
 		logger.Error("delete check failed", "component", "checks", "check_id", id, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if h.monitoring != nil {
+	if deleted && h.monitoring != nil {
 		h.monitoring.RemoveCheck(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
