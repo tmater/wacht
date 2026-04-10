@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	probeSweepInterval = 5 * time.Second
-	checkSweepInterval = 1 * time.Second
+	probeSweepInterval     = 5 * time.Second
+	checkSweepInterval     = 1 * time.Second
+	checkSweepStartupGrace = 10 * time.Second
 )
 
 func probeSweepLoop(db *store.Store, runtime *monitoring.Runtime, offlineAfter time.Duration) {
@@ -35,6 +36,10 @@ func probeSweepLoop(db *store.Store, runtime *monitoring.Runtime, offlineAfter t
 }
 
 func checkSweepLoop(db *store.Store, runtime *monitoring.Runtime) {
+	// Let replayed runtime evidence survive long enough for probes to reconnect
+	// and submit fresh results after a server restart.
+	time.Sleep(checkSweepStartupGrace)
+
 	ticker := time.NewTicker(checkSweepInterval)
 	defer ticker.Stop()
 

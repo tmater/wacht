@@ -17,6 +17,7 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
     token = server.login()
     check_id = f"smoke-restart-recovery-{uuid.uuid4().hex[:8]}"
     cleanup = CleanupScope()
+    stopped_probe_ids = []
 
     server.create_check(
         token,
@@ -48,6 +49,7 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
 
             for probe_id in ("probe-1", "probe-2", "probe-3"):
                 probes.stop(probe_id)
+                stopped_probe_ids.append(probe_id)
 
             stack.stop_service("server")
             stack.start_service("server")
@@ -64,5 +66,7 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
             print(json.dumps({"opened": opened, "recovered": recovered}, indent=2))
     finally:
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
+        for probe_id in stopped_probe_ids:
+            cleanup.run(f"restart {probe_id}", lambda probe_id=probe_id: probes.restore(probe_id))
         cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
         cleanup.finish()
