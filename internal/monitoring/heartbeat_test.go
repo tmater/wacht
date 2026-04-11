@@ -37,19 +37,6 @@ func TestApplyHeartbeatPersistsProbeRuntimeTransition(t *testing.T) {
 		t.Fatalf("persisted writes = %d, want 1", len(st.persistedWrites))
 	}
 	write := st.persistedWrites[0]
-	if len(write.JournalRecords) != 1 {
-		t.Fatalf("journal records = %d, want 1", len(write.JournalRecords))
-	}
-	record := write.JournalRecords[0]
-	if record.Kind != string(ProbeTriggerReceiveHeartbeat) {
-		t.Fatalf("journal kind = %q, want %q", record.Kind, ProbeTriggerReceiveHeartbeat)
-	}
-	if record.ProbeID != "probe-a" {
-		t.Fatalf("journal probeID = %q, want probe-a", record.ProbeID)
-	}
-	if !record.OccurredAt.Equal(at) {
-		t.Fatalf("journal occurred_at = %s, want %s", record.OccurredAt, at)
-	}
 	if write.ProbeHeartbeatID != "probe-a" {
 		t.Fatalf("ProbeHeartbeatID = %q, want probe-a", write.ProbeHeartbeatID)
 	}

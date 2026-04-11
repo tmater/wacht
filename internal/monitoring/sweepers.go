@@ -23,7 +23,8 @@ type probeSweepRollback struct {
 }
 
 // SweepProbes expires probe heartbeats that are older than offlineAfter and
-// persists the matching recovery records.
+// clears their in-memory votes. Probe liveness recovery comes from the bounded
+// current-state snapshot in the store, so no append-only log write is needed.
 func SweepProbes(runtime *Runtime, st sweeperStore, now time.Time, offlineAfter time.Duration) (int, error) {
 	if runtime == nil {
 		return 0, fmt.Errorf("monitoring: runtime is required")
@@ -73,29 +74,15 @@ func SweepProbes(runtime *Runtime, st sweeperStore, now time.Time, offlineAfter 
 			return expired, err
 		}
 
-		write := store.MonitoringWrite{
-			JournalRecords: []store.MonitoringJournalRecord{
-				{
-					Kind:       string(ProbeTriggerHeartbeatExpired),
-					ProbeID:    probeID,
-					OccurredAt: sweptAt,
-				},
-			},
-		}
-		if _, err := st.PersistMonitoringWrite(write); err != nil {
-			runtime.restoreProbeSweepRollbackLocked(probeID, rollback)
-			runtime.mu.Unlock()
-			return expired, err
-		}
-
 		runtime.mu.Unlock()
 		expired++
 	}
 	return expired, nil
 }
 
-// SweepChecks expires stale per-(check, probe) evidence and persists the
-// matching recovery records.
+// SweepChecks expires stale per-(check, probe) evidence. Only durable incident
+// side effects, if any, are persisted; the stale execution state itself is
+// derived again from compact current-state rows on recovery.
 func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) {
 	if runtime == nil {
 		return 0, fmt.Errorf("monitoring: runtime is required")
@@ -165,16 +152,6 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 			return expired, err
 		}
 
-		write := store.MonitoringWrite{
-			JournalRecords: []store.MonitoringJournalRecord{
-				{
-					Kind:       string(CheckTriggerLoseEvidence),
-					CheckID:    assignment.CheckID,
-					ProbeID:    assignment.ProbeID,
-					OccurredAt: sweptAt,
-				},
-			},
-		}
 		if previousQuorum.LastStableState != update.Quorum.LastStableState {
 			checkDef, err := st.GetCheck(assignment.CheckID)
 			if err != nil {
@@ -184,6 +161,7 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 				return expired, err
 			}
 			if checkDef != nil {
+				write := store.MonitoringWrite{}
 				write, err = monitoringWriteForCheckEvent(*checkDef, quorum, previousQuorum, update.Quorum, write)
 				if err != nil {
 					check.state = previousCheck
@@ -191,13 +169,13 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 					runtime.mu.Unlock()
 					return expired, err
 				}
+				if _, err := st.PersistMonitoringWrite(write); err != nil {
+					check.state = previousCheck
+					quorum.state = previousQuorum
+					runtime.mu.Unlock()
+					return expired, err
+				}
 			}
-		}
-		if _, err := st.PersistMonitoringWrite(write); err != nil {
-			check.state = previousCheck
-			quorum.state = previousQuorum
-			runtime.mu.Unlock()
-			return expired, err
 		}
 
 		runtime.mu.Unlock()

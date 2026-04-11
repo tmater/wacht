@@ -84,15 +84,6 @@ func TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe(t *testing.T) {
 		t.Fatalf("persisted writes = %d, want 1", len(s.persistedWrites))
 	}
 	write := s.persistedWrites[0]
-	if len(write.JournalRecords) != 1 {
-		t.Fatalf("journal records = %d, want 1", len(write.JournalRecords))
-	}
-	if write.JournalRecords[0].Kind != string(monitoring.ProbeTriggerReceiveHeartbeat) {
-		t.Fatalf("journal kind = %q, want %q", write.JournalRecords[0].Kind, monitoring.ProbeTriggerReceiveHeartbeat)
-	}
-	if write.JournalRecords[0].ProbeID != "probe-1" {
-		t.Fatalf("journal ProbeID = %q, want probe-1", write.JournalRecords[0].ProbeID)
-	}
 	if write.ProbeHeartbeatID != "probe-1" {
 		t.Fatalf("ProbeHeartbeatID = %q, want probe-1", write.ProbeHeartbeatID)
 	}
@@ -154,24 +145,21 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 		t.Fatalf("persisted writes = %d, want 1", len(s.persistedWrites))
 	}
 
-	journal := s.persistedWrites[0].JournalRecords
-	if len(journal) != 1 {
-		t.Fatalf("journal records = %d, want 1", len(journal))
+	checkStates := s.persistedWrites[0].CheckStateWrites
+	if len(checkStates) != 1 {
+		t.Fatalf("check state writes = %d, want 1", len(checkStates))
 	}
-	if journal[0].Kind != string(monitoring.CheckTriggerObserveUp) {
-		t.Fatalf("journal kind = %q, want %q", journal[0].Kind, monitoring.CheckTriggerObserveUp)
+	if checkStates[0].CheckID != "site" {
+		t.Fatalf("check state CheckID = %q, want site", checkStates[0].CheckID)
 	}
-	if journal[0].CheckID != "site" {
-		t.Fatalf("journal CheckID = %q, want site", journal[0].CheckID)
+	if checkStates[0].ProbeID != "probe-1" {
+		t.Fatalf("check state ProbeID = %q, want probe-1", checkStates[0].ProbeID)
 	}
-	if journal[0].ProbeID != "probe-1" {
-		t.Fatalf("journal ProbeID = %q, want probe-1", journal[0].ProbeID)
+	if checkStates[0].LastResultAt.IsZero() {
+		t.Fatal("expected LastResultAt to be set from normalized result timestamp")
 	}
-	if journal[0].OccurredAt.IsZero() {
-		t.Fatal("expected journal OccurredAt to be set from normalized result timestamp")
-	}
-	if journal[0].ExpiresAt == nil || !journal[0].ExpiresAt.After(journal[0].OccurredAt) {
-		t.Fatalf("ExpiresAt = %v, want future expiry", journal[0].ExpiresAt)
+	if !checkStates[0].ExpiresAt.After(checkStates[0].LastResultAt) {
+		t.Fatalf("ExpiresAt = %v, want future expiry after %v", checkStates[0].ExpiresAt, checkStates[0].LastResultAt)
 	}
 	if s.persistedWrites[0].IncidentCheckID != "" {
 		t.Fatalf("IncidentCheckID = %q, want empty", s.persistedWrites[0].IncidentCheckID)

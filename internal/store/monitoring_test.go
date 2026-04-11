@@ -6,74 +6,100 @@ import (
 	"time"
 )
 
-// TestPersistMonitoringWriteAndLoadTail verifies ordered journal replay reads
-// after appending runtime recovery records through the live write path.
-func TestPersistMonitoringWriteAndLoadTail(t *testing.T) {
+func TestPersistMonitoringWriteUpsertsCheckStateAndListsRecoverySnapshots(t *testing.T) {
 	s := newTestStore(t)
 
-	firstOccurredAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
-	secondOccurredAt := firstOccurredAt.Add(2 * time.Minute)
+	if err := s.SeedProbes([]ProbeSeed{
+		{ProbeID: "probe-a", Secret: "secret-a"},
+		{ProbeID: "probe-b", Secret: "secret-b"},
+	}); err != nil {
+		t.Fatalf("SeedProbes: %v", err)
+	}
 
-	firstWrite, err := s.PersistMonitoringWrite(MonitoringWrite{
-		JournalRecords: []MonitoringJournalRecord{{
-			Kind:       "receive_heartbeat",
-			ProbeID:    "probe-a",
-			OccurredAt: firstOccurredAt,
-		}},
-	})
+	user, err := s.CreateUser("monitoring-state@example.com", "pass", false)
 	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	firstAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	secondAt := firstAt.Add(2 * time.Minute)
+	if _, err := s.PersistMonitoringWrite(MonitoringWrite{
+		CheckStateWrites: []CheckStateWrite{
+			{
+				CheckID:      "check-1",
+				ProbeID:      "probe-b",
+				LastResultAt: secondAt,
+				LastOutcome:  "up",
+				StreakLen:    2,
+				ExpiresAt:    secondAt.Add(30 * time.Second),
+				State:        "up",
+			},
+			{
+				CheckID:      "check-1",
+				ProbeID:      "probe-a",
+				LastResultAt: firstAt,
+				LastOutcome:  "down",
+				StreakLen:    1,
+				ExpiresAt:    firstAt.Add(30 * time.Second),
+				State:        "missing",
+				LastError:    "timeout",
+			},
+		},
+	}); err != nil {
 		t.Fatalf("PersistMonitoringWrite first: %v", err)
 	}
-	first := firstWrite.JournalRecords[0]
 
-	secondWrite, err := s.PersistMonitoringWrite(MonitoringWrite{
-		JournalRecords: []MonitoringJournalRecord{{
-			Kind:       "observe_down",
-			CheckID:    "check-1",
-			ProbeID:    "probe-b",
-			Message:    "timeout",
-			OccurredAt: secondOccurredAt,
+	if _, err := s.PersistMonitoringWrite(MonitoringWrite{
+		CheckStateWrites: []CheckStateWrite{{
+			CheckID:      "check-1",
+			ProbeID:      "probe-a",
+			LastResultAt: secondAt,
+			LastOutcome:  "down",
+			StreakLen:    2,
+			ExpiresAt:    secondAt.Add(30 * time.Second),
+			State:        "down",
+			LastError:    "timeout",
 		}},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("PersistMonitoringWrite second: %v", err)
 	}
-	second := secondWrite.JournalRecords[0]
 
-	tail, err := s.MonitoringJournalAfter(first.ID)
+	probes, err := s.ActiveProbeStates()
 	if err != nil {
-		t.Fatalf("MonitoringJournalAfter: %v", err)
+		t.Fatalf("ActiveProbeStates: %v", err)
 	}
-	if len(tail) != 1 {
-		t.Fatalf("expected 1 tail record, got %d", len(tail))
+	if len(probes) != 2 {
+		t.Fatalf("active probes = %d, want 2", len(probes))
 	}
-	if tail[0].ID != second.ID {
-		t.Fatalf("tail[0].ID = %d, want %d", tail[0].ID, second.ID)
+	if probes[0].ProbeID != "probe-a" || probes[0].LastSeenAt != nil {
+		t.Fatalf("probe-a = %#v, want nil last_seen", probes[0])
 	}
-	if tail[0].Kind != second.Kind {
-		t.Fatalf("tail[0].Kind = %q, want %q", tail[0].Kind, second.Kind)
+
+	states, err := s.PersistedCheckStates()
+	if err != nil {
+		t.Fatalf("PersistedCheckStates: %v", err)
 	}
-	if tail[0].CheckID != second.CheckID {
-		t.Fatalf("tail[0].CheckID = %q, want %q", tail[0].CheckID, second.CheckID)
+	if len(states) != 2 {
+		t.Fatalf("persisted check states = %d, want 2", len(states))
 	}
-	if tail[0].ProbeID != second.ProbeID {
-		t.Fatalf("tail[0].ProbeID = %q, want %q", tail[0].ProbeID, second.ProbeID)
+	if states[0].ProbeID != "probe-a" || states[0].State != "down" || states[0].StreakLen != 2 {
+		t.Fatalf("states[0] = %#v, want probe-a/down/streak 2", states[0])
 	}
-	if tail[0].Message != second.Message {
-		t.Fatalf("tail[0].Message = %q, want %q", tail[0].Message, second.Message)
+	if !states[0].LastResultAt.Equal(secondAt) {
+		t.Fatalf("states[0].LastResultAt = %s, want %s", states[0].LastResultAt, secondAt)
 	}
-	if !tail[0].OccurredAt.Equal(secondOccurredAt) {
-		t.Fatalf("tail[0].OccurredAt = %s, want %s", tail[0].OccurredAt, secondOccurredAt)
-	}
-	if tail[0].RecordedAt.IsZero() {
-		t.Fatal("expected tail record to have RecordedAt")
+	if states[1].ProbeID != "probe-b" || states[1].State != "up" {
+		t.Fatalf("states[1] = %#v, want probe-b/up", states[1])
 	}
 }
 
-// TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically verifies the
-// existing atomic write boundary for journal, probe metadata, and incident
-// writes.
-func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T) {
+// TestPersistMonitoringWriteCommitsCurrentStateAndIncidentAtomically verifies
+// the existing atomic write boundary for current-state rows, probe metadata,
+// and incident writes.
+func TestPersistMonitoringWriteCommitsCurrentStateAndIncidentAtomically(t *testing.T) {
 	s := newTestStore(t)
 
 	user, err := s.CreateUser("monitoring-write@example.com", "pass", false)
@@ -85,13 +111,16 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 	}
 
 	result, err := s.PersistMonitoringWrite(MonitoringWrite{
-		JournalRecords: []MonitoringJournalRecord{
+		CheckStateWrites: []CheckStateWrite{
 			{
-				Kind:       "observe_down",
-				CheckID:    "check-1",
-				ProbeID:    "probe-a",
-				Message:    "timeout",
-				OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+				CheckID:      "check-1",
+				ProbeID:      "probe-a",
+				LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+				LastOutcome:  "down",
+				StreakLen:    2,
+				ExpiresAt:    time.Date(2026, time.January, 2, 3, 5, 5, 0, time.UTC),
+				State:        "down",
+				LastError:    "timeout",
 			},
 		},
 		IncidentCheckID: "check-1",
@@ -104,16 +133,16 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 		t.Fatalf("PersistMonitoringWrite: %v", err)
 	}
 
-	if len(result.JournalRecords) != 1 {
-		t.Fatalf("expected 1 journal record, got %d", len(result.JournalRecords))
+	if len(result.CheckStateWrites) != 1 {
+		t.Fatalf("expected 1 check state write, got %d", len(result.CheckStateWrites))
 	}
 
-	var journalCount int
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM monitoring_journal`).Scan(&journalCount); err != nil {
-		t.Fatalf("count monitoring_journal: %v", err)
+	var stateCount int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM check_probe_state`).Scan(&stateCount); err != nil {
+		t.Fatalf("count check_probe_state: %v", err)
 	}
-	if journalCount != 1 {
-		t.Fatalf("expected 1 journal row, got %d", journalCount)
+	if stateCount != 1 {
+		t.Fatalf("expected 1 check state row, got %d", stateCount)
 	}
 
 	var openIncidents int
@@ -129,10 +158,18 @@ func TestPersistMonitoringWriteCommitsRecoveryAndIncidentAtomically(t *testing.T
 	if openIncidents != 1 {
 		t.Fatalf("expected 1 open incident, got %d", openIncidents)
 	}
+
+	checkIDs, err := s.OpenIncidentCheckIDs()
+	if err != nil {
+		t.Fatalf("OpenIncidentCheckIDs: %v", err)
+	}
+	if len(checkIDs) != 1 || checkIDs[0] != "check-1" {
+		t.Fatalf("OpenIncidentCheckIDs = %#v, want [check-1]", checkIDs)
+	}
 }
 
 // TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically verifies that the
-// heartbeat journal record and persisted probe metadata update commit together.
+// heartbeat write and persisted probe metadata update commit together.
 func TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically(t *testing.T) {
 	s := newTestStore(t)
 
@@ -142,21 +179,11 @@ func TestPersistMonitoringWriteUpdatesProbeHeartbeatAtomically(t *testing.T) {
 
 	heartbeatAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	write, err := s.PersistMonitoringWrite(MonitoringWrite{
-		JournalRecords: []MonitoringJournalRecord{
-			{
-				Kind:       "receive_heartbeat",
-				ProbeID:    "probe-a",
-				OccurredAt: heartbeatAt,
-			},
-		},
 		ProbeHeartbeatID: "probe-a",
 		ProbeHeartbeatAt: heartbeatAt,
 	})
 	if err != nil {
 		t.Fatalf("PersistMonitoringWrite: %v", err)
-	}
-	if len(write.JournalRecords) != 1 {
-		t.Fatalf("journal records = %d, want 1", len(write.JournalRecords))
 	}
 	if !write.ProbeHeartbeatAt.Equal(heartbeatAt) {
 		t.Fatalf("ProbeHeartbeatAt = %s, want %s", write.ProbeHeartbeatAt, heartbeatAt)
@@ -188,13 +215,16 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	}
 
 	_, err = s.PersistMonitoringWrite(MonitoringWrite{
-		JournalRecords: []MonitoringJournalRecord{
+		CheckStateWrites: []CheckStateWrite{
 			{
-				Kind:       "observe_down",
-				CheckID:    "check-1",
-				ProbeID:    "probe-a",
-				Message:    "timeout",
-				OccurredAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+				CheckID:      "check-1",
+				ProbeID:      "probe-a",
+				LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+				LastOutcome:  "down",
+				StreakLen:    2,
+				ExpiresAt:    time.Date(2026, time.January, 2, 3, 5, 5, 0, time.UTC),
+				State:        "down",
+				LastError:    "timeout",
 			},
 		},
 		IncidentNotification: &NotificationRequest{
@@ -206,12 +236,12 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 		t.Fatalf("PersistMonitoringWrite error = %v, want ErrInvalidMonitoringIncidentWrite", err)
 	}
 
-	var journalCount int
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM monitoring_journal`).Scan(&journalCount); err != nil {
-		t.Fatalf("count monitoring_journal: %v", err)
+	var stateCount int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM check_probe_state`).Scan(&stateCount); err != nil {
+		t.Fatalf("count check_probe_state: %v", err)
 	}
-	if journalCount != 0 {
-		t.Fatalf("expected rollback to leave 0 journal rows, got %d", journalCount)
+	if stateCount != 0 {
+		t.Fatalf("expected rollback to leave 0 check state rows, got %d", stateCount)
 	}
 
 	var incidentCount int
@@ -223,9 +253,9 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	}
 }
 
-// TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs verifies input
-// validation for incomplete incident-only or heartbeat-only writes.
-func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
+// TestPersistMonitoringWriteRejectsIncompleteInputs verifies input validation
+// for incomplete incident-only, heartbeat-only, and check-state writes.
+func TestPersistMonitoringWriteRejectsIncompleteInputs(t *testing.T) {
 	s := newTestStore(t)
 
 	_, err := s.PersistMonitoringWrite(MonitoringWrite{
@@ -250,5 +280,19 @@ func TestPersistMonitoringWriteRejectsIncidentOnlyNoopInputs(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidMonitoringProbeWrite) {
 		t.Fatalf("ProbeHeartbeatAt-only error = %v, want ErrInvalidMonitoringProbeWrite", err)
+	}
+
+	_, err = s.PersistMonitoringWrite(MonitoringWrite{
+		CheckStateWrites: []CheckStateWrite{{
+			CheckID:      "check-1",
+			LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+			LastOutcome:  "up",
+			StreakLen:    1,
+			ExpiresAt:    time.Date(2026, time.January, 2, 3, 5, 5, 0, time.UTC),
+			State:        "missing",
+		}},
+	})
+	if !errors.Is(err, ErrInvalidMonitoringCheckStateWrite) {
+		t.Fatalf("CheckStateWrites-only error = %v, want ErrInvalidMonitoringCheckStateWrite", err)
 	}
 }

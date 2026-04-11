@@ -13,9 +13,8 @@ type heartbeatStore interface {
 	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
 }
 
-// ApplyHeartbeat updates runtime-owned probe liveness, persists the matching
-// recovery journal record, and refreshes the persisted probe heartbeat
-// timestamp used by metadata reads.
+// ApplyHeartbeat updates runtime-owned probe liveness and refreshes the
+// persisted probe heartbeat timestamp used by recovery and metadata reads.
 func ApplyHeartbeat(runtime *Runtime, st heartbeatStore, probeID string, at time.Time) error {
 	if runtime == nil {
 		return fmt.Errorf("monitoring: runtime is required")
@@ -28,7 +27,7 @@ func ApplyHeartbeat(runtime *Runtime, st heartbeatStore, probeID string, at time
 }
 
 // applyHeartbeat advances one probe's runtime state and persists the matching
-// recovery and probe metadata writes as one unit.
+// compact probe liveness snapshot as one unit.
 func (r *Runtime) applyHeartbeat(st heartbeatStore, probeID string, at time.Time) error {
 	heartbeatAt := at.UTC()
 
@@ -46,13 +45,6 @@ func (r *Runtime) applyHeartbeat(st heartbeatStore, probeID string, at time.Time
 	}
 
 	write := store.MonitoringWrite{
-		JournalRecords: []store.MonitoringJournalRecord{
-			{
-				Kind:       string(ProbeTriggerReceiveHeartbeat),
-				ProbeID:    probeID,
-				OccurredAt: heartbeatAt,
-			},
-		},
 		ProbeHeartbeatID: probeID,
 		ProbeHeartbeatAt: heartbeatAt,
 	}
