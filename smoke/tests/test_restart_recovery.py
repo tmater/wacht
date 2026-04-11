@@ -100,11 +100,11 @@ def test_restart_recovery_expires_stale_runtime_on_boot(server, mock, probes, st
 
     try:
         with cleanup.preserve_primary_error():
-            healthy = wait_for(
-                "boot-expiry check to become healthy on authenticated and public status views",
-                timeout_seconds=60,
-                interval_seconds=2,
-                fn=lambda: healthy_everywhere(server, token, slug, check_id),
+            ready = wait_for(
+                "boot-expiry check to become healthy everywhere with all probes online before downtime",
+                timeout_seconds=90,
+                interval_seconds=3,
+                fn=lambda: healthy_everywhere(server, token, slug, check_id, require_seen_probes=True),
             )
 
             stack.stop_service("server")
@@ -124,7 +124,7 @@ def test_restart_recovery_expires_stale_runtime_on_boot(server, mock, probes, st
                 fn=lambda: expired_runtime_everywhere(server, token, slug, check_id),
             )
 
-            print(json.dumps({"healthy": healthy, "expired": expired}, indent=2))
+            print(json.dumps({"ready": ready, "expired": expired}, indent=2))
     finally:
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
         cleanup.run("restart stopped probes", lambda: restore_stopped_probes(probes))
@@ -140,7 +140,7 @@ def public_status_slug(server, token):
     return slug
 
 
-def healthy_everywhere(server, token, slug, check_id):
+def healthy_everywhere(server, token, slug, check_id, require_seen_probes=False):
     authenticated = status_for_check(server, token, check_id)
     if authenticated is None:
         return None
@@ -157,7 +157,16 @@ def healthy_everywhere(server, token, slug, check_id):
     if public.get("incident_since") is not None:
         return None
 
-    return {"status": authenticated, "public": public}
+    healthy = {"status": authenticated, "public": public}
+    if not require_seen_probes:
+        return healthy
+
+    probes = probes_by_id(server, token)
+    for probe_id in PROBE_IDS:
+        probe = probes.get(probe_id)
+        if probe is None or not probe.get("online", False) or probe.get("last_seen_at") is None:
+            return None
+    return {**healthy, "probes": [probes[probe_id] for probe_id in PROBE_IDS]}
 
 
 def open_incident_everywhere(server, token, slug, check_id):
