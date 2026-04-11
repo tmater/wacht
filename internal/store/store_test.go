@@ -58,7 +58,7 @@ func newTestStore(t *testing.T) *Store {
 
 	// Wipe all tables so tests don't interfere with each other.
 	_, err = s.db.Exec(`
-		TRUNCATE incident_notifications, signup_requests, monitoring_journal, incidents, sessions, checks, users, probes RESTART IDENTITY CASCADE
+		TRUNCATE check_probe_state, incident_notifications, signup_requests, incidents, sessions, checks, users, probes RESTART IDENTITY CASCADE
 	`)
 	if err != nil {
 		t.Fatalf("truncate tables: %v", err)

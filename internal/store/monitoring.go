@@ -9,32 +9,52 @@ import (
 )
 
 var (
-	// ErrInvalidMonitoringJournalKind reports a blank journal kind.
-	ErrInvalidMonitoringJournalKind = errors.New("store: invalid monitoring journal kind")
 	// ErrInvalidMonitoringProbeWrite reports an incomplete probe heartbeat write.
 	ErrInvalidMonitoringProbeWrite = errors.New("store: invalid monitoring probe write")
 	// ErrInvalidMonitoringIncidentWrite reports an incomplete incident write.
 	ErrInvalidMonitoringIncidentWrite = errors.New("store: invalid monitoring incident write")
+	// ErrInvalidMonitoringCheckStateWrite reports an incomplete per-(check, probe)
+	// current-state write.
+	ErrInvalidMonitoringCheckStateWrite = errors.New("store: invalid monitoring check state write")
 )
 
-// MonitoringJournalRecord is one append-only replay entry for rebuilding
-// monitoring runtime transitions after restart. Its typed fields are the
-// durable journal contract for probe and check events.
-type MonitoringJournalRecord struct {
-	ID         int64
-	Kind       string
-	CheckID    string
-	ProbeID    string
-	Message    string
-	ExpiresAt  *time.Time
-	OccurredAt time.Time
-	RecordedAt time.Time
+// CheckStateWrite is one bounded persisted current-state row for a
+// (check, probe) assignment.
+type CheckStateWrite struct {
+	CheckID      string
+	ProbeID      string
+	LastResultAt time.Time
+	LastOutcome  string
+	StreakLen    int
+	ExpiresAt    time.Time
+	State        string
+	LastError    string
 }
 
-// MonitoringWrite groups journal, probe heartbeat, and incident writes into one
-// commit boundary.
+// PersistedProbeState is the compact persisted probe liveness snapshot needed
+// for runtime recovery.
+type PersistedProbeState struct {
+	ProbeID    string
+	LastSeenAt *time.Time
+}
+
+// PersistedCheckState is the compact persisted per-(check, probe) snapshot
+// needed for runtime recovery.
+type PersistedCheckState struct {
+	CheckID      string
+	ProbeID      string
+	LastResultAt time.Time
+	LastOutcome  string
+	StreakLen    int
+	ExpiresAt    time.Time
+	State        string
+	LastError    string
+}
+
+// MonitoringWrite groups current-state, probe heartbeat, and incident writes
+// into one commit boundary.
 type MonitoringWrite struct {
-	JournalRecords       []MonitoringJournalRecord
+	CheckStateWrites     []CheckStateWrite
 	ProbeHeartbeatID     string
 	ProbeHeartbeatAt     time.Time
 	IncidentCheckID      string
@@ -42,66 +62,105 @@ type MonitoringWrite struct {
 	IncidentNotification *NotificationRequest
 }
 
-// MonitoringJournalAfter returns the append-only recovery tail with IDs
-// strictly greater than afterID.
-func (s *Store) MonitoringJournalAfter(afterID int64) ([]MonitoringJournalRecord, error) {
-	if afterID < 0 {
-		afterID = 0
-	}
-
+// ActiveProbeStates returns all active probes plus their last-seen timestamps
+// for runtime recovery.
+func (s *Store) ActiveProbeStates() ([]PersistedProbeState, error) {
 	rows, err := s.db.Query(`
-		SELECT id, kind, check_id, probe_id, message, expires_at, occurred_at, recorded_at
-		FROM monitoring_journal
-		WHERE id > $1
-		ORDER BY id ASC
-	`, afterID)
+		SELECT probe_id, last_seen_at
+		FROM probes
+		WHERE status = 'active'
+		ORDER BY probe_id
+	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var records []MonitoringJournalRecord
+	var probes []PersistedProbeState
 	for rows.Next() {
 		var (
-			record    MonitoringJournalRecord
-			checkID   sql.NullString
-			probeID   sql.NullString
-			message   sql.NullString
-			expiresAt sql.NullTime
+			state      PersistedProbeState
+			lastSeenAt sql.NullTime
+		)
+		if err := rows.Scan(&state.ProbeID, &lastSeenAt); err != nil {
+			return nil, err
+		}
+		if lastSeenAt.Valid {
+			t := lastSeenAt.Time
+			state.LastSeenAt = &t
+		}
+		probes = append(probes, state)
+	}
+	return probes, rows.Err()
+}
+
+// PersistedCheckStates returns all compact per-(check, probe) snapshots needed
+// to rebuild runtime state after restart.
+func (s *Store) PersistedCheckStates() ([]PersistedCheckState, error) {
+	rows, err := s.db.Query(`
+		SELECT check_id, probe_id, last_result_at, last_outcome, streak_len, expires_at, state, last_error
+		FROM check_probe_state
+		ORDER BY check_id, probe_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var states []PersistedCheckState
+	for rows.Next() {
+		var (
+			state     PersistedCheckState
+			streakLen int32
 		)
 		if err := rows.Scan(
-			&record.ID,
-			&record.Kind,
-			&checkID,
-			&probeID,
-			&message,
-			&expiresAt,
-			&record.OccurredAt,
-			&record.RecordedAt,
+			&state.CheckID,
+			&state.ProbeID,
+			&state.LastResultAt,
+			&state.LastOutcome,
+			&streakLen,
+			&state.ExpiresAt,
+			&state.State,
+			&state.LastError,
 		); err != nil {
 			return nil, err
 		}
-		if checkID.Valid {
-			record.CheckID = checkID.String
-		}
-		if probeID.Valid {
-			record.ProbeID = probeID.String
-		}
-		if message.Valid {
-			record.Message = message.String
-		}
-		if expiresAt.Valid {
-			expiry := expiresAt.Time
-			record.ExpiresAt = &expiry
-		}
-		records = append(records, record)
+		state.StreakLen = int(streakLen)
+		states = append(states, state)
 	}
-	return records, rows.Err()
+	return states, rows.Err()
 }
 
-// PersistMonitoringWrite commits journal, probe heartbeat, and incident writes
-// in one transaction so runtime recovery data and durable side effects do not
-// drift. It returns the persisted write with generated IDs filled in.
+// OpenIncidentCheckIDs returns active check IDs with unresolved incidents so
+// runtime recovery can restore incident-open semantics without replaying a log.
+func (s *Store) OpenIncidentCheckIDs() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT c.id
+		FROM incidents i
+		JOIN checks c ON c.uid = i.check_uid
+		WHERE i.resolved_at IS NULL
+		  AND c.deleted_at IS NULL
+		ORDER BY c.id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var checkIDs []string
+	for rows.Next() {
+		var checkID string
+		if err := rows.Scan(&checkID); err != nil {
+			return nil, err
+		}
+		checkIDs = append(checkIDs, checkID)
+	}
+	return checkIDs, rows.Err()
+}
+
+// PersistMonitoringWrite commits current-state, probe heartbeat, and incident
+// writes in one transaction so runtime recovery data and durable side effects
+// do not drift.
 func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, error) {
 	if write.ProbeHeartbeatID == "" && !write.ProbeHeartbeatAt.IsZero() {
 		return MonitoringWrite{}, ErrInvalidMonitoringProbeWrite
@@ -109,8 +168,13 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 	if write.IncidentCheckID == "" && (write.ResolveIncident || write.IncidentNotification != nil) {
 		return MonitoringWrite{}, ErrInvalidMonitoringIncidentWrite
 	}
+	for _, state := range write.CheckStateWrites {
+		if _, err := normalizeCheckStateWrite(state); err != nil {
+			return MonitoringWrite{}, err
+		}
+	}
 
-	if len(write.JournalRecords) == 0 && write.ProbeHeartbeatID == "" && write.IncidentCheckID == "" {
+	if len(write.CheckStateWrites) == 0 && write.ProbeHeartbeatID == "" && write.IncidentCheckID == "" {
 		return MonitoringWrite{}, nil
 	}
 
@@ -121,14 +185,14 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 	defer tx.Rollback()
 
 	persisted := write
-	persisted.JournalRecords = make([]MonitoringJournalRecord, 0, len(write.JournalRecords))
+	persisted.CheckStateWrites = make([]CheckStateWrite, 0, len(write.CheckStateWrites))
 
-	for _, record := range write.JournalRecords {
-		saved, err := appendMonitoringJournalTx(tx, record)
+	for _, state := range write.CheckStateWrites {
+		saved, err := upsertCheckStateTx(tx, state)
 		if err != nil {
 			return MonitoringWrite{}, err
 		}
-		persisted.JournalRecords = append(persisted.JournalRecords, saved)
+		persisted.CheckStateWrites = append(persisted.CheckStateWrites, saved)
 	}
 
 	if write.ProbeHeartbeatID != "" {
@@ -154,36 +218,51 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 	return persisted, nil
 }
 
-// appendMonitoringJournalTx normalizes and appends one recovery journal record
-// inside an existing transaction.
-func appendMonitoringJournalTx(tx *sql.Tx, record MonitoringJournalRecord) (MonitoringJournalRecord, error) {
-	record.Kind = strings.TrimSpace(record.Kind)
-	if record.Kind == "" {
-		return MonitoringJournalRecord{}, ErrInvalidMonitoringJournalKind
-	}
-	record.CheckID = strings.TrimSpace(record.CheckID)
-	record.ProbeID = strings.TrimSpace(record.ProbeID)
-	record.Message = strings.TrimSpace(record.Message)
-	record.ExpiresAt = normalizeOptionalTime(record.ExpiresAt)
-
-	record.RecordedAt = normalizeTime(record.RecordedAt)
-	if record.OccurredAt.IsZero() {
-		record.OccurredAt = record.RecordedAt
-	} else {
-		record.OccurredAt = normalizeTime(record.OccurredAt)
-	}
-
-	err := tx.QueryRow(`
-		INSERT INTO monitoring_journal (
-			kind, check_id, probe_id, message, expires_at, occurred_at, recorded_at
-		)
-		VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5, $6, $7)
-		RETURNING id
-	`, record.Kind, record.CheckID, record.ProbeID, record.Message, record.ExpiresAt, record.OccurredAt, record.RecordedAt).Scan(&record.ID)
+func upsertCheckStateTx(tx *sql.Tx, state CheckStateWrite) (CheckStateWrite, error) {
+	state, err := normalizeCheckStateWrite(state)
 	if err != nil {
-		return MonitoringJournalRecord{}, err
+		return CheckStateWrite{}, err
 	}
-	return record, nil
+
+	_, err = tx.Exec(`
+		INSERT INTO check_probe_state (
+			check_id, probe_id, last_result_at, last_outcome, streak_len, expires_at, state, last_error
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (check_id, probe_id) DO UPDATE
+		SET last_result_at = excluded.last_result_at,
+		    last_outcome = excluded.last_outcome,
+		    streak_len = excluded.streak_len,
+		    expires_at = excluded.expires_at,
+		    state = excluded.state,
+		    last_error = excluded.last_error
+	`, state.CheckID, state.ProbeID, state.LastResultAt, state.LastOutcome, state.StreakLen, state.ExpiresAt, state.State, state.LastError)
+	if err != nil {
+		return CheckStateWrite{}, err
+	}
+	return state, nil
+}
+
+func normalizeCheckStateWrite(state CheckStateWrite) (CheckStateWrite, error) {
+	state.CheckID = strings.TrimSpace(state.CheckID)
+	state.ProbeID = strings.TrimSpace(state.ProbeID)
+	state.LastOutcome = strings.TrimSpace(state.LastOutcome)
+	state.State = strings.TrimSpace(state.State)
+	state.LastError = strings.TrimSpace(state.LastError)
+	if state.CheckID == "" || state.ProbeID == "" || state.State == "" || state.StreakLen < 0 {
+		return CheckStateWrite{}, ErrInvalidMonitoringCheckStateWrite
+	}
+	if state.LastOutcome == "" && state.State != "missing" {
+		return CheckStateWrite{}, ErrInvalidMonitoringCheckStateWrite
+	}
+
+	state.LastResultAt = normalizeTime(state.LastResultAt)
+	if state.ExpiresAt.IsZero() {
+		state.ExpiresAt = state.LastResultAt
+	} else {
+		state.ExpiresAt = state.ExpiresAt.UTC()
+	}
+	return state, nil
 }
 
 // applyMonitoringIncidentTx applies the optional incident side effect for a

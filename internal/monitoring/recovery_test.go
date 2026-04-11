@@ -1,7 +1,6 @@
 package monitoring
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -9,35 +8,37 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-// fakeRecoveryStore is a minimal recoveryStore test double for boot and replay
-// scenarios.
+// fakeRecoveryStore is a minimal recoveryStore test double for boot and
+// current-state recovery scenarios.
 type fakeRecoveryStore struct {
-	checks   []checks.Check
-	probeIDs []string
-	journal  []store.MonitoringJournalRecord
+	checks              []checks.Check
+	probes              []store.PersistedProbeState
+	checkStates         []store.PersistedCheckState
+	openIncidentCheckID []string
 }
 
 func (f *fakeRecoveryStore) ListAllChecks() ([]checks.Check, error) {
 	return append([]checks.Check(nil), f.checks...), nil
 }
 
-func (f *fakeRecoveryStore) ActiveProbeIDs() ([]string, error) {
-	return append([]string(nil), f.probeIDs...), nil
+func (f *fakeRecoveryStore) ActiveProbeStates() ([]store.PersistedProbeState, error) {
+	probes := make([]store.PersistedProbeState, 0, len(f.probes))
+	for _, probe := range f.probes {
+		if probe.LastSeenAt != nil {
+			lastSeenAt := *probe.LastSeenAt
+			probe.LastSeenAt = &lastSeenAt
+		}
+		probes = append(probes, probe)
+	}
+	return probes, nil
 }
 
-func (f *fakeRecoveryStore) MonitoringJournalAfter(afterID int64) ([]store.MonitoringJournalRecord, error) {
-	records := make([]store.MonitoringJournalRecord, 0, len(f.journal))
-	for _, record := range f.journal {
-		if record.ID <= afterID {
-			continue
-		}
-		if record.ExpiresAt != nil {
-			expiresAt := *record.ExpiresAt
-			record.ExpiresAt = &expiresAt
-		}
-		records = append(records, record)
-	}
-	return records, nil
+func (f *fakeRecoveryStore) PersistedCheckStates() ([]store.PersistedCheckState, error) {
+	return append([]store.PersistedCheckState(nil), f.checkStates...), nil
+}
+
+func (f *fakeRecoveryStore) OpenIncidentCheckIDs() ([]string, error) {
+	return append([]string(nil), f.openIncidentCheckID...), nil
 }
 
 func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
@@ -46,7 +47,10 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
 			checks.NewCheck("check-b", "http", "https://b.example.com", "", 30),
 		},
-		probeIDs: []string{"probe-a", "probe-b"},
+		probes: []store.PersistedProbeState{
+			{ProbeID: "probe-a"},
+			{ProbeID: "probe-b"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntime: %v", err)
@@ -77,110 +81,41 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 	}
 }
 
-func TestLoadRuntimeReplaysJournalAgainstMetadataDefaults(t *testing.T) {
+func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 	firstAt := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
-	firstExpiry := firstAt.Add(30 * time.Second)
 	secondAt := firstAt.Add(time.Second)
-	secondExpiry := secondAt.Add(30 * time.Second)
-	replayAt := firstAt.Add(2 * time.Minute)
-	replayExpiry := replayAt.Add(30 * time.Second)
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
 		checks: []checks.Check{
 			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
 		},
-		probeIDs: []string{"probe-a", "probe-b", "probe-c"},
-		journal: []store.MonitoringJournalRecord{
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         1,
-				Kind:       string(ProbeTriggerReceiveHeartbeat),
-				ProbeID:    "probe-a",
-				OccurredAt: firstAt,
-				RecordedAt: firstAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         2,
-				Kind:       string(CheckTriggerObserveDown),
-				CheckID:    "check-a",
-				ProbeID:    "probe-a",
-				Message:    "timeout",
-				ExpiresAt:  &firstExpiry,
-				OccurredAt: firstAt,
-				RecordedAt: firstAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         3,
-				Kind:       string(CheckTriggerObserveDown),
-				CheckID:    "check-a",
-				ProbeID:    "probe-b",
-				Message:    "timeout",
-				ExpiresAt:  &firstExpiry,
-				OccurredAt: firstAt,
-				RecordedAt: firstAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         4,
-				Kind:       string(CheckTriggerObserveDown),
-				CheckID:    "check-a",
-				ProbeID:    "probe-a",
-				Message:    "timeout",
-				ExpiresAt:  &secondExpiry,
-				OccurredAt: secondAt,
-				RecordedAt: secondAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         5,
-				Kind:       string(CheckTriggerObserveDown),
-				CheckID:    "check-a",
-				ProbeID:    "probe-b",
-				Message:    "timeout",
-				ExpiresAt:  &secondExpiry,
-				OccurredAt: secondAt,
-				RecordedAt: secondAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         6,
-				Kind:       string(ProbeTriggerReceiveHeartbeat),
-				ProbeID:    "probe-b",
-				OccurredAt: replayAt,
-				RecordedAt: replayAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         7,
-				Kind:       string(CheckTriggerObserveUp),
-				CheckID:    "check-a",
-				ProbeID:    "probe-a",
-				ExpiresAt:  &replayExpiry,
-				OccurredAt: replayAt,
-				RecordedAt: replayAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         8,
-				Kind:       string(CheckTriggerObserveUp),
-				CheckID:    "check-a",
-				ProbeID:    "probe-b",
-				ExpiresAt:  &replayExpiry,
-				OccurredAt: replayAt,
-				RecordedAt: replayAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         9,
-				Kind:       string(CheckTriggerObserveUp),
-				CheckID:    "check-a",
-				ProbeID:    "probe-a",
-				ExpiresAt:  &replayExpiry,
-				OccurredAt: replayAt.Add(time.Second),
-				RecordedAt: replayAt.Add(time.Second),
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         10,
-				Kind:       string(CheckTriggerObserveUp),
-				CheckID:    "check-a",
-				ProbeID:    "probe-b",
-				ExpiresAt:  &replayExpiry,
-				OccurredAt: replayAt.Add(time.Second),
-				RecordedAt: replayAt.Add(time.Second),
-			}),
+		probes: []store.PersistedProbeState{
+			{ProbeID: "probe-a", LastSeenAt: &firstAt},
+			{ProbeID: "probe-b", LastSeenAt: &secondAt},
+			{ProbeID: "probe-c"},
 		},
+		checkStates: []store.PersistedCheckState{
+			{
+				CheckID:      "check-a",
+				ProbeID:      "probe-a",
+				LastResultAt: firstAt,
+				LastOutcome:  "down",
+				StreakLen:    2,
+				ExpiresAt:    firstAt.Add(30 * time.Second),
+				State:        "down",
+				LastError:    "timeout",
+			},
+			{
+				CheckID:      "check-a",
+				ProbeID:      "probe-b",
+				LastResultAt: secondAt,
+				LastOutcome:  "down",
+				StreakLen:    2,
+				ExpiresAt:    secondAt.Add(30 * time.Second),
+				State:        "down",
+				LastError:    "timeout",
+			},
+		},
+		openIncidentCheckID: []string{"check-a"},
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntime: %v", err)
@@ -190,102 +125,143 @@ func TestLoadRuntimeReplaysJournalAgainstMetadataDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProbeSnapshot probe-a: %v", err)
 	}
+	if probeA.State != ProbeStateOnline {
+		t.Fatalf("probe-a state = %q, want %q", probeA.State, ProbeStateOnline)
+	}
 	if probeA.LastHeartbeatAt == nil || !probeA.LastHeartbeatAt.Equal(firstAt) {
 		t.Fatalf("probe-a last heartbeat = %v, want %v", probeA.LastHeartbeatAt, firstAt)
 	}
 
-	probeB, err := recovered.ProbeSnapshot("probe-b")
+	probeC, err := recovered.ProbeSnapshot("probe-c")
 	if err != nil {
-		t.Fatalf("ProbeSnapshot probe-b: %v", err)
+		t.Fatalf("ProbeSnapshot probe-c: %v", err)
 	}
-	if probeB.State != ProbeStateOnline {
-		t.Fatalf("probe-b state = %q, want %q", probeB.State, ProbeStateOnline)
-	}
-	if probeB.LastHeartbeatAt == nil || !probeB.LastHeartbeatAt.Equal(replayAt) {
-		t.Fatalf("probe-b last heartbeat = %v, want %v", probeB.LastHeartbeatAt, replayAt)
+	if probeC.State != ProbeStateOffline {
+		t.Fatalf("probe-c state = %q, want %q", probeC.State, ProbeStateOffline)
 	}
 
 	check, err := recovered.CheckSnapshot("check-a", "probe-b")
 	if err != nil {
 		t.Fatalf("CheckSnapshot: %v", err)
 	}
-	if check.State != CheckStateUp {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateUp)
+	if check.State != CheckStateDown {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateDown)
 	}
-	if !check.LastResultAt.Equal(replayAt.Add(time.Second)) {
-		t.Fatalf("check LastResultAt = %s, want %s", check.LastResultAt, replayAt.Add(time.Second))
+	if !check.LastResultAt.Equal(secondAt) {
+		t.Fatalf("check LastResultAt = %s, want %s", check.LastResultAt, secondAt)
 	}
 
 	quorum, err := recovered.QuorumSnapshot("check-a")
 	if err != nil {
 		t.Fatalf("QuorumSnapshot: %v", err)
 	}
-	if quorum.State != QuorumStateUp {
-		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateUp)
+	if quorum.State != QuorumStateDown {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateDown)
 	}
-	if quorum.LastStableState != QuorumStateUp {
-		t.Fatalf("last stable state = %q, want %q", quorum.LastStableState, QuorumStateUp)
+	if quorum.LastStableState != QuorumStateDown {
+		t.Fatalf("last stable state = %q, want %q", quorum.LastStableState, QuorumStateDown)
+	}
+	if !quorum.IncidentOpen {
+		t.Fatal("IncidentOpen = false, want true")
 	}
 }
 
-func TestLoadRuntimeIgnoresRecoveryDataForRemovedMetadata(t *testing.T) {
+func TestLoadRuntimeClearsPersistedVotesForProbesWithoutLiveness(t *testing.T) {
+	at := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
-		checks:   []checks.Check{checks.NewCheck("check-a", "http", "https://a.example.com", "", 30)},
-		probeIDs: []string{"probe-a"},
-		journal: []store.MonitoringJournalRecord{
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         1,
-				Kind:       string(ProbeTriggerReceiveHeartbeat),
-				ProbeID:    "missing-probe",
-				OccurredAt: time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC),
-				RecordedAt: time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC),
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         2,
-				Kind:       string(CheckTriggerObserveDown),
-				CheckID:    "missing-check",
-				ProbeID:    "probe-a",
-				Message:    "timeout",
-				OccurredAt: time.Date(2026, time.April, 8, 7, 1, 0, 0, time.UTC),
-				RecordedAt: time.Date(2026, time.April, 8, 7, 1, 0, 0, time.UTC),
-			}),
+		checks: []checks.Check{
+			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
+		},
+		probes: []store.PersistedProbeState{
+			{ProbeID: "probe-a"},
+		},
+		checkStates: []store.PersistedCheckState{
+			{
+				CheckID:      "check-a",
+				ProbeID:      "probe-a",
+				LastResultAt: at,
+				LastOutcome:  "up",
+				StreakLen:    2,
+				ExpiresAt:    at.Add(30 * time.Second),
+				State:        "up",
+			},
+			{
+				CheckID:      "missing-check",
+				ProbeID:      "probe-a",
+				LastResultAt: at,
+				LastOutcome:  "down",
+				StreakLen:    2,
+				ExpiresAt:    at.Add(30 * time.Second),
+				State:        "down",
+				LastError:    "timeout",
+			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntime: %v", err)
 	}
 
-	probe, err := recovered.ProbeSnapshot("probe-a")
+	check, err := recovered.CheckSnapshot("check-a", "probe-a")
 	if err != nil {
-		t.Fatalf("ProbeSnapshot: %v", err)
+		t.Fatalf("CheckSnapshot: %v", err)
 	}
-	if probe.State != ProbeStateOffline {
-		t.Fatalf("probe state = %q, want %q", probe.State, ProbeStateOffline)
+	if check.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	}
+	if check.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
+	}
+
+	quorum, err := recovered.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot: %v", err)
+	}
+	if quorum.State != QuorumStatePending {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStatePending)
 	}
 }
 
-func TestLoadRuntimeRejectsUnknownJournalKinds(t *testing.T) {
-	_, err := LoadRuntime(&fakeRecoveryStore{
-		checks:   []checks.Check{checks.NewCheck("check-a", "http", "https://a.example.com", "", 30)},
-		probeIDs: []string{"probe-a"},
-		journal: []store.MonitoringJournalRecord{
+func TestLoadRuntimeDoesNotCountPersistedMissingStateAsVote(t *testing.T) {
+	at := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
+	recovered, err := LoadRuntime(&fakeRecoveryStore{
+		checks: []checks.Check{
+			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
+		},
+		probes: []store.PersistedProbeState{
+			{ProbeID: "probe-a", LastSeenAt: &at},
+		},
+		checkStates: []store.PersistedCheckState{
 			{
-				ID:         1,
-				Kind:       "bogus",
-				OccurredAt: time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC),
-				RecordedAt: time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC),
+				CheckID:      "check-a",
+				ProbeID:      "probe-a",
+				LastResultAt: at,
+				LastOutcome:  "",
+				StreakLen:    0,
+				ExpiresAt:    at,
+				State:        "missing",
 			},
 		},
 	})
-	if !errors.Is(err, ErrUnknownRecoveryJournalKind) {
-		t.Fatalf("LoadRuntime err = %v, want %v", err, ErrUnknownRecoveryJournalKind)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
 	}
-}
 
-func newJournalRecord(record store.MonitoringJournalRecord) store.MonitoringJournalRecord {
-	if record.ExpiresAt != nil {
-		expiresAt := *record.ExpiresAt
-		record.ExpiresAt = &expiresAt
+	check, err := recovered.CheckSnapshot("check-a", "probe-a")
+	if err != nil {
+		t.Fatalf("CheckSnapshot: %v", err)
 	}
-	return record
+	if check.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	}
+	if check.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
+	}
+
+	quorum, err := recovered.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot: %v", err)
+	}
+	if quorum.State != QuorumStatePending {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStatePending)
+	}
 }

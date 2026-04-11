@@ -304,6 +304,13 @@ func (s *Store) DeleteCheck(id string, userID int64) (bool, error) {
 	}
 
 	if _, err := tx.Exec(`
+		DELETE FROM check_probe_state
+		WHERE check_id = $1
+	`, id); err != nil {
+		return false, err
+	}
+
+	if _, err := tx.Exec(`
 		UPDATE checks
 		SET deleted_at = $1
 		WHERE uid = $2

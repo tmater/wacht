@@ -1,37 +1,42 @@
 package monitoring
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/store"
 )
 
-var (
-	// ErrUnknownRecoveryJournalKind reports an unsupported journal kind.
-	ErrUnknownRecoveryJournalKind = errors.New("monitoring: unknown recovery journal kind")
-)
-
-// recoveryStore is the metadata and recovery persistence surface needed to
-// bootstrap the monitoring runtime on server startup.
+// recoveryStore is the metadata and compact current-state persistence surface
+// needed to bootstrap the monitoring runtime on server startup.
 type recoveryStore interface {
 	ListAllChecks() ([]checks.Check, error)
-	ActiveProbeIDs() ([]string, error)
-	MonitoringJournalAfter(afterID int64) ([]store.MonitoringJournalRecord, error)
+	ActiveProbeStates() ([]store.PersistedProbeState, error)
+	PersistedCheckStates() ([]store.PersistedCheckState, error)
+	OpenIncidentCheckIDs() ([]string, error)
 }
 
-// LoadRuntime builds monitoring runtime state from current metadata, then
-// replays the monitoring journal to recover the latest in-memory view.
+// LoadRuntime builds monitoring runtime state from current metadata and the
+// compact persisted per-probe / per-(check, probe) snapshots.
 func LoadRuntime(src recoveryStore) (*Runtime, error) {
 	checks, err := src.ListAllChecks()
 	if err != nil {
 		return nil, fmt.Errorf("list checks: %w", err)
 	}
 
-	probeIDs, err := src.ActiveProbeIDs()
+	probes, err := src.ActiveProbeStates()
 	if err != nil {
 		return nil, fmt.Errorf("list active probes: %w", err)
+	}
+
+	checkStates, err := src.PersistedCheckStates()
+	if err != nil {
+		return nil, fmt.Errorf("list persisted check states: %w", err)
+	}
+
+	openIncidentCheckIDs, err := src.OpenIncidentCheckIDs()
+	if err != nil {
+		return nil, fmt.Errorf("list open incidents: %w", err)
 	}
 
 	checkIDs := make([]string, 0, len(checks))
@@ -39,68 +44,76 @@ func LoadRuntime(src recoveryStore) (*Runtime, error) {
 		checkIDs = append(checkIDs, check.ID)
 	}
 
-	runtime := NewRuntime(checkIDs, probeIDs)
-
-	records, err := src.MonitoringJournalAfter(0)
-	if err != nil {
-		return nil, fmt.Errorf("load monitoring journal: %w", err)
+	probeIDs := make([]string, 0, len(probes))
+	for _, probe := range probes {
+		probeIDs = append(probeIDs, probe.ProbeID)
 	}
-	for _, record := range records {
-		if err := runtime.applyJournalRecord(record); err != nil {
+
+	runtime := NewRuntime(checkIDs, probeIDs)
+	openIncidents := make(map[string]struct{}, len(openIncidentCheckIDs))
+	for _, checkID := range openIncidentCheckIDs {
+		openIncidents[checkID] = struct{}{}
+	}
+
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+
+	for _, state := range checkStates {
+		quorum, ok := runtime.quorums[state.CheckID]
+		if !ok {
+			continue
+		}
+		check, ok := quorum.checks[state.ProbeID]
+		if !ok {
+			continue
+		}
+		check.state = persistedCheckExecState(state)
+	}
+
+	for _, probe := range probes {
+		runtimeProbe, ok := runtime.probes[probe.ProbeID]
+		if !ok || probe.LastSeenAt == nil {
+			continue
+		}
+		lastSeenAt := probe.LastSeenAt.UTC()
+		runtimeProbe.state.State = ProbeStateOnline
+		runtimeProbe.state.LastHeartbeatAt = &lastSeenAt
+		runtimeProbe.state.LastError = ""
+	}
+
+	// Probes without any persisted liveness evidence should not contribute old
+	// check votes after a restart.
+	for probeID, probe := range runtime.probes {
+		if probe.state.LastHeartbeatAt != nil {
+			continue
+		}
+		if err := runtime.applyProbeDegradationLocked(probeID, ProbeStateOffline, ""); err != nil {
 			return nil, err
 		}
+	}
+
+	for checkID, quorum := range runtime.quorums {
+		quorum.state = newCheckQuorumState(checkID)
+		if _, ok := openIncidents[checkID]; ok {
+			quorum.state.State = QuorumStateDown
+			quorum.state.LastStableState = QuorumStateDown
+			quorum.state.IncidentOpen = true
+		}
+		quorum.Recompute()
 	}
 
 	return runtime, nil
 }
 
-func (r *Runtime) applyJournalRecord(record store.MonitoringJournalRecord) error {
-	if record.CheckID == "" {
-		switch ProbeTrigger(record.Kind) {
-		case ProbeTriggerReceiveHeartbeat:
-			_, err := r.ReceiveHeartbeat(record.ProbeID, record.OccurredAt)
-			return ignoreUnknownReplayError(err)
-		case ProbeTriggerHeartbeatExpired:
-			_, err := r.ExpireHeartbeat(record.ProbeID)
-			return ignoreUnknownReplayError(err)
-		case ProbeTriggerMarkError:
-			_, err := r.MarkProbeError(record.ProbeID, record.Message)
-			return ignoreUnknownReplayError(err)
-		default:
-			return fmt.Errorf("%w: %s", ErrUnknownRecoveryJournalKind, record.Kind)
-		}
-	}
-
-	switch CheckTrigger(record.Kind) {
-	case CheckTriggerObserveUp:
-		_, err := r.ObserveCheckUp(record.CheckID, record.ProbeID, record.OccurredAt, record.ExpiresAt)
-		return ignoreUnknownReplayError(err)
-	case CheckTriggerObserveDown:
-		_, err := r.ObserveCheckDown(record.CheckID, record.ProbeID, record.OccurredAt, record.ExpiresAt, record.Message)
-		return ignoreUnknownReplayError(err)
-	case CheckTriggerLoseEvidence:
-		_, err := r.LoseCheckEvidence(record.CheckID, record.ProbeID)
-		return ignoreUnknownReplayError(err)
-	case CheckTriggerMarkError:
-		_, err := r.MarkCheckError(record.CheckID, record.ProbeID, record.Message)
-		return ignoreUnknownReplayError(err)
-	default:
-		return fmt.Errorf("%w: %s", ErrUnknownRecoveryJournalKind, record.Kind)
-	}
-}
-
-func ignoreUnknownReplayError(err error) error {
-	if err == nil {
-		return nil
-	}
-	switch {
-	case errors.Is(err, ErrUnknownProbe):
-		return nil
-	case errors.Is(err, ErrUnknownCheck):
-		return nil
-	case errors.Is(err, ErrUnknownCheckAssignment):
-		return nil
-	default:
-		return err
+func persistedCheckExecState(state store.PersistedCheckState) CheckExecState {
+	return CheckExecState{
+		CheckID:      state.CheckID,
+		ProbeID:      state.ProbeID,
+		LastResultAt: state.LastResultAt,
+		LastOutcome:  CheckState(state.LastOutcome),
+		StreakLen:    state.StreakLen,
+		ExpiresAt:    state.ExpiresAt,
+		State:        CheckState(state.State),
+		LastError:    state.LastError,
 	}
 }

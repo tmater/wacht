@@ -20,7 +20,7 @@ type resultStore interface {
 }
 
 // ApplyResult updates runtime-owned monitoring state and durably records the
-// resulting journal and incident side effects.
+// resulting compact current-state row and any incident side effects.
 func ApplyResult(runtime *Runtime, st resultStore, check checks.Check, result proto.CheckResult) error {
 	if runtime == nil {
 		return fmt.Errorf("monitoring: runtime is required")
@@ -33,7 +33,8 @@ func ApplyResult(runtime *Runtime, st resultStore, check checks.Check, result pr
 }
 
 // applyObservedResult updates runtime-owned check state for one observed probe
-// result and durably records the resulting journal and incident side effects.
+// result and durably records the resulting compact current-state row and any
+// incident side effects.
 func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result proto.CheckResult) error {
 	expiresAt := evidenceExpiresAt(check, result.Timestamp)
 
@@ -67,14 +68,16 @@ func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result
 	}
 
 	write := store.MonitoringWrite{
-		JournalRecords: []store.MonitoringJournalRecord{
+		CheckStateWrites: []store.CheckStateWrite{
 			{
-				Kind:       resultTriggerKind(result),
-				CheckID:    check.ID,
-				ProbeID:    result.ProbeID,
-				Message:    strings.TrimSpace(result.Error),
-				ExpiresAt:  &expiresAt,
-				OccurredAt: result.Timestamp,
+				CheckID:      check.ID,
+				ProbeID:      result.ProbeID,
+				LastResultAt: child.state.LastResultAt,
+				LastOutcome:  string(child.state.LastOutcome),
+				StreakLen:    child.state.StreakLen,
+				ExpiresAt:    child.state.ExpiresAt,
+				State:        string(child.state.State),
+				LastError:    child.state.LastError,
 			},
 		},
 	}
@@ -102,15 +105,6 @@ func evidenceExpiresAt(check checks.Check, observedAt time.Time) time.Time {
 		intervalSeconds = checks.DefaultInterval
 	}
 	return observedAt.UTC().Add(2 * time.Duration(intervalSeconds) * time.Second)
-}
-
-// resultTriggerKind maps one probe result to the matching persisted check
-// trigger name.
-func resultTriggerKind(result proto.CheckResult) string {
-	if result.Up {
-		return string(CheckTriggerObserveUp)
-	}
-	return string(CheckTriggerObserveDown)
 }
 
 // ensureQuorumLocked returns the quorum machine for one check, creating it on

@@ -61,16 +61,8 @@ func TestSweepProbesExpiresStaleHeartbeatAndClearsVotes(t *testing.T) {
 	if expired != 1 {
 		t.Fatalf("expired probes = %d, want 1", expired)
 	}
-	if len(st.persistedWrites) != 1 {
-		t.Fatalf("persisted writes = %d, want 1", len(st.persistedWrites))
-	}
-
-	record := st.persistedWrites[0].JournalRecords[0]
-	if record.Kind != string(ProbeTriggerHeartbeatExpired) {
-		t.Fatalf("journal kind = %q, want %q", record.Kind, ProbeTriggerHeartbeatExpired)
-	}
-	if record.ProbeID != "probe-a" {
-		t.Fatalf("journal ProbeID = %q, want probe-a", record.ProbeID)
+	if len(st.persistedWrites) != 0 {
+		t.Fatalf("persisted writes = %d, want 0", len(st.persistedWrites))
 	}
 
 	probe, err := runtime.ProbeSnapshot("probe-a")
@@ -104,11 +96,10 @@ func TestSweepProbesExpiresStaleHeartbeatAndClearsVotes(t *testing.T) {
 	}
 }
 
-func TestSweepProbesRollsBackRuntimeWhenPersistFails(t *testing.T) {
-	persistErr := errors.New("persist failed")
+func TestSweepProbesDoesNotPersistExpiredHeartbeats(t *testing.T) {
 	st := &fakeSweeperStore{
 		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
-			return store.MonitoringWrite{}, persistErr
+			return store.MonitoringWrite{}, errors.New("unexpected persist")
 		},
 	}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
@@ -129,33 +120,39 @@ func TestSweepProbesRollsBackRuntimeWhenPersistFails(t *testing.T) {
 		}
 	}
 
-	_, err := SweepProbes(runtime, st, at.Add(100*time.Second), 90*time.Second)
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("SweepProbes() error = %v, want %v", err, persistErr)
+	expired, err := SweepProbes(runtime, st, at.Add(100*time.Second), 90*time.Second)
+	if err != nil {
+		t.Fatalf("SweepProbes() error = %v", err)
+	}
+	if expired != 2 {
+		t.Fatalf("expired probes = %d, want 2", expired)
+	}
+	if len(st.persistedWrites) != 0 {
+		t.Fatalf("persisted writes = %d, want 0", len(st.persistedWrites))
 	}
 
 	probe, err := runtime.ProbeSnapshot("probe-a")
 	if err != nil {
 		t.Fatalf("ProbeSnapshot() error = %v", err)
 	}
-	if probe.State != ProbeStateOnline {
-		t.Fatalf("probe state = %q, want %q", probe.State, ProbeStateOnline)
+	if probe.State != ProbeStateOffline {
+		t.Fatalf("probe state = %q, want %q", probe.State, ProbeStateOffline)
 	}
 
 	check, err := runtime.CheckSnapshot("check-a", "probe-a")
 	if err != nil {
 		t.Fatalf("CheckSnapshot() error = %v", err)
 	}
-	if check.State != CheckStateUp {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateUp)
+	if check.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
 	}
 
 	quorum, err := runtime.QuorumSnapshot("check-a")
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
-	if quorum.State != QuorumStateUp {
-		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateUp)
+	if quorum.State != QuorumStateError {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateError)
 	}
 }
 
@@ -179,16 +176,15 @@ func TestSweepChecksExpiresStaleEvidenceAndResetsStreak(t *testing.T) {
 	if len(st.persistedWrites) != 1 {
 		t.Fatalf("persisted writes = %d, want 1", len(st.persistedWrites))
 	}
-
-	record := st.persistedWrites[0].JournalRecords[0]
-	if record.Kind != string(CheckTriggerLoseEvidence) {
-		t.Fatalf("journal kind = %q, want %q", record.Kind, CheckTriggerLoseEvidence)
+	if len(st.persistedWrites[0].CheckStateWrites) != 1 {
+		t.Fatalf("check state writes = %d, want 1", len(st.persistedWrites[0].CheckStateWrites))
 	}
-	if record.CheckID != "check-a" {
-		t.Fatalf("journal CheckID = %q, want check-a", record.CheckID)
+	persisted := st.persistedWrites[0].CheckStateWrites[0]
+	if persisted.State != "missing" {
+		t.Fatalf("persisted state = %q, want missing", persisted.State)
 	}
-	if record.ProbeID != "probe-a" {
-		t.Fatalf("journal ProbeID = %q, want probe-a", record.ProbeID)
+	if persisted.LastOutcome != "" {
+		t.Fatalf("persisted last outcome = %q, want empty", persisted.LastOutcome)
 	}
 
 	check, err := runtime.CheckSnapshot("check-a", "probe-a")
@@ -209,13 +205,8 @@ func TestSweepChecksExpiresStaleEvidenceAndResetsStreak(t *testing.T) {
 	}
 }
 
-func TestSweepChecksRollsBackRuntimeWhenPersistFails(t *testing.T) {
-	persistErr := errors.New("persist failed")
-	st := &fakeSweeperStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
-			return store.MonitoringWrite{}, persistErr
-		},
-	}
+func TestSweepChecksPersistsExpiredEvidenceWithoutIncidentTransition(t *testing.T) {
+	st := &fakeSweeperStore{}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 	expiresAt := at.Add(10 * time.Second)
@@ -224,9 +215,24 @@ func TestSweepChecksRollsBackRuntimeWhenPersistFails(t *testing.T) {
 		t.Fatalf("ObserveCheckUp(): %v", err)
 	}
 
-	_, err := SweepChecks(runtime, st, at.Add(11*time.Second))
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("SweepChecks() error = %v, want %v", err, persistErr)
+	expired, err := SweepChecks(runtime, st, at.Add(11*time.Second))
+	if err != nil {
+		t.Fatalf("SweepChecks() error = %v", err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired assignments = %d, want 1", expired)
+	}
+	if len(st.persistedWrites) != 1 {
+		t.Fatalf("persisted writes = %d, want 1", len(st.persistedWrites))
+	}
+	if st.persistedWrites[0].IncidentCheckID != "" {
+		t.Fatalf("incident check id = %q, want empty", st.persistedWrites[0].IncidentCheckID)
+	}
+	if len(st.persistedWrites[0].CheckStateWrites) != 1 {
+		t.Fatalf("check state writes = %d, want 1", len(st.persistedWrites[0].CheckStateWrites))
+	}
+	if st.persistedWrites[0].CheckStateWrites[0].LastOutcome != "" {
+		t.Fatalf("persisted last outcome = %q, want empty", st.persistedWrites[0].CheckStateWrites[0].LastOutcome)
 	}
 
 	check, err := runtime.CheckSnapshot("check-a", "probe-a")
@@ -236,14 +242,14 @@ func TestSweepChecksRollsBackRuntimeWhenPersistFails(t *testing.T) {
 	if check.State != CheckStateMissing {
 		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
 	}
-	if check.LastOutcome != CheckStateUp {
-		t.Fatalf("last outcome = %q, want %q", check.LastOutcome, CheckStateUp)
+	if check.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
 	}
-	if check.StreakLen != 1 {
-		t.Fatalf("streak = %d, want 1", check.StreakLen)
+	if check.StreakLen != 0 {
+		t.Fatalf("streak = %d, want 0", check.StreakLen)
 	}
-	if check.ExpiresAt.IsZero() {
-		t.Fatal("expected ExpiresAt to remain set after rollback")
+	if !check.ExpiresAt.IsZero() {
+		t.Fatalf("expiresAt = %s, want zero", check.ExpiresAt)
 	}
 }
 
