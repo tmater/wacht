@@ -15,7 +15,7 @@ import (
 type probeStore interface {
 	RegisterProbe(probeID, version string) error
 	GetCheck(id string) (*checks.Check, error)
-	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
 }
 
 type probeProcessor interface {

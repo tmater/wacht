@@ -149,30 +149,6 @@ func (s *Store) PublicStatusCheckViews(slug string) ([]PublicStatusCheckView, bo
 	return views, true, rows.Err()
 }
 
-// OpenIncident records a new incident for checkID. Returns true if an incident
-// was already open (caller should skip alerting to avoid duplicate notifications).
-func (s *Store) OpenIncident(checkID string) (alreadyOpen bool, err error) {
-	return s.openIncidentWithNotification(checkID, nil)
-}
-
-// OpenIncidentWithNotification records a new incident and durable webhook work
-// for the "down" transition in one transaction.
-func (s *Store) OpenIncidentWithNotification(checkID string, request *NotificationRequest) (alreadyOpen bool, err error) {
-	return s.openIncidentWithNotification(checkID, request)
-}
-
-// ResolveIncident marks the open incident for checkID as resolved. It returns
-// true when an open incident was actually closed.
-func (s *Store) ResolveIncident(checkID string) (resolved bool, err error) {
-	return s.resolveIncidentWithNotification(checkID, nil)
-}
-
-// ResolveIncidentWithNotification resolves an incident and durable webhook work
-// for the "up" transition in one transaction.
-func (s *Store) ResolveIncidentWithNotification(checkID string, request *NotificationRequest) (resolved bool, err error) {
-	return s.resolveIncidentWithNotification(checkID, request)
-}
-
 // SeedChecks inserts checks that do not already exist in the database.
 // Existing checks (matched by id) are left unchanged. Used to bootstrap
 // from YAML config on startup without overwriting DB-managed checks.

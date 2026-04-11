@@ -192,7 +192,7 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
 
-	if _, err := s.OpenIncidentWithNotification("reused-check", &NotificationRequest{
+	if _, err := openIncidentWithNotificationForTest(s, "reused-check", &NotificationRequest{
 		WebhookURL: check.Webhook,
 		Payload:    []byte(`{"status":"down"}`),
 	}); err != nil {

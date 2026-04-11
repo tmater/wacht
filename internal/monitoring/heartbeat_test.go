@@ -9,17 +9,17 @@ import (
 )
 
 type fakeHeartbeatStore struct {
-	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	persistedWrites          []store.MonitoringWrite
 }
 
 // PersistMonitoringWrite captures heartbeat writes for monitoring tests.
-func (f *fakeHeartbeatStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
+func (f *fakeHeartbeatStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error) {
 	f.persistedWrites = append(f.persistedWrites, write)
 	if f.persistMonitoringWriteFn != nil {
 		return f.persistMonitoringWriteFn(write)
 	}
-	return write, false, nil
+	return write, nil
 }
 
 // TestApplyHeartbeatPersistsProbeRuntimeTransition verifies that one accepted
@@ -74,8 +74,8 @@ func TestApplyHeartbeatPersistsProbeRuntimeTransition(t *testing.T) {
 func TestApplyHeartbeatRollsBackRuntimeWhenPersistFails(t *testing.T) {
 	persistErr := errors.New("persist failed")
 	st := &fakeHeartbeatStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
-			return store.MonitoringWrite{}, false, persistErr
+		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
+			return store.MonitoringWrite{}, persistErr
 		},
 	}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})

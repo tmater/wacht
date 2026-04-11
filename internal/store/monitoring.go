@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -12,8 +11,6 @@ import (
 var (
 	// ErrInvalidMonitoringJournalKind reports a blank journal kind.
 	ErrInvalidMonitoringJournalKind = errors.New("store: invalid monitoring journal kind")
-	// ErrInvalidMonitoringPayload reports malformed or empty snapshot JSON payloads.
-	ErrInvalidMonitoringPayload = errors.New("store: invalid monitoring payload")
 	// ErrInvalidMonitoringProbeWrite reports an incomplete probe heartbeat write.
 	ErrInvalidMonitoringProbeWrite = errors.New("store: invalid monitoring probe write")
 	// ErrInvalidMonitoringIncidentWrite reports an incomplete incident write.
@@ -34,43 +31,15 @@ type MonitoringJournalRecord struct {
 	RecordedAt time.Time
 }
 
-// MonitoringSnapshot is one captured recovery baseline for the monitoring
-// runtime so boot only has to replay the journal tail after it.
-type MonitoringSnapshot struct {
-	ID            int64
-	LastJournalID int64
-	Payload       json.RawMessage
-	CapturedAt    time.Time
-}
-
-// MonitoringWrite groups journal, snapshot, and incident writes into one
+// MonitoringWrite groups journal, probe heartbeat, and incident writes into one
 // commit boundary.
 type MonitoringWrite struct {
 	JournalRecords       []MonitoringJournalRecord
-	Snapshot             *MonitoringSnapshot
 	ProbeHeartbeatID     string
 	ProbeHeartbeatAt     time.Time
 	IncidentCheckID      string
 	ResolveIncident      bool
 	IncidentNotification *NotificationRequest
-}
-
-// AppendMonitoringJournal appends one runtime recovery record.
-func (s *Store) AppendMonitoringJournal(record MonitoringJournalRecord) (MonitoringJournalRecord, error) {
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return MonitoringJournalRecord{}, err
-	}
-	defer tx.Rollback()
-
-	saved, err := appendMonitoringJournalTx(tx, record)
-	if err != nil {
-		return MonitoringJournalRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return MonitoringJournalRecord{}, err
-	}
-	return saved, nil
 }
 
 // MonitoringJournalAfter returns the append-only recovery tail with IDs
@@ -130,62 +99,24 @@ func (s *Store) MonitoringJournalAfter(afterID int64) ([]MonitoringJournalRecord
 	return records, rows.Err()
 }
 
-// AppendMonitoringSnapshot appends one captured runtime image.
-func (s *Store) AppendMonitoringSnapshot(snapshot MonitoringSnapshot) (MonitoringSnapshot, error) {
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return MonitoringSnapshot{}, err
-	}
-	defer tx.Rollback()
-
-	saved, err := appendMonitoringSnapshotTx(tx, snapshot)
-	if err != nil {
-		return MonitoringSnapshot{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return MonitoringSnapshot{}, err
-	}
-	return saved, nil
-}
-
-// LatestMonitoringSnapshot returns the newest captured runtime image, or nil
-// when no snapshot has been persisted yet.
-func (s *Store) LatestMonitoringSnapshot() (*MonitoringSnapshot, error) {
-	var snapshot MonitoringSnapshot
-	err := s.db.QueryRow(`
-		SELECT id, last_journal_id, payload, captured_at
-		FROM monitoring_snapshots
-		ORDER BY id DESC
-		LIMIT 1
-	`).Scan(&snapshot.ID, &snapshot.LastJournalID, &snapshot.Payload, &snapshot.CapturedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &snapshot, nil
-}
-
-// PersistMonitoringWrite commits journal, snapshot, and incident writes in one
-// transaction so runtime recovery data and durable side effects do not drift.
-// It returns the persisted write with generated IDs filled in, plus whether the
-// incident side effect actually changed durable state.
-func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, bool, error) {
+// PersistMonitoringWrite commits journal, probe heartbeat, and incident writes
+// in one transaction so runtime recovery data and durable side effects do not
+// drift. It returns the persisted write with generated IDs filled in.
+func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, error) {
 	if write.ProbeHeartbeatID == "" && !write.ProbeHeartbeatAt.IsZero() {
-		return MonitoringWrite{}, false, ErrInvalidMonitoringProbeWrite
+		return MonitoringWrite{}, ErrInvalidMonitoringProbeWrite
 	}
 	if write.IncidentCheckID == "" && (write.ResolveIncident || write.IncidentNotification != nil) {
-		return MonitoringWrite{}, false, ErrInvalidMonitoringIncidentWrite
+		return MonitoringWrite{}, ErrInvalidMonitoringIncidentWrite
 	}
 
-	if len(write.JournalRecords) == 0 && write.Snapshot == nil && write.ProbeHeartbeatID == "" && write.IncidentCheckID == "" {
-		return MonitoringWrite{}, false, nil
+	if len(write.JournalRecords) == 0 && write.ProbeHeartbeatID == "" && write.IncidentCheckID == "" {
+		return MonitoringWrite{}, nil
 	}
 
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
-		return MonitoringWrite{}, false, err
+		return MonitoringWrite{}, err
 	}
 	defer tx.Rollback()
 
@@ -195,46 +126,32 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 	for _, record := range write.JournalRecords {
 		saved, err := appendMonitoringJournalTx(tx, record)
 		if err != nil {
-			return MonitoringWrite{}, false, err
+			return MonitoringWrite{}, err
 		}
 		persisted.JournalRecords = append(persisted.JournalRecords, saved)
-	}
-
-	if write.Snapshot != nil {
-		snapshot := *write.Snapshot
-		if len(persisted.JournalRecords) > 0 {
-			snapshot.LastJournalID = persisted.JournalRecords[len(persisted.JournalRecords)-1].ID
-		}
-
-		saved, err := appendMonitoringSnapshotTx(tx, snapshot)
-		if err != nil {
-			return MonitoringWrite{}, false, err
-		}
-		persisted.Snapshot = &saved
 	}
 
 	if write.ProbeHeartbeatID != "" {
 		heartbeatAt, err := updateProbeHeartbeatTx(tx, write.ProbeHeartbeatID, write.ProbeHeartbeatAt)
 		if err != nil {
-			return MonitoringWrite{}, false, err
+			return MonitoringWrite{}, err
 		}
 		persisted.ProbeHeartbeatAt = heartbeatAt
 	}
 
-	incidentApplied, err := applyMonitoringIncidentTx(
+	if _, err := applyMonitoringIncidentTx(
 		tx,
 		write.IncidentCheckID,
 		write.ResolveIncident,
 		write.IncidentNotification,
-	)
-	if err != nil {
-		return MonitoringWrite{}, false, err
+	); err != nil {
+		return MonitoringWrite{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return MonitoringWrite{}, false, err
+		return MonitoringWrite{}, err
 	}
-	return persisted, incidentApplied, nil
+	return persisted, nil
 }
 
 // appendMonitoringJournalTx normalizes and appends one recovery journal record
@@ -269,30 +186,6 @@ func appendMonitoringJournalTx(tx *sql.Tx, record MonitoringJournalRecord) (Moni
 	return record, nil
 }
 
-// appendMonitoringSnapshotTx normalizes and appends one runtime snapshot
-// inside an existing transaction.
-func appendMonitoringSnapshotTx(tx *sql.Tx, snapshot MonitoringSnapshot) (MonitoringSnapshot, error) {
-	payload, err := normalizeMonitoringPayload(snapshot.Payload)
-	if err != nil {
-		return MonitoringSnapshot{}, err
-	}
-	snapshot.Payload = payload
-	snapshot.CapturedAt = normalizeTime(snapshot.CapturedAt)
-	if snapshot.LastJournalID < 0 {
-		snapshot.LastJournalID = 0
-	}
-
-	err = tx.QueryRow(`
-		INSERT INTO monitoring_snapshots (last_journal_id, payload, captured_at)
-		VALUES ($1, $2::jsonb, $3)
-		RETURNING id
-	`, snapshot.LastJournalID, string(snapshot.Payload), snapshot.CapturedAt).Scan(&snapshot.ID)
-	if err != nil {
-		return MonitoringSnapshot{}, err
-	}
-	return snapshot, nil
-}
-
 // applyMonitoringIncidentTx applies the optional incident side effect for a
 // monitoring write inside an existing transaction.
 func applyMonitoringIncidentTx(tx *sql.Tx, checkID string, resolve bool, request *NotificationRequest) (bool, error) {
@@ -309,16 +202,6 @@ func applyMonitoringIncidentTx(tx *sql.Tx, checkID string, resolve bool, request
 		return false, err
 	}
 	return !alreadyOpen, nil
-}
-
-// normalizeMonitoringPayload trims and validates snapshot payload JSON before
-// it is written to the database.
-func normalizeMonitoringPayload(payload json.RawMessage) (json.RawMessage, error) {
-	payload = json.RawMessage(strings.TrimSpace(string(payload)))
-	if !json.Valid(payload) {
-		return nil, ErrInvalidMonitoringPayload
-	}
-	return payload, nil
 }
 
 // normalizeTime coerces zero or local times into a UTC timestamp suitable for

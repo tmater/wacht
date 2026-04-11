@@ -1,7 +1,6 @@
 package monitoring
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 type fakeRecoveryStore struct {
 	checks   []checks.Check
 	probeIDs []string
-	snapshot *store.MonitoringSnapshot
 	journal  []store.MonitoringJournalRecord
 }
 
@@ -25,16 +23,6 @@ func (f *fakeRecoveryStore) ListAllChecks() ([]checks.Check, error) {
 
 func (f *fakeRecoveryStore) ActiveProbeIDs() ([]string, error) {
 	return append([]string(nil), f.probeIDs...), nil
-}
-
-func (f *fakeRecoveryStore) LatestMonitoringSnapshot() (*store.MonitoringSnapshot, error) {
-	if f.snapshot == nil {
-		return nil, nil
-	}
-
-	snapshot := *f.snapshot
-	snapshot.Payload = append(json.RawMessage(nil), snapshot.Payload...)
-	return &snapshot, nil
 }
 
 func (f *fakeRecoveryStore) MonitoringJournalAfter(afterID int64) ([]store.MonitoringJournalRecord, error) {
@@ -89,34 +77,11 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 	}
 }
 
-func TestLoadRuntimeRestoresSnapshotAndReplaysJournalTail(t *testing.T) {
-	base := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b", "probe-c"})
-
+func TestLoadRuntimeReplaysJournalAgainstMetadataDefaults(t *testing.T) {
 	firstAt := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
 	firstExpiry := firstAt.Add(30 * time.Second)
-	if _, err := base.ReceiveHeartbeat("probe-a", firstAt); err != nil {
-		t.Fatalf("ReceiveHeartbeat probe-a: %v", err)
-	}
-	if _, err := base.ObserveCheckDown("check-a", "probe-a", firstAt, &firstExpiry, "timeout"); err != nil {
-		t.Fatalf("ObserveCheckDown probe-a: %v", err)
-	}
-	if _, err := base.ObserveCheckDown("check-a", "probe-b", firstAt, &firstExpiry, "timeout"); err != nil {
-		t.Fatalf("ObserveCheckDown probe-b: %v", err)
-	}
 	secondAt := firstAt.Add(time.Second)
 	secondExpiry := secondAt.Add(30 * time.Second)
-	if _, err := base.ObserveCheckDown("check-a", "probe-a", secondAt, &secondExpiry, "timeout"); err != nil {
-		t.Fatalf("ObserveCheckDown probe-a second: %v", err)
-	}
-	if _, err := base.ObserveCheckDown("check-a", "probe-b", secondAt, &secondExpiry, "timeout"); err != nil {
-		t.Fatalf("ObserveCheckDown probe-b second: %v", err)
-	}
-
-	snapshot, err := base.RecoverySnapshot(7, firstAt.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("RecoverySnapshot: %v", err)
-	}
-
 	replayAt := firstAt.Add(2 * time.Minute)
 	replayExpiry := replayAt.Add(30 * time.Second)
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
@@ -124,12 +89,76 @@ func TestLoadRuntimeRestoresSnapshotAndReplaysJournalTail(t *testing.T) {
 			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
 		},
 		probeIDs: []string{"probe-a", "probe-b", "probe-c"},
-		snapshot: &snapshot,
 		journal: []store.MonitoringJournalRecord{
 			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         8,
+				ID:         1,
+				Kind:       string(ProbeTriggerReceiveHeartbeat),
+				ProbeID:    "probe-a",
+				OccurredAt: firstAt,
+				RecordedAt: firstAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         2,
+				Kind:       string(CheckTriggerObserveDown),
+				CheckID:    "check-a",
+				ProbeID:    "probe-a",
+				Message:    "timeout",
+				ExpiresAt:  &firstExpiry,
+				OccurredAt: firstAt,
+				RecordedAt: firstAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         3,
+				Kind:       string(CheckTriggerObserveDown),
+				CheckID:    "check-a",
+				ProbeID:    "probe-b",
+				Message:    "timeout",
+				ExpiresAt:  &firstExpiry,
+				OccurredAt: firstAt,
+				RecordedAt: firstAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         4,
+				Kind:       string(CheckTriggerObserveDown),
+				CheckID:    "check-a",
+				ProbeID:    "probe-a",
+				Message:    "timeout",
+				ExpiresAt:  &secondExpiry,
+				OccurredAt: secondAt,
+				RecordedAt: secondAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         5,
+				Kind:       string(CheckTriggerObserveDown),
+				CheckID:    "check-a",
+				ProbeID:    "probe-b",
+				Message:    "timeout",
+				ExpiresAt:  &secondExpiry,
+				OccurredAt: secondAt,
+				RecordedAt: secondAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         6,
 				Kind:       string(ProbeTriggerReceiveHeartbeat),
 				ProbeID:    "probe-b",
+				OccurredAt: replayAt,
+				RecordedAt: replayAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         7,
+				Kind:       string(CheckTriggerObserveUp),
+				CheckID:    "check-a",
+				ProbeID:    "probe-a",
+				ExpiresAt:  &replayExpiry,
+				OccurredAt: replayAt,
+				RecordedAt: replayAt,
+			}),
+			newJournalRecord(store.MonitoringJournalRecord{
+				ID:         8,
+				Kind:       string(CheckTriggerObserveUp),
+				CheckID:    "check-a",
+				ProbeID:    "probe-b",
+				ExpiresAt:  &replayExpiry,
 				OccurredAt: replayAt,
 				RecordedAt: replayAt,
 			}),
@@ -139,29 +168,11 @@ func TestLoadRuntimeRestoresSnapshotAndReplaysJournalTail(t *testing.T) {
 				CheckID:    "check-a",
 				ProbeID:    "probe-a",
 				ExpiresAt:  &replayExpiry,
-				OccurredAt: replayAt,
-				RecordedAt: replayAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         10,
-				Kind:       string(CheckTriggerObserveUp),
-				CheckID:    "check-a",
-				ProbeID:    "probe-b",
-				ExpiresAt:  &replayExpiry,
-				OccurredAt: replayAt,
-				RecordedAt: replayAt,
-			}),
-			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         11,
-				Kind:       string(CheckTriggerObserveUp),
-				CheckID:    "check-a",
-				ProbeID:    "probe-a",
-				ExpiresAt:  &replayExpiry,
 				OccurredAt: replayAt.Add(time.Second),
 				RecordedAt: replayAt.Add(time.Second),
 			}),
 			newJournalRecord(store.MonitoringJournalRecord{
-				ID:         12,
+				ID:         10,
 				Kind:       string(CheckTriggerObserveUp),
 				CheckID:    "check-a",
 				ProbeID:    "probe-b",

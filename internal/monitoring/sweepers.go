@@ -12,7 +12,7 @@ import (
 // sweeperStore is the persistence surface needed by the runtime-owned stale
 // probe and stale evidence sweepers.
 type sweeperStore interface {
-	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	GetCheck(id string) (*checks.Check, error)
 }
 
@@ -82,7 +82,7 @@ func SweepProbes(runtime *Runtime, st sweeperStore, now time.Time, offlineAfter 
 				},
 			},
 		}
-		if _, _, err := st.PersistMonitoringWrite(write); err != nil {
+		if _, err := st.PersistMonitoringWrite(write); err != nil {
 			runtime.restoreProbeSweepRollbackLocked(probeID, rollback)
 			runtime.mu.Unlock()
 			return expired, err
@@ -193,7 +193,7 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 				}
 			}
 		}
-		if _, _, err := st.PersistMonitoringWrite(write); err != nil {
+		if _, err := st.PersistMonitoringWrite(write); err != nil {
 			check.state = previousCheck
 			quorum.state = previousQuorum
 			runtime.mu.Unlock()

@@ -10,7 +10,7 @@ import (
 // heartbeatStore is the persistence surface needed for runtime-owned probe
 // heartbeat ingestion.
 type heartbeatStore interface {
-	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
 }
 
 // ApplyHeartbeat updates runtime-owned probe liveness, persists the matching
@@ -57,7 +57,7 @@ func (r *Runtime) applyHeartbeat(st heartbeatStore, probeID string, at time.Time
 		ProbeHeartbeatAt: heartbeatAt,
 	}
 
-	if _, _, err := st.PersistMonitoringWrite(write); err != nil {
+	if _, err := st.PersistMonitoringWrite(write); err != nil {
 		probe.state = previous
 		return err
 	}

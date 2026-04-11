@@ -103,9 +103,6 @@ func main() {
 	if _, err := monitoring.SweepProbes(monitoringRuntime, db, time.Now().UTC(), cfg.ProbeOfflineAfter); err != nil {
 		fatal("initial probe sweep failed", "err", err)
 	}
-	if _, err := monitoring.SweepChecks(monitoringRuntime, db, time.Now().UTC()); err != nil {
-		fatal("initial check sweep failed", "err", err)
-	}
 
 	h := server.New(db, monitoringRuntime, cfg)
 	defer h.Close()

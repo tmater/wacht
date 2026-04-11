@@ -10,17 +10,17 @@ import (
 )
 
 type fakeSweeperStore struct {
-	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error)
+	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	getCheckFn               func(id string) (*checks.Check, error)
 	persistedWrites          []store.MonitoringWrite
 }
 
-func (f *fakeSweeperStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
+func (f *fakeSweeperStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error) {
 	f.persistedWrites = append(f.persistedWrites, write)
 	if f.persistMonitoringWriteFn != nil {
 		return f.persistMonitoringWriteFn(write)
 	}
-	return write, false, nil
+	return write, nil
 }
 
 func (f *fakeSweeperStore) GetCheck(id string) (*checks.Check, error) {
@@ -107,8 +107,8 @@ func TestSweepProbesExpiresStaleHeartbeatAndClearsVotes(t *testing.T) {
 func TestSweepProbesRollsBackRuntimeWhenPersistFails(t *testing.T) {
 	persistErr := errors.New("persist failed")
 	st := &fakeSweeperStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
-			return store.MonitoringWrite{}, false, persistErr
+		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
+			return store.MonitoringWrite{}, persistErr
 		},
 	}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
@@ -212,8 +212,8 @@ func TestSweepChecksExpiresStaleEvidenceAndResetsStreak(t *testing.T) {
 func TestSweepChecksRollsBackRuntimeWhenPersistFails(t *testing.T) {
 	persistErr := errors.New("persist failed")
 	st := &fakeSweeperStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, bool, error) {
-			return store.MonitoringWrite{}, false, persistErr
+		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
+			return store.MonitoringWrite{}, persistErr
 		},
 	}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
