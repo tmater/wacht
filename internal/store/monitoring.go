@@ -249,7 +249,10 @@ func normalizeCheckStateWrite(state CheckStateWrite) (CheckStateWrite, error) {
 	state.LastOutcome = strings.TrimSpace(state.LastOutcome)
 	state.State = strings.TrimSpace(state.State)
 	state.LastError = strings.TrimSpace(state.LastError)
-	if state.CheckID == "" || state.ProbeID == "" || state.LastOutcome == "" || state.State == "" || state.StreakLen < 0 {
+	if state.CheckID == "" || state.ProbeID == "" || state.State == "" || state.StreakLen < 0 {
+		return CheckStateWrite{}, ErrInvalidMonitoringCheckStateWrite
+	}
+	if state.LastOutcome == "" && state.State != "missing" {
 		return CheckStateWrite{}, ErrInvalidMonitoringCheckStateWrite
 	}
 

@@ -173,8 +173,18 @@ func TestSweepChecksExpiresStaleEvidenceAndResetsStreak(t *testing.T) {
 	if expired != 1 {
 		t.Fatalf("expired assignments = %d, want 1", expired)
 	}
-	if len(st.persistedWrites) != 0 {
-		t.Fatalf("persisted writes = %d, want 0", len(st.persistedWrites))
+	if len(st.persistedWrites) != 1 {
+		t.Fatalf("persisted writes = %d, want 1", len(st.persistedWrites))
+	}
+	if len(st.persistedWrites[0].CheckStateWrites) != 1 {
+		t.Fatalf("check state writes = %d, want 1", len(st.persistedWrites[0].CheckStateWrites))
+	}
+	persisted := st.persistedWrites[0].CheckStateWrites[0]
+	if persisted.State != "missing" {
+		t.Fatalf("persisted state = %q, want missing", persisted.State)
+	}
+	if persisted.LastOutcome != "" {
+		t.Fatalf("persisted last outcome = %q, want empty", persisted.LastOutcome)
 	}
 
 	check, err := runtime.CheckSnapshot("check-a", "probe-a")
@@ -195,12 +205,8 @@ func TestSweepChecksExpiresStaleEvidenceAndResetsStreak(t *testing.T) {
 	}
 }
 
-func TestSweepChecksDoesNotPersistWhenStableStateDoesNotChange(t *testing.T) {
-	st := &fakeSweeperStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
-			return store.MonitoringWrite{}, errors.New("unexpected persist")
-		},
-	}
+func TestSweepChecksPersistsExpiredEvidenceWithoutIncidentTransition(t *testing.T) {
+	st := &fakeSweeperStore{}
 	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 	expiresAt := at.Add(10 * time.Second)
@@ -216,8 +222,17 @@ func TestSweepChecksDoesNotPersistWhenStableStateDoesNotChange(t *testing.T) {
 	if expired != 1 {
 		t.Fatalf("expired assignments = %d, want 1", expired)
 	}
-	if len(st.persistedWrites) != 0 {
-		t.Fatalf("persisted writes = %d, want 0", len(st.persistedWrites))
+	if len(st.persistedWrites) != 1 {
+		t.Fatalf("persisted writes = %d, want 1", len(st.persistedWrites))
+	}
+	if st.persistedWrites[0].IncidentCheckID != "" {
+		t.Fatalf("incident check id = %q, want empty", st.persistedWrites[0].IncidentCheckID)
+	}
+	if len(st.persistedWrites[0].CheckStateWrites) != 1 {
+		t.Fatalf("check state writes = %d, want 1", len(st.persistedWrites[0].CheckStateWrites))
+	}
+	if st.persistedWrites[0].CheckStateWrites[0].LastOutcome != "" {
+		t.Fatalf("persisted last outcome = %q, want empty", st.persistedWrites[0].CheckStateWrites[0].LastOutcome)
 	}
 
 	check, err := runtime.CheckSnapshot("check-a", "probe-a")

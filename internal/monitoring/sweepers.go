@@ -152,6 +152,21 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 			return expired, err
 		}
 
+		write := store.MonitoringWrite{
+			CheckStateWrites: []store.CheckStateWrite{
+				{
+					CheckID:      assignment.CheckID,
+					ProbeID:      assignment.ProbeID,
+					LastResultAt: check.state.LastResultAt,
+					LastOutcome:  string(check.state.LastOutcome),
+					StreakLen:    check.state.StreakLen,
+					ExpiresAt:    check.state.ExpiresAt,
+					State:        string(check.state.State),
+					LastError:    check.state.LastError,
+				},
+			},
+		}
+
 		if previousQuorum.LastStableState != update.Quorum.LastStableState {
 			checkDef, err := st.GetCheck(assignment.CheckID)
 			if err != nil {
@@ -161,7 +176,6 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 				return expired, err
 			}
 			if checkDef != nil {
-				write := store.MonitoringWrite{}
 				write, err = monitoringWriteForCheckEvent(*checkDef, quorum, previousQuorum, update.Quorum, write)
 				if err != nil {
 					check.state = previousCheck
@@ -169,13 +183,13 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 					runtime.mu.Unlock()
 					return expired, err
 				}
-				if _, err := st.PersistMonitoringWrite(write); err != nil {
-					check.state = previousCheck
-					quorum.state = previousQuorum
-					runtime.mu.Unlock()
-					return expired, err
-				}
 			}
+		}
+		if _, err := st.PersistMonitoringWrite(write); err != nil {
+			check.state = previousCheck
+			quorum.state = previousQuorum
+			runtime.mu.Unlock()
+			return expired, err
 		}
 
 		runtime.mu.Unlock()

@@ -220,3 +220,48 @@ func TestLoadRuntimeClearsPersistedVotesForProbesWithoutLiveness(t *testing.T) {
 		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStatePending)
 	}
 }
+
+func TestLoadRuntimeDoesNotCountPersistedMissingStateAsVote(t *testing.T) {
+	at := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
+	recovered, err := LoadRuntime(&fakeRecoveryStore{
+		checks: []checks.Check{
+			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
+		},
+		probes: []store.PersistedProbeState{
+			{ProbeID: "probe-a", LastSeenAt: &at},
+		},
+		checkStates: []store.PersistedCheckState{
+			{
+				CheckID:      "check-a",
+				ProbeID:      "probe-a",
+				LastResultAt: at,
+				LastOutcome:  "",
+				StreakLen:    0,
+				ExpiresAt:    at,
+				State:        "missing",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+
+	check, err := recovered.CheckSnapshot("check-a", "probe-a")
+	if err != nil {
+		t.Fatalf("CheckSnapshot: %v", err)
+	}
+	if check.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	}
+	if check.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
+	}
+
+	quorum, err := recovered.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot: %v", err)
+	}
+	if quorum.State != QuorumStatePending {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStatePending)
+	}
+}

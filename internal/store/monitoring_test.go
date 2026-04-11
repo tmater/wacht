@@ -296,3 +296,55 @@ func TestPersistMonitoringWriteRejectsIncompleteInputs(t *testing.T) {
 		t.Fatalf("CheckStateWrites-only error = %v, want ErrInvalidMonitoringCheckStateWrite", err)
 	}
 }
+
+func TestPersistMonitoringWriteAllowsMissingCheckStateWithoutOutcome(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.SeedProbes([]ProbeSeed{{ProbeID: "probe-a", Secret: "secret-a"}}); err != nil {
+		t.Fatalf("SeedProbes: %v", err)
+	}
+
+	user, err := s.CreateUser("monitoring-missing@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	lastResultAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := s.PersistMonitoringWrite(MonitoringWrite{
+		CheckStateWrites: []CheckStateWrite{{
+			CheckID:      "check-1",
+			ProbeID:      "probe-a",
+			LastResultAt: lastResultAt,
+			StreakLen:    0,
+			State:        "missing",
+		}},
+	}); err != nil {
+		t.Fatalf("PersistMonitoringWrite: %v", err)
+	}
+
+	states, err := s.PersistedCheckStates()
+	if err != nil {
+		t.Fatalf("PersistedCheckStates: %v", err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("persisted check states = %d, want 1", len(states))
+	}
+	if states[0].LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", states[0].LastOutcome)
+	}
+	if states[0].State != "missing" {
+		t.Fatalf("state = %q, want missing", states[0].State)
+	}
+	if states[0].StreakLen != 0 {
+		t.Fatalf("streak = %d, want 0", states[0].StreakLen)
+	}
+	if !states[0].LastResultAt.Equal(lastResultAt) {
+		t.Fatalf("last_result_at = %s, want %s", states[0].LastResultAt, lastResultAt)
+	}
+	if !states[0].ExpiresAt.Equal(lastResultAt) {
+		t.Fatalf("expires_at = %s, want %s", states[0].ExpiresAt, lastResultAt)
+	}
+}

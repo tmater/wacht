@@ -52,7 +52,7 @@ CREATE TABLE check_probe_state (
     state           TEXT NOT NULL,
     last_error      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (check_id, probe_id),
-    CONSTRAINT check_probe_state_last_outcome_check CHECK (last_outcome IN ('up', 'down', 'error')),
+    CONSTRAINT check_probe_state_last_outcome_check CHECK (last_outcome IN ('', 'up', 'down', 'error')),
     CONSTRAINT check_probe_state_state_check CHECK (state IN ('up', 'down', 'missing', 'error')),
     CONSTRAINT check_probe_state_streak_len_check CHECK (streak_len >= 0)
 );
