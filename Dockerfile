@@ -11,7 +11,7 @@ COPY . .
 RUN go build -o /out/${BINARY} ./cmd/${BINARY}/
 
 # Runtime stage: minimal Alpine image, no Go toolchain
-FROM alpine:3.23.3
+FROM alpine:3.23.4
 # Alpine doesn't include CA certificates by default — required for HTTPS checks
 RUN apk add --no-cache ca-certificates
 ARG BINARY
