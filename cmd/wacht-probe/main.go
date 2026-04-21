@@ -50,7 +50,10 @@ func main() {
 	logger.Info("checks fetched", "probe_id", cfg.ProbeID, "count", len(checkList))
 
 	policy := network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}
-	scheduler := newScheduler(cfg, policy, apiClient)
+	resultBatcher := newResultBatcher(apiClient, cfg.ResultFlushInterval, defaultResultBatchMaxSize)
+	defer resultBatcher.Close()
+
+	scheduler := newScheduler(cfg, policy, resultBatcher)
 	defer scheduler.Close()
 	scheduler.Reconcile(checkList)
 

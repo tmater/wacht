@@ -12,7 +12,9 @@ import (
 
 type fakeResultStore struct {
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
+	persistMonitoringBatchFn func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error)
 	persistedWrites          []store.MonitoringWrite
+	persistedBatches         [][]store.MonitoringWrite
 }
 
 func (f *fakeResultStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error) {
@@ -21,6 +23,16 @@ func (f *fakeResultStore) PersistMonitoringWrite(write store.MonitoringWrite) (s
 		return f.persistMonitoringWriteFn(write)
 	}
 	return write, nil
+}
+
+func (f *fakeResultStore) PersistMonitoringBatch(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
+	batch := append([]store.MonitoringWrite(nil), writes...)
+	f.persistedBatches = append(f.persistedBatches, batch)
+	f.persistedWrites = append(f.persistedWrites, batch...)
+	if f.persistMonitoringBatchFn != nil {
+		return f.persistMonitoringBatchFn(batch)
+	}
+	return batch, nil
 }
 
 func applyResultSequence(t *testing.T, runtime *Runtime, st *fakeResultStore, check checks.Check, results []proto.CheckResult) {
@@ -242,5 +254,85 @@ func TestApplyResultDoesNotOpenIncidentDuringFlapping(t *testing.T) {
 	}
 	if quorum.IncidentOpen {
 		t.Fatal("IncidentOpen = true, want false")
+	}
+}
+
+func TestApplyResultBatchPersistsMultipleWritesInSingleBatch(t *testing.T) {
+	st := &fakeResultStore{}
+	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
+	check := checks.NewCheck("check-a", "http", "https://example.com", "", 30)
+	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
+
+	err := ApplyResultBatch(runtime, st, []ObservedResult{
+		{
+			Check:  check,
+			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
+		},
+		{
+			Check:  check,
+			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyResultBatch() error = %v", err)
+	}
+	if len(st.persistedBatches) != 1 {
+		t.Fatalf("persisted batches = %d, want 1", len(st.persistedBatches))
+	}
+	if len(st.persistedBatches[0]) != 2 {
+		t.Fatalf("batch writes = %d, want 2", len(st.persistedBatches[0]))
+	}
+
+	quorum, err := runtime.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot() error = %v", err)
+	}
+	if quorum.State != QuorumStateUp {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStateUp)
+	}
+}
+
+func TestApplyResultBatchRollsBackRuntimeWhenBatchPersistFails(t *testing.T) {
+	persistErr := errors.New("batch persist failed")
+	st := &fakeResultStore{
+		persistMonitoringBatchFn: func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
+			return nil, persistErr
+		},
+	}
+	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
+	check := checks.NewCheck("check-a", "http", "https://example.com", "", 30)
+	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
+
+	err := ApplyResultBatch(runtime, st, []ObservedResult{
+		{
+			Check:  check,
+			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
+		},
+		{
+			Check:  check,
+			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(time.Second)},
+		},
+	})
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("ApplyResultBatch() error = %v, want %v", err, persistErr)
+	}
+
+	exec, err := runtime.CheckSnapshot("check-a", "probe-a")
+	if err != nil {
+		t.Fatalf("CheckSnapshot() error = %v", err)
+	}
+	if exec.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", exec.State, CheckStateMissing)
+	}
+	if exec.StreakLen != 0 {
+		t.Fatalf("streak = %d, want 0", exec.StreakLen)
+	}
+
+	quorum, err := runtime.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot() error = %v", err)
+	}
+	if quorum.State != QuorumStatePending {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, QuorumStatePending)
 	}
 }

@@ -162,6 +162,67 @@ func (s *Store) OpenIncidentCheckIDs() ([]string, error) {
 // writes in one transaction so runtime recovery data and durable side effects
 // do not drift.
 func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, error) {
+	writes, err := s.PersistMonitoringBatch([]MonitoringWrite{write})
+	if err != nil {
+		return MonitoringWrite{}, err
+	}
+	if len(writes) == 0 {
+		return MonitoringWrite{}, nil
+	}
+	return writes[0], nil
+}
+
+// PersistMonitoringBatch commits multiple current-state / incident write units
+// in one transaction, preserving input order while reducing commit overhead for
+// batched probe result ingestion.
+func (s *Store) PersistMonitoringBatch(writes []MonitoringWrite) ([]MonitoringWrite, error) {
+	for _, write := range writes {
+		if write.ProbeHeartbeatID == "" && !write.ProbeHeartbeatAt.IsZero() {
+			return nil, ErrInvalidMonitoringProbeWrite
+		}
+		if write.IncidentCheckID == "" && (write.ResolveIncident || write.IncidentNotification != nil) {
+			return nil, ErrInvalidMonitoringIncidentWrite
+		}
+		for _, state := range write.CheckStateWrites {
+			if _, err := normalizeCheckStateWrite(state); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	nonEmpty := false
+	for _, write := range writes {
+		if len(write.CheckStateWrites) > 0 || write.ProbeHeartbeatID != "" || write.IncidentCheckID != "" {
+			nonEmpty = true
+			break
+		}
+	}
+	if !nonEmpty {
+		return nil, nil
+	}
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	persisted := make([]MonitoringWrite, 0, len(writes))
+	for _, write := range writes {
+		saved, err := persistMonitoringWriteTx(tx, write)
+		if err != nil {
+			return nil, err
+		}
+		persisted = append(persisted, saved)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return persisted, nil
+}
+
+func persistMonitoringWriteTx(tx *sql.Tx, write MonitoringWrite) (MonitoringWrite, error) {
 	if write.ProbeHeartbeatID == "" && !write.ProbeHeartbeatAt.IsZero() {
 		return MonitoringWrite{}, ErrInvalidMonitoringProbeWrite
 	}
@@ -177,12 +238,6 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 	if len(write.CheckStateWrites) == 0 && write.ProbeHeartbeatID == "" && write.IncidentCheckID == "" {
 		return MonitoringWrite{}, nil
 	}
-
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return MonitoringWrite{}, err
-	}
-	defer tx.Rollback()
 
 	persisted := write
 	persisted.CheckStateWrites = make([]CheckStateWrite, 0, len(write.CheckStateWrites))
@@ -209,10 +264,6 @@ func (s *Store) PersistMonitoringWrite(write MonitoringWrite) (MonitoringWrite, 
 		write.ResolveIncident,
 		write.IncidentNotification,
 	); err != nil {
-		return MonitoringWrite{}, err
-	}
-
-	if err := tx.Commit(); err != nil {
 		return MonitoringWrite{}, err
 	}
 	return persisted, nil
