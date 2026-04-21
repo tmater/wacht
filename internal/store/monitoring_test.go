@@ -348,3 +348,105 @@ func TestPersistMonitoringWriteAllowsMissingCheckStateWithoutOutcome(t *testing.
 		t.Fatalf("expires_at = %s, want %s", states[0].ExpiresAt, lastResultAt)
 	}
 }
+
+func TestPersistMonitoringBatchCommitsMultipleWritesInOneTransaction(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.SeedProbes([]ProbeSeed{
+		{ProbeID: "probe-a", Secret: "secret-a"},
+		{ProbeID: "probe-b", Secret: "secret-b"},
+	}); err != nil {
+		t.Fatalf("SeedProbes: %v", err)
+	}
+
+	user, err := s.CreateUser("monitoring-batch@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	at := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	writes, err := s.PersistMonitoringBatch([]MonitoringWrite{
+		{
+			CheckStateWrites: []CheckStateWrite{{
+				CheckID:      "check-1",
+				ProbeID:      "probe-a",
+				LastResultAt: at,
+				LastOutcome:  "up",
+				StreakLen:    1,
+				ExpiresAt:    at.Add(30 * time.Second),
+				State:        "up",
+			}},
+		},
+		{
+			CheckStateWrites: []CheckStateWrite{{
+				CheckID:      "check-1",
+				ProbeID:      "probe-b",
+				LastResultAt: at.Add(time.Second),
+				LastOutcome:  "down",
+				StreakLen:    1,
+				ExpiresAt:    at.Add(31 * time.Second),
+				State:        "missing",
+				LastError:    "timeout",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PersistMonitoringBatch: %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("persisted writes = %d, want 2", len(writes))
+	}
+
+	states, err := s.PersistedCheckStates()
+	if err != nil {
+		t.Fatalf("PersistedCheckStates: %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("persisted check states = %d, want 2", len(states))
+	}
+}
+
+func TestPersistMonitoringBatchRollsBackAllWritesOnError(t *testing.T) {
+	s := newTestStore(t)
+
+	user, err := s.CreateUser("monitoring-batch-rollback@example.com", "pass", false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+		t.Fatalf("CreateCheck: %v", err)
+	}
+
+	_, err = s.PersistMonitoringBatch([]MonitoringWrite{
+		{
+			CheckStateWrites: []CheckStateWrite{{
+				CheckID:      "check-1",
+				ProbeID:      "probe-a",
+				LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+				LastOutcome:  "up",
+				StreakLen:    1,
+				State:        "up",
+			}},
+		},
+		{
+			IncidentNotification: &NotificationRequest{
+				WebhookURL: "https://hooks.example.com/wacht",
+				Payload:    []byte(`{"status":"down"}`),
+			},
+		},
+	})
+	if !errors.Is(err, ErrInvalidMonitoringIncidentWrite) {
+		t.Fatalf("PersistMonitoringBatch error = %v, want ErrInvalidMonitoringIncidentWrite", err)
+	}
+
+	var stateCount int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM check_probe_state`).Scan(&stateCount); err != nil {
+		t.Fatalf("count check_probe_state: %v", err)
+	}
+	if stateCount != 0 {
+		t.Fatalf("expected rollback to leave 0 check state rows, got %d", stateCount)
+	}
+}

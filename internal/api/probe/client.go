@@ -99,7 +99,13 @@ func (c *Client) FetchChecks(ctx context.Context) ([]proto.ProbeCheck, error) {
 
 // PostResult submits one executed check result back to the server.
 func (c *Client) PostResult(ctx context.Context, result proto.CheckResult) error {
-	req, err := c.newRequest(ctx, http.MethodPost, PathResults, result)
+	return c.PostResults(ctx, []proto.CheckResult{result})
+}
+
+// PostResults submits one flushed batch of executed check results back to the
+// server.
+func (c *Client) PostResults(ctx context.Context, results []proto.CheckResult) error {
+	req, err := c.newRequest(ctx, http.MethodPost, PathResults, ResultBatchRequest{Results: results})
 	if err != nil {
 		return err
 	}

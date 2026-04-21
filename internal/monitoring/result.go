@@ -19,6 +19,16 @@ type resultStore interface {
 	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
 }
 
+type resultBatchStore interface {
+	PersistMonitoringBatch(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error)
+}
+
+// ObservedResult is one normalized check/result pair accepted from a probe.
+type ObservedResult struct {
+	Check  checks.Check
+	Result proto.CheckResult
+}
+
 // ApplyResult updates runtime-owned monitoring state and durably records the
 // resulting compact current-state row and any incident side effects.
 func ApplyResult(runtime *Runtime, st resultStore, check checks.Check, result proto.CheckResult) error {
@@ -32,27 +42,97 @@ func ApplyResult(runtime *Runtime, st resultStore, check checks.Check, result pr
 	return runtime.applyObservedResult(st, check, result)
 }
 
+// ApplyResultBatch updates runtime-owned monitoring state for one accepted
+// result batch and durably records all resulting current-state rows and
+// incident side effects in one DB transaction.
+func ApplyResultBatch(runtime *Runtime, st resultBatchStore, observed []ObservedResult) error {
+	if runtime == nil {
+		return fmt.Errorf("monitoring: runtime is required")
+	}
+	if st == nil {
+		return fmt.Errorf("monitoring: store is required")
+	}
+	if len(observed) == 0 {
+		return nil
+	}
+
+	return runtime.applyObservedResultBatch(st, observed)
+}
+
 // applyObservedResult updates runtime-owned check state for one observed probe
 // result and durably records the resulting compact current-state row and any
 // incident side effects.
 func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result proto.CheckResult) error {
-	expiresAt := evidenceExpiresAt(check, result.Timestamp)
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, ok := r.probes[result.ProbeID]; !ok {
-		return ErrUnknownProbe
+	write, rollback, err := r.applyObservedResultLocked(check, result)
+	if err != nil {
+		return err
 	}
 
+	if _, err := st.PersistMonitoringWrite(write); err != nil {
+		r.rollbackObservedResultsLocked([]observedResultRollback{rollback})
+		return err
+	}
+
+	return nil
+}
+
+func (r *Runtime) applyObservedResultBatch(st resultBatchStore, observed []ObservedResult) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	writes := make([]store.MonitoringWrite, 0, len(observed))
+	rollbacks := make([]observedResultRollback, 0, len(observed))
+
+	for _, item := range observed {
+		write, rollback, err := r.applyObservedResultLocked(item.Check, item.Result)
+		if err != nil {
+			r.rollbackObservedResultsLocked(rollbacks)
+			return err
+		}
+		writes = append(writes, write)
+		rollbacks = append(rollbacks, rollback)
+	}
+
+	if _, err := st.PersistMonitoringBatch(writes); err != nil {
+		r.rollbackObservedResultsLocked(rollbacks)
+		return err
+	}
+
+	return nil
+}
+
+type observedResultRollback struct {
+	CheckID        string
+	ProbeID        string
+	CreatedQuorum  bool
+	PreviousCheck  CheckExecState
+	PreviousQuorum CheckQuorumState
+}
+
+func (r *Runtime) applyObservedResultLocked(check checks.Check, result proto.CheckResult) (store.MonitoringWrite, observedResultRollback, error) {
+	expiresAt := evidenceExpiresAt(check, result.Timestamp)
+
+	if _, ok := r.probes[result.ProbeID]; !ok {
+		return store.MonitoringWrite{}, observedResultRollback{}, ErrUnknownProbe
+	}
+
+	_, quorumExisted := r.quorums[check.ID]
 	quorum := r.ensureQuorumLocked(check.ID)
 	child, ok := quorum.checks[result.ProbeID]
 	if !ok {
-		return ErrUnknownCheckAssignment
+		return store.MonitoringWrite{}, observedResultRollback{}, ErrUnknownCheckAssignment
 	}
 
-	previousCheck := child.state
-	previousQuorum := quorum.state
+	rollback := observedResultRollback{
+		CheckID:        check.ID,
+		ProbeID:        result.ProbeID,
+		CreatedQuorum:  !quorumExisted,
+		PreviousCheck:  child.state,
+		PreviousQuorum: quorum.state,
+	}
 
 	var (
 		update CheckUpdate
@@ -64,7 +144,7 @@ func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result
 		update, err = quorum.ObserveDown(result.ProbeID, result.Timestamp, &expiresAt, strings.TrimSpace(result.Error))
 	}
 	if err != nil {
-		return err
+		return store.MonitoringWrite{}, observedResultRollback{}, err
 	}
 
 	write := store.MonitoringWrite{
@@ -81,20 +161,33 @@ func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result
 			},
 		},
 	}
-	write, err = monitoringWriteForCheckEvent(check, quorum, previousQuorum, update.Quorum, write)
+	write, err = monitoringWriteForCheckEvent(check, quorum, rollback.PreviousQuorum, update.Quorum, write)
 	if err != nil {
-		child.state = previousCheck
-		quorum.state = previousQuorum
-		return err
+		return store.MonitoringWrite{}, observedResultRollback{}, err
 	}
 
-	if _, err := st.PersistMonitoringWrite(write); err != nil {
-		child.state = previousCheck
-		quorum.state = previousQuorum
-		return err
-	}
+	return write, rollback, nil
+}
 
-	return nil
+func (r *Runtime) rollbackObservedResultsLocked(rollbacks []observedResultRollback) {
+	for i := len(rollbacks) - 1; i >= 0; i-- {
+		rollback := rollbacks[i]
+		if rollback.CreatedQuorum {
+			delete(r.quorums, rollback.CheckID)
+			continue
+		}
+
+		quorum, ok := r.quorums[rollback.CheckID]
+		if !ok {
+			continue
+		}
+		child, ok := quorum.checks[rollback.ProbeID]
+		if !ok {
+			continue
+		}
+		child.state = rollback.PreviousCheck
+		quorum.state = rollback.PreviousQuorum
+	}
 }
 
 // evidenceExpiresAt returns the freshness deadline for one accepted probe

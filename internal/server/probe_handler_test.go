@@ -17,9 +17,10 @@ import (
 )
 
 type fakeProbeProcessor struct {
-	heartbeatFn func(probe *store.Probe, req probeapi.HeartbeatRequest) error
-	registerFn  func(probe *store.Probe, req probeapi.RegisterRequest) error
-	processFn   func(probe *store.Probe, incoming proto.CheckResult) error
+	heartbeatFn    func(probe *store.Probe, req probeapi.HeartbeatRequest) error
+	registerFn     func(probe *store.Probe, req probeapi.RegisterRequest) error
+	processFn      func(probe *store.Probe, incoming proto.CheckResult) error
+	processBatchFn func(probe *store.Probe, incoming []proto.CheckResult) error
 }
 
 func (f fakeProbeProcessor) Heartbeat(probe *store.Probe, req probeapi.HeartbeatRequest) error {
@@ -34,6 +35,10 @@ func (f fakeProbeProcessor) Process(probe *store.Probe, incoming proto.CheckResu
 	return f.processFn(probe, incoming)
 }
 
+func (f fakeProbeProcessor) ProcessBatch(probe *store.Probe, incoming []proto.CheckResult) error {
+	return f.processBatchFn(probe, incoming)
+}
+
 func TestHandleHeartbeatMapsBadRequestError(t *testing.T) {
 	h := &Handler{
 		probeProcessor: fakeProbeProcessor{
@@ -44,6 +49,7 @@ func TestHandleHeartbeatMapsBadRequestError(t *testing.T) {
 			processFn: func(probe *store.Probe, incoming proto.CheckResult) error {
 				return nil
 			},
+			processBatchFn: func(probe *store.Probe, incoming []proto.CheckResult) error { return nil },
 		},
 	}
 
@@ -71,6 +77,7 @@ func TestHandleProbeRegisterMapsInternalError(t *testing.T) {
 			processFn: func(probe *store.Probe, incoming proto.CheckResult) error {
 				return nil
 			},
+			processBatchFn: func(probe *store.Probe, incoming []proto.CheckResult) error { return nil },
 		},
 	}
 
@@ -95,13 +102,16 @@ func TestHandleResultMapsBadRequestError(t *testing.T) {
 			heartbeatFn: func(probe *store.Probe, req probeapi.HeartbeatRequest) error { return nil },
 			registerFn:  func(probe *store.Probe, req probeapi.RegisterRequest) error { return nil },
 			processFn: func(probe *store.Probe, incoming proto.CheckResult) error {
-				return &badRequestError{message: "unknown check_id"}
+				return nil
+			},
+			processBatchFn: func(probe *store.Probe, incoming []proto.CheckResult) error {
+				return &badRequestError{message: "probe_id does not match authenticated probe"}
 			},
 		},
 	}
 	defer h.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/results", bytes.NewBufferString(`{"check_id":"missing"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/results", bytes.NewBufferString(`{"results":[{"check_id":"site"}]}`))
 	req = req.WithContext(context.WithValue(req.Context(), contextKeyProbe, &store.Probe{ProbeID: "probe-1"}))
 	rec := httptest.NewRecorder()
 
@@ -110,7 +120,7 @@ func TestHandleResultMapsBadRequestError(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
-	if body := rec.Body.String(); body != "unknown check_id\n" {
+	if body := rec.Body.String(); body != "probe_id does not match authenticated probe\n" {
 		t.Fatalf("body = %q, want bad request message", body)
 	}
 }
@@ -124,11 +134,12 @@ func TestHandleResultReturnsNoContentOnProcessorSuccess(t *testing.T) {
 			processFn: func(probe *store.Probe, incoming proto.CheckResult) error {
 				return nil
 			},
+			processBatchFn: func(probe *store.Probe, incoming []proto.CheckResult) error { return nil },
 		},
 	}
 	defer h.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/results", bytes.NewBufferString(`{"check_id":"site","up":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/results", bytes.NewBufferString(`{"results":[{"check_id":"site","up":true}]}`))
 	req = req.WithContext(context.WithValue(req.Context(), contextKeyProbe, &store.Probe{ProbeID: "probe-1"}))
 	rec := httptest.NewRecorder()
 
@@ -136,6 +147,34 @@ func TestHandleResultReturnsNoContentOnProcessorSuccess(t *testing.T) {
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
+func TestHandleResultRejectsEmptyBatch(t *testing.T) {
+	h := &Handler{
+		webhooks: alert.NewSender(nil, network.Policy{}),
+		probeProcessor: fakeProbeProcessor{
+			heartbeatFn: func(probe *store.Probe, req probeapi.HeartbeatRequest) error { return nil },
+			registerFn:  func(probe *store.Probe, req probeapi.RegisterRequest) error { return nil },
+			processFn:   func(probe *store.Probe, incoming proto.CheckResult) error { return nil },
+			processBatchFn: func(probe *store.Probe, incoming []proto.CheckResult) error {
+				return &badRequestError{message: "results is required"}
+			},
+		},
+	}
+	defer h.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/results", bytes.NewBufferString(`{"results":[]}`))
+	req = req.WithContext(context.WithValue(req.Context(), contextKeyProbe, &store.Probe{ProbeID: "probe-1"}))
+	rec := httptest.NewRecorder()
+
+	h.handleResult(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if body := rec.Body.String(); body != "results is required\n" {
+		t.Fatalf("body = %q, want results is required", body)
 	}
 }
 
@@ -150,6 +189,7 @@ func TestHandleProbeRegisterRejectsTooLargeBody(t *testing.T) {
 			processFn: func(probe *store.Probe, incoming proto.CheckResult) error {
 				return nil
 			},
+			processBatchFn: func(probe *store.Probe, incoming []proto.CheckResult) error { return nil },
 		},
 	}
 
