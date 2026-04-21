@@ -13,6 +13,8 @@ import (
 
 const defaultResultBatchMaxSize = 64
 
+const defaultResultPendingMaxBatches = 16
+
 type resultPoster interface {
 	PostResults(ctx context.Context, results []proto.CheckResult) error
 }
@@ -23,6 +25,7 @@ type resultBatcher struct {
 	client        resultPoster
 	flushInterval time.Duration
 	maxBatchSize  int
+	maxPending    int
 
 	mu      sync.Mutex
 	pending []proto.CheckResult
@@ -40,11 +43,16 @@ func newResultBatcher(client resultPoster, flushInterval time.Duration, maxBatch
 	if maxBatchSize <= 0 {
 		maxBatchSize = defaultResultBatchMaxSize
 	}
+	maxPending := maxBatchSize * defaultResultPendingMaxBatches
+	if maxPending < maxBatchSize {
+		maxPending = maxBatchSize
+	}
 
 	b := &resultBatcher{
 		client:        client,
 		flushInterval: flushInterval,
 		maxBatchSize:  maxBatchSize,
+		maxPending:    maxPending,
 		wakeFlush:     make(chan struct{}, 1),
 		stop:          make(chan struct{}),
 		done:          make(chan struct{}),
@@ -55,15 +63,20 @@ func newResultBatcher(client resultPoster, flushInterval time.Duration, maxBatch
 
 func (b *resultBatcher) Enqueue(result proto.CheckResult) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	if b.closed {
+		b.mu.Unlock()
 		return
 	}
 
 	b.pending = append(b.pending, result)
+	dropped := b.trimPendingLocked()
 	if len(b.pending) >= b.maxBatchSize {
 		b.signalFlush()
+	}
+	b.mu.Unlock()
+
+	if dropped > 0 {
+		slog.Default().Warn("dropping oldest buffered probe results", "component", "probe", "dropped", dropped, "pending", b.pendingCount())
 	}
 }
 
@@ -121,9 +134,18 @@ func (b *resultBatcher) flushOne() (hadBatch bool, flushed bool) {
 	err := b.client.PostResults(ctx, batch)
 	cancel()
 	if err != nil {
-		b.requeue(batch)
-		slog.Default().Warn("result batch upload failed", "component", "probe", "count", len(batch), "err", err)
-		return true, false
+		if probeapi.IsRetryablePostResultsError(err) {
+			dropped := b.requeue(batch)
+			slog.Default().Warn("result batch upload failed", "component", "probe", "count", len(batch), "dropped", dropped, "err", err)
+			return true, false
+		}
+		slog.Default().Warn("dropping result batch after non-retryable upload failure", "component", "probe", "count", len(batch), "err", err)
+		if b.pendingCount() >= b.maxBatchSize {
+			b.mu.Lock()
+			b.signalFlush()
+			b.mu.Unlock()
+		}
+		return true, true
 	}
 
 	if b.pendingCount() >= b.maxBatchSize {
@@ -152,7 +174,7 @@ func (b *resultBatcher) takeBatch() []proto.CheckResult {
 	return batch
 }
 
-func (b *resultBatcher) requeue(batch []proto.CheckResult) {
+func (b *resultBatcher) requeue(batch []proto.CheckResult) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -160,6 +182,7 @@ func (b *resultBatcher) requeue(batch []proto.CheckResult) {
 	merged = append(merged, batch...)
 	merged = append(merged, b.pending...)
 	b.pending = merged
+	return b.trimPendingLocked()
 }
 
 func (b *resultBatcher) pendingCount() int {
@@ -173,4 +196,14 @@ func (b *resultBatcher) signalFlush() {
 	case b.wakeFlush <- struct{}{}:
 	default:
 	}
+}
+
+func (b *resultBatcher) trimPendingLocked() int {
+	if b.maxPending <= 0 || len(b.pending) <= b.maxPending {
+		return 0
+	}
+
+	dropped := len(b.pending) - b.maxPending
+	b.pending = append([]proto.CheckResult(nil), b.pending[dropped:]...)
+	return dropped
 }

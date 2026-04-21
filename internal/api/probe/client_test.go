@@ -199,3 +199,47 @@ func TestPostResultsEncodesBatchPayload(t *testing.T) {
 		t.Fatalf("PostResults() error = %v", err)
 	}
 }
+
+func TestIsRetryablePostResultsError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{
+			name: "unauthorized response",
+			err: &ResponseError{
+				Method:     "POST",
+				Path:       PathResults,
+				StatusCode: http.StatusUnauthorized,
+				Status:     "401 Unauthorized",
+				Expected:   http.StatusNoContent,
+			},
+			retryable: false,
+		},
+		{
+			name: "server error response",
+			err: &ResponseError{
+				Method:     "POST",
+				Path:       PathResults,
+				StatusCode: http.StatusServiceUnavailable,
+				Status:     "503 Service Unavailable",
+				Expected:   http.StatusNoContent,
+			},
+			retryable: true,
+		},
+		{
+			name:      "generic local error",
+			err:       errors.New("temporary failure"),
+			retryable: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsRetryablePostResultsError(tt.err); got != tt.retryable {
+				t.Fatalf("IsRetryablePostResultsError(%v) = %t, want %t", tt.err, got, tt.retryable)
+			}
+		})
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/proto"
 )
 
@@ -111,5 +112,60 @@ func TestResultBatcherCloseFlushesPendingResults(t *testing.T) {
 		}
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("timed out waiting for shutdown flush")
+	}
+}
+
+func TestResultBatcherDropsBatchOnNonRetryableError(t *testing.T) {
+	poster := &fakeResultPoster{callCh: make(chan []proto.CheckResult, 1)}
+	poster.postFn = func(results []proto.CheckResult) error {
+		return &probeapi.ResponseError{
+			Method:     "POST",
+			Path:       probeapi.PathResults,
+			StatusCode: 401,
+			Status:     "401 Unauthorized",
+			Expected:   204,
+		}
+	}
+
+	batcher := newResultBatcher(poster, 10*time.Millisecond, 8)
+	defer batcher.Close()
+
+	batcher.Enqueue(proto.CheckResult{CheckID: "check-1", Up: true})
+
+	select {
+	case <-poster.callCh:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timed out waiting for non-retryable flush")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := batcher.pendingCount(); got != 0 {
+		t.Fatalf("pending count = %d, want 0", got)
+	}
+	if attempts := len(poster.calls); attempts != 1 {
+		t.Fatalf("upload attempts = %d, want 1", attempts)
+	}
+}
+
+func TestResultBatcherCapsPendingQueueByDroppingOldestResults(t *testing.T) {
+	poster := &fakeResultPoster{}
+	batcher := newResultBatcher(poster, time.Hour, 8)
+	batcher.maxPending = 3
+	defer batcher.Close()
+
+	for i := 1; i <= 5; i++ {
+		batcher.Enqueue(proto.CheckResult{CheckID: "check-" + string(rune('0'+i)), Up: true})
+	}
+
+	if got := batcher.pendingCount(); got != 3 {
+		t.Fatalf("pending count = %d, want 3", got)
+	}
+
+	batch := batcher.takeBatch()
+	if len(batch) != 3 {
+		t.Fatalf("batch len = %d, want 3", len(batch))
+	}
+	if batch[0].CheckID != "check-3" || batch[1].CheckID != "check-4" || batch[2].CheckID != "check-5" {
+		t.Fatalf("kept batch = %#v, want newest check-3/check-4/check-5", batch)
 	}
 }
