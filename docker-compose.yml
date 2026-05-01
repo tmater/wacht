@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: wacht
       POSTGRES_DB: wacht
     volumes:
-      - wacht-data:/var/lib/postgresql/data
+      - wacht-data:/var/lib/postgresql
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wacht"]
