@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -162,6 +163,82 @@ func TestProbeServerAPIRequestsTimeout(t *testing.T) {
 			var netErr net.Error
 			if !errors.As(err, &netErr) || !netErr.Timeout() {
 				t.Fatalf("error = %v, want timeout", err)
+			}
+		})
+	}
+}
+
+func TestPostResultsEncodesBatchPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != PathResults {
+			t.Fatalf("path = %s, want %s", r.URL.Path, PathResults)
+		}
+		var req ResultBatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode batch payload: %v", err)
+		}
+		if len(req.Results) != 2 {
+			t.Fatalf("results len = %d, want 2", len(req.Results))
+		}
+		if req.Results[0].CheckID != "check-1" || !req.Results[0].Up {
+			t.Fatalf("results[0] = %#v, want check-1 up", req.Results[0])
+		}
+		if req.Results[1].CheckID != "check-2" || req.Results[1].Up {
+			t.Fatalf("results[1] = %#v, want check-2 down", req.Results[1])
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "probe-1", "secret-1", nil)
+	err := client.PostResults(context.Background(), []proto.CheckResult{
+		{CheckID: "check-1", ProbeID: "probe-1", Up: true},
+		{CheckID: "check-2", ProbeID: "probe-1", Up: false, Error: "timeout"},
+	})
+	if err != nil {
+		t.Fatalf("PostResults() error = %v", err)
+	}
+}
+
+func TestIsRetryablePostResultsError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{
+			name: "unauthorized response",
+			err: &ResponseError{
+				Method:     "POST",
+				Path:       PathResults,
+				StatusCode: http.StatusUnauthorized,
+				Status:     "401 Unauthorized",
+				Expected:   http.StatusNoContent,
+			},
+			retryable: false,
+		},
+		{
+			name: "server error response",
+			err: &ResponseError{
+				Method:     "POST",
+				Path:       PathResults,
+				StatusCode: http.StatusServiceUnavailable,
+				Status:     "503 Service Unavailable",
+				Expected:   http.StatusNoContent,
+			},
+			retryable: true,
+		},
+		{
+			name:      "generic local error",
+			err:       errors.New("temporary failure"),
+			retryable: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsRetryablePostResultsError(tt.err); got != tt.retryable {
+				t.Fatalf("IsRetryablePostResultsError(%v) = %t, want %t", tt.err, got, tt.retryable)
 			}
 		})
 	}

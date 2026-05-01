@@ -40,6 +40,38 @@ func TestLoadProbe_ParsesAllowPrivateTargets(t *testing.T) {
 	}
 }
 
+func TestLoadProbe_DefaultsResultFlushInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.yaml")
+	data := []byte("secret: s3cr3t\nserver: http://server:8080\nprobe_id: probe-1\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := LoadProbe(path)
+	if err != nil {
+		t.Fatalf("LoadProbe: %v", err)
+	}
+	if cfg.ResultFlushInterval != DefaultProbeResultFlushInterval {
+		t.Fatalf("ResultFlushInterval = %s, want %s", cfg.ResultFlushInterval, DefaultProbeResultFlushInterval)
+	}
+}
+
+func TestLoadProbe_ParsesResultFlushInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.yaml")
+	data := []byte("secret: s3cr3t\nserver: http://server:8080\nprobe_id: probe-1\nresult_flush_interval: 3s\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := LoadProbe(path)
+	if err != nil {
+		t.Fatalf("LoadProbe: %v", err)
+	}
+	if cfg.ResultFlushInterval != 3*time.Second {
+		t.Fatalf("ResultFlushInterval = %s, want 3s", cfg.ResultFlushInterval)
+	}
+}
+
 func TestLoadServer_ParsesAuthRateLimit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.yaml")
 	data := []byte("auth_rate_limit:\n  requests: 42\n  window: 2m\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")

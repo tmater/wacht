@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: wacht
       POSTGRES_DB: wacht
     volumes:
-      - wacht-smoke-data:/var/lib/postgresql/data
+      - wacht-smoke-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wacht"]
       interval: 5s

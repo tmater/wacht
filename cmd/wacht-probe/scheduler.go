@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	probeapi "github.com/tmater/wacht/internal/api/probe"
 	"github.com/tmater/wacht/internal/checks"
 	"github.com/tmater/wacht/internal/config"
 	"github.com/tmater/wacht/internal/network"
@@ -20,6 +19,10 @@ type runningCheck struct {
 	cancel context.CancelFunc
 }
 
+type resultSink interface {
+	Enqueue(proto.CheckResult)
+}
+
 // scheduler owns the per-check workers that execute checks on their configured
 // intervals.
 type scheduler struct {
@@ -31,12 +34,12 @@ type scheduler struct {
 // TODO: This goroutine-per-check model is fine at small scale, but a central
 // scheduler plus bounded worker pool will scale better once probes need to run
 // large check sets with smoother execution spread.
-func newScheduler(cfg *config.ProbeConfig, policy network.Policy, apiClient *probeapi.Client) *scheduler {
+func newScheduler(cfg *config.ProbeConfig, policy network.Policy, sink resultSink) *scheduler {
 	s := &scheduler{
 		running: make(map[string]runningCheck),
 	}
 	s.startWorker = func(check proto.ProbeCheck) runningCheck {
-		return s.startRuntimeWorker(cfg, policy, apiClient, check)
+		return s.startRuntimeWorker(cfg, policy, sink, check)
 	}
 	return s
 }
@@ -84,18 +87,18 @@ func (s *scheduler) Close() {
 
 // startRuntimeWorker runs the check once immediately, then continues on the
 // configured interval until reconcile or shutdown cancels it.
-func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.Policy, apiClient *probeapi.Client, check proto.ProbeCheck) runningCheck {
+func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.Policy, sink resultSink, check proto.ProbeCheck) runningCheck {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
-		runAndPost(cfg, policy, apiClient, check)
+		runAndQueue(cfg, policy, sink, check)
 		ticker := time.NewTicker(time.Duration(check.Interval) * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				runAndPost(cfg, policy, apiClient, check)
+				runAndQueue(cfg, policy, sink, check)
 			case <-ctx.Done():
 				return
 			}
@@ -108,7 +111,7 @@ func (s *scheduler) startRuntimeWorker(cfg *config.ProbeConfig, policy network.P
 	}
 }
 
-func runAndPost(cfg *config.ProbeConfig, policy network.Policy, apiClient *probeapi.Client, check proto.ProbeCheck) {
+func runAndQueue(cfg *config.ProbeConfig, policy network.Policy, sink resultSink, check proto.ProbeCheck) {
 	var result proto.CheckResult
 	switch check.Type {
 	case string(checks.CheckHTTP):
@@ -121,7 +124,9 @@ func runAndPost(cfg *config.ProbeConfig, policy network.Policy, apiClient *probe
 		slog.Default().Warn("unknown check type; skipping", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID, "check_type", check.Type)
 		return
 	}
-	if err := apiClient.PostResult(context.Background(), result); err != nil {
-		slog.Default().Warn("result upload failed", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID, "err", err)
+	if sink == nil {
+		slog.Default().Warn("result sink missing; dropping result", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID)
+		return
 	}
+	sink.Enqueue(result)
 }

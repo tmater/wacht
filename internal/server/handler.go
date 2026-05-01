@@ -341,24 +341,24 @@ func (h *Handler) handleProbeRegister(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleResult receives a check result from a probe and saves it.
+// handleResult receives one flushed result batch from a probe and saves it.
 func (h *Handler) handleResult(w http.ResponseWriter, r *http.Request) {
 	probe := authenticatedProbe(r)
 	logger := requestLogger(r)
-	var result proto.CheckResult
-	if err := decodeJSONBody(w, r, &result, maxProbeJSONRequestBodyBytes, false); err != nil {
+	var req probeapi.ResultBatchRequest
+	if err := decodeJSONBody(w, r, &req, maxProbeJSONRequestBodyBytes, false); err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}
-		logger.Error("decode probe result failed", "component", "probe", "err", err)
+		logger.Error("decode probe result batch failed", "component", "probe", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if err := h.probeProcessor.Process(probe, result); err != nil {
+	if err := h.probeProcessor.ProcessBatch(probe, req.Results); err != nil {
 		if writeProcessorError(w, err) {
 			return
 		}
-		logger.Error("process probe result failed", "component", "probe", "check_id", result.CheckID, "err", err)
+		logger.Error("process probe result batch failed", "component", "probe", "count", len(req.Results), "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	DefaultRetentionDays          = 30
-	DefaultAuthRateLimitRequests  = 10
-	DefaultAuthRateLimitWindow    = time.Minute
-	DefaultProbeOfflineAfter      = 90 * time.Second
-	DefaultProbeHeartbeatInterval = 30 * time.Second
+	DefaultRetentionDays            = 30
+	DefaultAuthRateLimitRequests    = 10
+	DefaultAuthRateLimitWindow      = time.Minute
+	DefaultProbeOfflineAfter        = 90 * time.Second
+	DefaultProbeHeartbeatInterval   = 30 * time.Second
+	DefaultProbeResultFlushInterval = 10 * time.Second
 )
 
 var DefaultTrustedProxies = []string{
@@ -55,6 +56,7 @@ type ProbeConfig struct {
 	Server              string        `yaml:"server"`
 	ProbeID             string        `yaml:"probe_id"`
 	HeartbeatInterval   time.Duration `yaml:"heartbeat_interval"`
+	ResultFlushInterval time.Duration `yaml:"result_flush_interval"`
 	AllowPrivateTargets bool          `yaml:"allow_private_targets"` // false by default
 }
 
@@ -129,6 +131,9 @@ func LoadProbe(path string) (*ProbeConfig, error) {
 	}
 	if cfg.HeartbeatInterval == 0 {
 		cfg.HeartbeatInterval = DefaultProbeHeartbeatInterval
+	}
+	if cfg.ResultFlushInterval <= 0 {
+		cfg.ResultFlushInterval = DefaultProbeResultFlushInterval
 	}
 
 	return &cfg, nil

@@ -15,9 +15,11 @@ type fakeProbeStore struct {
 	registerProbeFn          func(probeID, version string) error
 	getCheckFn               func(id string) (*checks.Check, error)
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
+	persistMonitoringBatchFn func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error)
 	registerProbeID          string
 	registerVersion          string
 	persistedWrites          []store.MonitoringWrite
+	persistedBatches         [][]store.MonitoringWrite
 }
 
 // RegisterProbe records register calls made by probe processor tests.
@@ -46,6 +48,16 @@ func (f *fakeProbeStore) PersistMonitoringWrite(write store.MonitoringWrite) (st
 		return f.persistMonitoringWriteFn(write)
 	}
 	return write, nil
+}
+
+func (f *fakeProbeStore) PersistMonitoringBatch(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
+	batch := append([]store.MonitoringWrite(nil), writes...)
+	f.persistedBatches = append(f.persistedBatches, batch)
+	f.persistedWrites = append(f.persistedWrites, batch...)
+	if f.persistMonitoringBatchFn != nil {
+		return f.persistMonitoringBatchFn(batch)
+	}
+	return batch, nil
 }
 
 // processSequence feeds a deterministic result stream through the probe
@@ -171,6 +183,45 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	}
 	if quorum.State != monitoring.QuorumStatePending {
 		t.Fatalf("quorum state = %q, want %q", quorum.State, monitoring.QuorumStatePending)
+	}
+}
+
+func TestProbeProcessorProcessBatchRejectsEmptyBatch(t *testing.T) {
+	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
+
+	err := p.ProcessBatch(&store.Probe{ProbeID: "probe-1"}, nil)
+	var badReq *badRequestError
+	if !errors.As(err, &badReq) {
+		t.Fatalf("ProcessBatch() error = %v, want badRequestError", err)
+	}
+	if badReq.Error() != "results is required" {
+		t.Fatalf("bad request message = %q, want results is required", badReq.Error())
+	}
+}
+
+func TestProbeProcessorProcessBatchUsesSingleStoreBatch(t *testing.T) {
+	s := &fakeProbeStore{
+		getCheckFn: func(id string) (*checks.Check, error) {
+			check := checks.NewCheck(id, "http", "https://example.com", "", 30)
+			return &check, nil
+		},
+	}
+
+	runtime := monitoring.NewRuntime(nil, []string{"probe-1", "probe-2"})
+	p := NewProbeProcessor(s, runtime)
+
+	err := p.ProcessBatch(&store.Probe{ProbeID: "probe-1"}, []proto.CheckResult{
+		{CheckID: "site-a", Up: true},
+		{CheckID: "site-b", Up: false, Error: "timeout"},
+	})
+	if err != nil {
+		t.Fatalf("ProcessBatch() error = %v", err)
+	}
+	if len(s.persistedBatches) != 1 {
+		t.Fatalf("persisted batches = %d, want 1", len(s.persistedBatches))
+	}
+	if len(s.persistedBatches[0]) != 2 {
+		t.Fatalf("batch writes = %d, want 2", len(s.persistedBatches[0]))
 	}
 }
 
@@ -304,20 +355,16 @@ func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	}
 }
 
-// TestProbeProcessorProcessRejectsUnknownCheckID verifies that ingestion
-// rejects results for checks missing from store metadata.
-func TestProbeProcessorProcessRejectsUnknownCheckID(t *testing.T) {
+// TestProbeProcessorProcessIgnoresUnknownCheckID verifies that stale probe
+// results for deleted checks are dropped instead of poisoning later batches.
+func TestProbeProcessorProcessIgnoresUnknownCheckID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
 	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
 		CheckID: "missing",
 	})
-	var badRequest *badRequestError
-	if !errors.As(err, &badRequest) {
-		t.Fatalf("Process() error = %v, want badRequestError", err)
-	}
-	if badRequest.Error() != "unknown check_id" {
-		t.Fatalf("bad request = %q", badRequest.Error())
+	if err != nil {
+		t.Fatalf("Process() error = %v, want nil", err)
 	}
 }
 
@@ -330,8 +377,8 @@ func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
 			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
 			return &check, nil
 		},
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
-			return store.MonitoringWrite{}, persistErr
+		persistMonitoringBatchFn: func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
+			return nil, persistErr
 		},
 	}
 
@@ -348,11 +395,7 @@ func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
 		t.Fatalf("persisted writes = %d, want 1 attempted persist", len(s.persistedWrites))
 	}
 
-	quorum, qErr := runtime.QuorumSnapshot("site")
-	if qErr != nil {
-		t.Fatalf("QuorumSnapshot() error = %v", qErr)
-	}
-	if quorum.State != monitoring.QuorumStatePending {
-		t.Fatalf("quorum state = %q, want %q", quorum.State, monitoring.QuorumStatePending)
+	if _, qErr := runtime.QuorumSnapshot("site"); !errors.Is(qErr, monitoring.ErrUnknownCheck) {
+		t.Fatalf("QuorumSnapshot() error = %v, want %v", qErr, monitoring.ErrUnknownCheck)
 	}
 }

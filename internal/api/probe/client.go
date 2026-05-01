@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +16,19 @@ import (
 )
 
 const DefaultRequestTimeout = 10 * time.Second
+
+// ResponseError captures a non-success probe API response.
+type ResponseError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Status     string
+	Expected   int
+}
+
+func (e *ResponseError) Error() string {
+	return fmt.Sprintf("%s %s: expected status %d, got %s", e.Method, e.Path, e.Expected, e.Status)
+}
 
 // Client wraps the probe-server API used by the probe binary.
 type Client struct {
@@ -52,9 +67,44 @@ func (c *Client) Register(ctx context.Context, version string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("%s %s: expected status %d, got %s", req.Method, req.URL.Path, http.StatusNoContent, resp.Status)
+		return &ResponseError{
+			Method:     req.Method,
+			Path:       req.URL.Path,
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+			Expected:   http.StatusNoContent,
+		}
 	}
 	return nil
+}
+
+// IsRetryablePostResultsError reports whether a failed batch upload should be
+// retried later instead of being dropped.
+func IsRetryablePostResultsError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var responseErr *ResponseError
+	if errors.As(err, &responseErr) {
+		switch responseErr.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+			return true
+		}
+		return responseErr.StatusCode >= http.StatusInternalServerError
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// Default to retrying unknown local failures rather than dropping data on an
+	// unclassified error path.
+	return true
 }
 
 // Heartbeat refreshes the probe's liveness state on the server.
@@ -99,7 +149,13 @@ func (c *Client) FetchChecks(ctx context.Context) ([]proto.ProbeCheck, error) {
 
 // PostResult submits one executed check result back to the server.
 func (c *Client) PostResult(ctx context.Context, result proto.CheckResult) error {
-	req, err := c.newRequest(ctx, http.MethodPost, PathResults, result)
+	return c.PostResults(ctx, []proto.CheckResult{result})
+}
+
+// PostResults submits one flushed batch of executed check results back to the
+// server.
+func (c *Client) PostResults(ctx context.Context, results []proto.CheckResult) error {
+	req, err := c.newRequest(ctx, http.MethodPost, PathResults, ResultBatchRequest{Results: results})
 	if err != nil {
 		return err
 	}
@@ -109,7 +165,13 @@ func (c *Client) PostResult(ctx context.Context, result proto.CheckResult) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("%s %s: expected status %d, got %s", req.Method, req.URL.Path, http.StatusNoContent, resp.Status)
+		return &ResponseError{
+			Method:     req.Method,
+			Path:       req.URL.Path,
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+			Expected:   http.StatusNoContent,
+		}
 	}
 	return nil
 }
