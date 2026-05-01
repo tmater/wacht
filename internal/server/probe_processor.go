@@ -98,7 +98,7 @@ func (p *ProbeProcessor) normalizeBatch(probe *store.Probe, incoming []proto.Che
 			return nil, err
 		}
 		if skip {
-			slog.Default().Debug("dropping stale result for unknown check", "component", "probe", "check_id", result.CheckID, "probe_id", probe.ProbeID)
+			slog.Default().Debug("dropping result for unknown or invalid check", "component", "probe", "check_id", result.CheckID, "probe_id", probe.ProbeID)
 			continue
 		}
 		out = append(out, monitoring.ObservedResult{Check: *check, Result: normalized})
@@ -111,7 +111,7 @@ func (p *ProbeProcessor) normalizeWithCache(probe *store.Probe, cache map[string
 		return nil, proto.CheckResult{}, false, &badRequestError{message: "probe_id does not match authenticated probe"}
 	}
 	if incoming.CheckID == "" {
-		return nil, proto.CheckResult{}, false, &badRequestError{message: "check_id is required"}
+		return nil, incoming, true, nil
 	}
 
 	check, ok := cache[incoming.CheckID]
@@ -119,7 +119,7 @@ func (p *ProbeProcessor) normalizeWithCache(probe *store.Probe, cache map[string
 		loaded, err := p.store.GetCheckByID(incoming.CheckID)
 		if err != nil {
 			if errors.Is(err, store.ErrInvalidCheckID) {
-				return nil, proto.CheckResult{}, false, &badRequestError{message: "check_id is invalid"}
+				return nil, incoming, true, nil
 			}
 			return nil, proto.CheckResult{}, false, fmt.Errorf("look up check %q: %w", incoming.CheckID, err)
 		}

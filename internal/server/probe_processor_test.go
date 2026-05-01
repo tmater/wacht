@@ -215,6 +215,9 @@ func TestProbeProcessorProcessBatchRejectsEmptyBatch(t *testing.T) {
 func TestProbeProcessorProcessBatchUsesSingleStoreBatch(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			if checkID == "not-a-uuid" {
+				return nil, store.ErrInvalidCheckID
+			}
 			check := testProbeCheck(checkID, "site", "http", "https://example.com", "", 30)
 			return &check, nil
 		},
@@ -225,6 +228,7 @@ func TestProbeProcessorProcessBatchUsesSingleStoreBatch(t *testing.T) {
 
 	err := p.ProcessBatch(&store.Probe{ProbeID: "probe-1"}, []proto.CheckResult{
 		{CheckID: "00000000-0000-0000-0000-000000000302", CheckName: "site-a", Up: true},
+		{CheckID: "not-a-uuid", CheckName: "stale", Up: false, Error: "timeout"},
 		{CheckID: "00000000-0000-0000-0000-000000000303", CheckName: "site-b", Up: false, Error: "timeout"},
 	})
 	if err != nil {
@@ -374,7 +378,7 @@ func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	}
 }
 
-func TestProbeProcessorProcessRejectsInvalidCheckID(t *testing.T) {
+func TestProbeProcessorProcessIgnoresMalformedCheckID(t *testing.T) {
 	s := &fakeProbeStore{
 		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
 			return nil, store.ErrInvalidCheckID
@@ -386,12 +390,11 @@ func TestProbeProcessorProcessRejectsInvalidCheckID(t *testing.T) {
 		CheckID:   "missing",
 		CheckName: "site",
 	})
-	var badRequest *badRequestError
-	if !errors.As(err, &badRequest) {
-		t.Fatalf("Process() error = %v, want badRequestError", err)
+	if err != nil {
+		t.Fatalf("Process() error = %v, want nil", err)
 	}
-	if badRequest.Error() != "check_id is invalid" {
-		t.Fatalf("bad request = %q", badRequest.Error())
+	if len(s.persistedWrites) != 0 {
+		t.Fatalf("persisted writes = %d, want 0", len(s.persistedWrites))
 	}
 }
 
@@ -409,18 +412,18 @@ func TestProbeProcessorProcessIgnoresUnknownCheckID(t *testing.T) {
 	}
 }
 
-func TestProbeProcessorProcessRejectsMissingCheckID(t *testing.T) {
-	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
+func TestProbeProcessorProcessIgnoresMissingCheckID(t *testing.T) {
+	s := &fakeProbeStore{}
+	p := NewProbeProcessor(s, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
 	err := processOne(t, p, "probe-1", proto.CheckResult{
 		CheckName: "site",
 	})
-	var badRequest *badRequestError
-	if !errors.As(err, &badRequest) {
-		t.Fatalf("Process() error = %v, want badRequestError", err)
+	if err != nil {
+		t.Fatalf("Process() error = %v, want nil", err)
 	}
-	if badRequest.Error() != "check_id is required" {
-		t.Fatalf("bad request = %q", badRequest.Error())
+	if len(s.persistedWrites) != 0 {
+		t.Fatalf("persisted writes = %d, want 0", len(s.persistedWrites))
 	}
 }
 
