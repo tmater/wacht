@@ -26,7 +26,7 @@ func TestFetchChecksIncludesHeadersAndDecodesPayload(t *testing.T) {
 			t.Fatalf("%s = %q, want secret-1", HeaderProbeSecret, got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"id":"check-1","type":"http","target":"https://example.com","interval":45}]`))
+		_, _ = w.Write([]byte(`[{"id":"00000000-0000-0000-0000-000000000101","name":"check-1","type":"http","target":"https://example.com","interval":45}]`))
 	}))
 	defer server.Close()
 
@@ -38,7 +38,7 @@ func TestFetchChecksIncludesHeadersAndDecodesPayload(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
-	if got[0] != (proto.ProbeCheck{ID: "check-1", Type: "http", Target: "https://example.com", Interval: 45}) {
+	if got[0] != (proto.ProbeCheck{ID: "00000000-0000-0000-0000-000000000101", Name: "check-1", Type: "http", Target: "https://example.com", Interval: 45}) {
 		t.Fatalf("got[0] = %#v, want probe payload", got[0])
 	}
 }
@@ -76,9 +76,10 @@ func TestProbeServerAPIRequestsFailOnUnexpectedStatus(t *testing.T) {
 			path: PathResults,
 			run: func(client *Client) error {
 				return client.PostResult(context.Background(), proto.CheckResult{
-					CheckID: "check-1",
-					ProbeID: "probe-1",
-					Up:      true,
+					CheckID:   "00000000-0000-0000-0000-000000000101",
+					CheckName: "check-1",
+					ProbeID:   "probe-1",
+					Up:        true,
 				})
 			},
 		},
@@ -139,9 +140,10 @@ func TestProbeServerAPIRequestsTimeout(t *testing.T) {
 			name: "result-post",
 			run: func(client *Client) error {
 				return client.PostResult(context.Background(), proto.CheckResult{
-					CheckID: "check-1",
-					ProbeID: "probe-1",
-					Up:      true,
+					CheckID:   "00000000-0000-0000-0000-000000000101",
+					CheckName: "check-1",
+					ProbeID:   "probe-1",
+					Up:        true,
 				})
 			},
 		},
@@ -180,11 +182,11 @@ func TestPostResultsEncodesBatchPayload(t *testing.T) {
 		if len(req.Results) != 2 {
 			t.Fatalf("results len = %d, want 2", len(req.Results))
 		}
-		if req.Results[0].CheckID != "check-1" || !req.Results[0].Up {
-			t.Fatalf("results[0] = %#v, want check-1 up", req.Results[0])
+		if req.Results[0].CheckID != "00000000-0000-0000-0000-000000000101" || req.Results[0].CheckName != "check-1" || !req.Results[0].Up {
+			t.Fatalf("results[0] = %#v, want check UUID 101 check-1 up", req.Results[0])
 		}
-		if req.Results[1].CheckID != "check-2" || req.Results[1].Up {
-			t.Fatalf("results[1] = %#v, want check-2 down", req.Results[1])
+		if req.Results[1].CheckID != "00000000-0000-0000-0000-000000000102" || req.Results[1].CheckName != "check-2" || req.Results[1].Up {
+			t.Fatalf("results[1] = %#v, want check UUID 102 check-2 down", req.Results[1])
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -192,8 +194,8 @@ func TestPostResultsEncodesBatchPayload(t *testing.T) {
 
 	client := NewClient(server.URL, "probe-1", "secret-1", nil)
 	err := client.PostResults(context.Background(), []proto.CheckResult{
-		{CheckID: "check-1", ProbeID: "probe-1", Up: true},
-		{CheckID: "check-2", ProbeID: "probe-1", Up: false, Error: "timeout"},
+		{CheckID: "00000000-0000-0000-0000-000000000101", CheckName: "check-1", ProbeID: "probe-1", Up: true},
+		{CheckID: "00000000-0000-0000-0000-000000000102", CheckName: "check-2", ProbeID: "probe-1", Up: false, Error: "timeout"},
 	})
 	if err != nil {
 		t.Fatalf("PostResults() error = %v", err)

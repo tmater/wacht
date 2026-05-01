@@ -89,11 +89,11 @@ def test_release_install_bootstrap_path():
                 )
                 updated_token = updated_user.login()
 
-                check_id = f"release-install-{uuid.uuid4().hex[:8]}"
+                check_name = f"release-install-{uuid.uuid4().hex[:8]}"
                 updated_user.create_check(
                     updated_token,
                     {
-                        "id": check_id,
+                        "name": check_name,
                         "type": "http",
                         "target": "http://server:8080/healthz",
                         "interval": 1,
@@ -104,7 +104,7 @@ def test_release_install_bootstrap_path():
                     "release-install check to become healthy through the packaged stack",
                     timeout_seconds=120,
                     interval_seconds=3,
-                    fn=lambda: healthy_status(updated_user, updated_token, check_id),
+                    fn=lambda: healthy_status(updated_user, updated_token, check_name),
                 )
 
                 print(

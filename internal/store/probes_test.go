@@ -88,33 +88,3 @@ func TestSeedProbes_RevokesMissingProbe(t *testing.T) {
 		t.Fatal("expected revoked probe to fail authentication")
 	}
 }
-
-func TestActiveProbeIDs_OnlyReturnsActiveProbes(t *testing.T) {
-	s := newTestStore(t)
-
-	if err := s.SeedProbes([]ProbeSeed{
-		{ProbeID: "probe-b", Secret: "secret-b"},
-		{ProbeID: "probe-a", Secret: "secret-a"},
-		{ProbeID: "probe-c", Secret: "secret-c"},
-	}); err != nil {
-		t.Fatalf("SeedProbes initial: %v", err)
-	}
-
-	if err := s.SeedProbes([]ProbeSeed{
-		{ProbeID: "probe-b", Secret: "secret-b"},
-		{ProbeID: "probe-a", Secret: "secret-a"},
-	}); err != nil {
-		t.Fatalf("SeedProbes second: %v", err)
-	}
-
-	ids, err := s.ActiveProbeIDs()
-	if err != nil {
-		t.Fatalf("ActiveProbeIDs: %v", err)
-	}
-	if len(ids) != 2 {
-		t.Fatalf("len(ids) = %d, want 2", len(ids))
-	}
-	if ids[0] != "probe-a" || ids[1] != "probe-b" {
-		t.Fatalf("ids = %v, want [probe-a probe-b]", ids)
-	}
-}

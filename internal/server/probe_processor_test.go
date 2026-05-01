@@ -13,7 +13,7 @@ import (
 
 type fakeProbeStore struct {
 	registerProbeFn          func(probeID, version string) error
-	getCheckFn               func(id string) (*checks.Check, error)
+	getCheckByIDFn           func(checkID string) (*checks.Check, error)
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	persistMonitoringBatchFn func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error)
 	registerProbeID          string
@@ -32,10 +32,10 @@ func (f *fakeProbeStore) RegisterProbe(probeID, version string) error {
 	return nil
 }
 
-// GetCheck returns stubbed check metadata for probe processor tests.
-func (f *fakeProbeStore) GetCheck(id string) (*checks.Check, error) {
-	if f.getCheckFn != nil {
-		return f.getCheckFn(id)
+// GetCheckByID returns stubbed check metadata for probe processor tests.
+func (f *fakeProbeStore) GetCheckByID(checkID string) (*checks.Check, error) {
+	if f.getCheckByIDFn != nil {
+		return f.getCheckByIDFn(checkID)
 	}
 	return nil, nil
 }
@@ -62,6 +62,11 @@ func (f *fakeProbeStore) PersistMonitoringBatch(writes []store.MonitoringWrite) 
 
 // processSequence feeds a deterministic result stream through the probe
 // processor so tests can focus on aggregate outcomes.
+func processOne(t *testing.T, p *ProbeProcessor, probeID string, result proto.CheckResult) error {
+	t.Helper()
+	return p.ProcessBatch(&store.Probe{ProbeID: probeID}, []proto.CheckResult{result})
+}
+
 func processSequence(t *testing.T, p *ProbeProcessor, checkID string, steps []struct {
 	probeID string
 	up      bool
@@ -72,7 +77,7 @@ func processSequence(t *testing.T, p *ProbeProcessor, checkID string, steps []st
 		if !step.up {
 			message = "timeout"
 		}
-		if err := p.Process(&store.Probe{ProbeID: step.probeID}, proto.CheckResult{
+		if err := processOne(t, p, step.probeID, proto.CheckResult{
 			CheckID: checkID,
 			Up:      step.up,
 			Error:   message,
@@ -80,6 +85,12 @@ func processSequence(t *testing.T, p *ProbeProcessor, checkID string, steps []st
 			t.Fatalf("Process(%s, up=%t) error = %v", step.probeID, step.up, err)
 		}
 	}
+}
+
+func testProbeCheck(checkID, name, checkType, target, webhook string, interval int) checks.Check {
+	check := checks.NewCheck(name, checkType, target, webhook, interval)
+	check.ID = checkID
+	return check
 }
 
 // TestProbeProcessorHeartbeatUpdatesAuthenticatedProbe verifies that the HTTP
@@ -136,9 +147,10 @@ func TestProbeProcessorRegisterRecordsVersion(t *testing.T) {
 // TestProbeProcessorProcessNormalizesResultAndCreatesQuorum verifies result
 // normalization and first-time quorum creation on ingestion.
 func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
+	const checkID = "00000000-0000-0000-0000-000000000301"
 	s := &fakeProbeStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
+		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			check := testProbeCheck(checkID, "site", "http", "https://example.com", "", 0)
 			return &check, nil
 		},
 	}
@@ -146,9 +158,10 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	runtime := monitoring.NewRuntime(nil, []string{"probe-1", "probe-2", "probe-3"})
 	p := NewProbeProcessor(s, runtime)
 
-	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
-		CheckID: "site",
-		Up:      true,
+	err := processOne(t, p, "probe-1", proto.CheckResult{
+		CheckID:   checkID,
+		CheckName: "site",
+		Up:        true,
 	})
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -161,8 +174,8 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	if len(checkStates) != 1 {
 		t.Fatalf("check state writes = %d, want 1", len(checkStates))
 	}
-	if checkStates[0].CheckID != "site" {
-		t.Fatalf("check state CheckID = %q, want site", checkStates[0].CheckID)
+	if checkStates[0].CheckID != checkID {
+		t.Fatalf("check state CheckID = %q, want %s", checkStates[0].CheckID, checkID)
 	}
 	if checkStates[0].ProbeID != "probe-1" {
 		t.Fatalf("check state ProbeID = %q, want probe-1", checkStates[0].ProbeID)
@@ -177,7 +190,7 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 		t.Fatalf("IncidentCheckID = %q, want empty", s.persistedWrites[0].IncidentCheckID)
 	}
 
-	quorum, err := runtime.QuorumSnapshot("site")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -201,8 +214,8 @@ func TestProbeProcessorProcessBatchRejectsEmptyBatch(t *testing.T) {
 
 func TestProbeProcessorProcessBatchUsesSingleStoreBatch(t *testing.T) {
 	s := &fakeProbeStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "http", "https://example.com", "", 30)
+		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			check := testProbeCheck(checkID, "site", "http", "https://example.com", "", 30)
 			return &check, nil
 		},
 	}
@@ -211,8 +224,8 @@ func TestProbeProcessorProcessBatchUsesSingleStoreBatch(t *testing.T) {
 	p := NewProbeProcessor(s, runtime)
 
 	err := p.ProcessBatch(&store.Probe{ProbeID: "probe-1"}, []proto.CheckResult{
-		{CheckID: "site-a", Up: true},
-		{CheckID: "site-b", Up: false, Error: "timeout"},
+		{CheckID: "00000000-0000-0000-0000-000000000302", CheckName: "site-a", Up: true},
+		{CheckID: "00000000-0000-0000-0000-000000000303", CheckName: "site-b", Up: false, Error: "timeout"},
 	})
 	if err != nil {
 		t.Fatalf("ProcessBatch() error = %v", err)
@@ -228,9 +241,10 @@ func TestProbeProcessorProcessBatchUsesSingleStoreBatch(t *testing.T) {
 // TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition verifies
 // durable incident opening on a stable runtime-owned outage transition.
 func TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition(t *testing.T) {
+	const checkID = "00000000-0000-0000-0000-000000000304"
 	s := &fakeProbeStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "http", "https://example.com", "https://hooks.example.com/wacht", 0)
+		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			check := testProbeCheck(checkID, "site", "http", "https://example.com", "https://hooks.example.com/wacht", 0)
 			return &check, nil
 		},
 	}
@@ -250,12 +264,13 @@ func TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition(t *testing
 		{probeID: "probe-2", up: false},
 		{probeID: "probe-1", up: false},
 		{probeID: "probe-2", up: false},
+		{probeID: "probe-1", up: false},
 	}
-	processSequence(t, p, "site", steps)
+	processSequence(t, p, checkID, steps)
 
 	write := s.persistedWrites[len(s.persistedWrites)-1]
-	if write.IncidentCheckID != "site" {
-		t.Fatalf("IncidentCheckID = %q, want site", write.IncidentCheckID)
+	if write.IncidentCheckID != checkID {
+		t.Fatalf("IncidentCheckID = %q, want %s", write.IncidentCheckID, checkID)
 	}
 	if write.ResolveIncident {
 		t.Fatal("ResolveIncident = true, want false")
@@ -263,11 +278,11 @@ func TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition(t *testing
 	if write.IncidentNotification == nil {
 		t.Fatal("expected durable down notification request")
 	}
-	if string(write.IncidentNotification.Payload) != `{"check_id":"site","target":"https://example.com","status":"down","probes_down":2,"probes_total":2}` {
+	if string(write.IncidentNotification.Payload) != `{"check_id":"00000000-0000-0000-0000-000000000304","check_name":"site","target":"https://example.com","status":"down","probes_down":2,"probes_total":2}` {
 		t.Fatalf("payload = %s", write.IncidentNotification.Payload)
 	}
 
-	quorum, err := runtime.QuorumSnapshot("site")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -282,9 +297,10 @@ func TestProbeProcessorProcessOpensIncidentOnStableUpToDownTransition(t *testing
 // TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition
 // verifies durable incident resolution on a stable recovery transition.
 func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *testing.T) {
+	const checkID = "00000000-0000-0000-0000-000000000305"
 	s := &fakeProbeStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "tcp", "db.example.com:5432", "https://hooks.example.com/wacht", 0)
+		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			check := testProbeCheck(checkID, "db", "tcp", "db.example.com:5432", "https://hooks.example.com/wacht", 0)
 			return &check, nil
 		},
 	}
@@ -304,16 +320,18 @@ func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *test
 		{probeID: "probe-2", up: false},
 		{probeID: "probe-1", up: false},
 		{probeID: "probe-2", up: false},
+		{probeID: "probe-1", up: false},
 		{probeID: "probe-1", up: true},
 		{probeID: "probe-2", up: true},
 		{probeID: "probe-1", up: true},
 		{probeID: "probe-2", up: true},
+		{probeID: "probe-1", up: true},
 	}
-	processSequence(t, p, "db", steps)
+	processSequence(t, p, checkID, steps)
 
 	write := s.persistedWrites[len(s.persistedWrites)-1]
-	if write.IncidentCheckID != "db" {
-		t.Fatalf("IncidentCheckID = %q, want db", write.IncidentCheckID)
+	if write.IncidentCheckID != checkID {
+		t.Fatalf("IncidentCheckID = %q, want %s", write.IncidentCheckID, checkID)
 	}
 	if !write.ResolveIncident {
 		t.Fatal("ResolveIncident = false, want true")
@@ -321,11 +339,11 @@ func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *test
 	if write.IncidentNotification == nil {
 		t.Fatal("expected durable recovery notification request")
 	}
-	if string(write.IncidentNotification.Payload) != `{"check_id":"db","target":"db.example.com:5432","status":"up","probes_down":0,"probes_total":2}` {
+	if string(write.IncidentNotification.Payload) != `{"check_id":"00000000-0000-0000-0000-000000000305","check_name":"db","target":"db.example.com:5432","status":"up","probes_down":0,"probes_total":2}` {
 		t.Fatalf("payload = %s", write.IncidentNotification.Payload)
 	}
 
-	quorum, err := runtime.QuorumSnapshot("db")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -342,9 +360,10 @@ func TestProbeProcessorProcessResolvesIncidentOnStableDownToUpTransition(t *test
 func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
-	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
-		CheckID: "site",
-		ProbeID: "probe-2",
+	err := processOne(t, p, "probe-1", proto.CheckResult{
+		CheckID:   "00000000-0000-0000-0000-000000000307",
+		CheckName: "site",
+		ProbeID:   "probe-2",
 	})
 	var badRequest *badRequestError
 	if !errors.As(err, &badRequest) {
@@ -355,16 +374,53 @@ func TestProbeProcessorProcessRejectsInvalidProbeID(t *testing.T) {
 	}
 }
 
+func TestProbeProcessorProcessRejectsInvalidCheckID(t *testing.T) {
+	s := &fakeProbeStore{
+		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			return nil, store.ErrInvalidCheckID
+		},
+	}
+	p := NewProbeProcessor(s, monitoring.NewRuntime(nil, []string{"probe-1"}))
+
+	err := processOne(t, p, "probe-1", proto.CheckResult{
+		CheckID:   "missing",
+		CheckName: "site",
+	})
+	var badRequest *badRequestError
+	if !errors.As(err, &badRequest) {
+		t.Fatalf("Process() error = %v, want badRequestError", err)
+	}
+	if badRequest.Error() != "check_id is invalid" {
+		t.Fatalf("bad request = %q", badRequest.Error())
+	}
+}
+
 // TestProbeProcessorProcessIgnoresUnknownCheckID verifies that stale probe
 // results for deleted checks are dropped instead of poisoning later batches.
 func TestProbeProcessorProcessIgnoresUnknownCheckID(t *testing.T) {
 	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
 
-	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
-		CheckID: "missing",
+	err := processOne(t, p, "probe-1", proto.CheckResult{
+		CheckID:   "00000000-0000-0000-0000-000000999999",
+		CheckName: "site",
 	})
 	if err != nil {
 		t.Fatalf("Process() error = %v, want nil", err)
+	}
+}
+
+func TestProbeProcessorProcessRejectsMissingCheckID(t *testing.T) {
+	p := NewProbeProcessor(&fakeProbeStore{}, monitoring.NewRuntime(nil, []string{"probe-1"}))
+
+	err := processOne(t, p, "probe-1", proto.CheckResult{
+		CheckName: "site",
+	})
+	var badRequest *badRequestError
+	if !errors.As(err, &badRequest) {
+		t.Fatalf("Process() error = %v, want badRequestError", err)
+	}
+	if badRequest.Error() != "check_id is required" {
+		t.Fatalf("bad request = %q", badRequest.Error())
 	}
 }
 
@@ -372,9 +428,10 @@ func TestProbeProcessorProcessIgnoresUnknownCheckID(t *testing.T) {
 // persistence failures still surface to the caller.
 func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
 	persistErr := errors.New("write failed")
+	const checkID = "00000000-0000-0000-0000-000000000306"
 	s := &fakeProbeStore{
-		getCheckFn: func(id string) (*checks.Check, error) {
-			check := checks.NewCheck(id, "http", "https://example.com", "", 0)
+		getCheckByIDFn: func(checkID string) (*checks.Check, error) {
+			check := testProbeCheck(checkID, "site", "http", "https://example.com", "", 0)
 			return &check, nil
 		},
 		persistMonitoringBatchFn: func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
@@ -384,9 +441,10 @@ func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
 
 	runtime := monitoring.NewRuntime(nil, []string{"probe-1"})
 	p := NewProbeProcessor(s, runtime)
-	err := p.Process(&store.Probe{ProbeID: "probe-1"}, proto.CheckResult{
-		CheckID: "site",
-		Up:      true,
+	err := processOne(t, p, "probe-1", proto.CheckResult{
+		CheckID:   checkID,
+		CheckName: "site",
+		Up:        true,
 	})
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("Process() error = %v, want %v", err, persistErr)
@@ -395,7 +453,7 @@ func TestProbeProcessorProcessPropagatesPersistError(t *testing.T) {
 		t.Fatalf("persisted writes = %d, want 1 attempted persist", len(s.persistedWrites))
 	}
 
-	if _, qErr := runtime.QuorumSnapshot("site"); !errors.Is(qErr, monitoring.ErrUnknownCheck) {
+	if _, qErr := runtime.QuorumSnapshot(checkID); !errors.Is(qErr, monitoring.ErrUnknownCheck) {
 		t.Fatalf("QuorumSnapshot() error = %v, want %v", qErr, monitoring.ErrUnknownCheck)
 	}
 }

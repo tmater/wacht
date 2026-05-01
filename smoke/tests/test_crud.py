@@ -16,15 +16,15 @@ def test_crud(server, mock):
     token = server.login()
 
     # Use a unique ID so reruns against a reused stack do not collide.
-    check_id = f"smoke-crud-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-crud-{uuid.uuid4().hex[:8]}"
     payload = {
-        "id": check_id,
+        "name": check_name,
         "type": "http",
         "target": "http://mock:9090/http/state",
         "interval": 1,
     }
     updated = {
-        "id": check_id,
+        "name": check_name,
         "type": " TCP ",
         "target": " mock:9090 ",
         "webhook": " http://mock:9090/webhook ",
@@ -37,15 +37,15 @@ def test_crud(server, mock):
         with cleanup.preserve_primary_error():
             checks = server.list_checks(token)
 
-            created = next((check for check in checks if check.get("id") == check_id), None)
+            created = next((check for check in checks if check.get("name") == check_name), None)
             if created is None:
-                raise SmokeError(f"created check {check_id} not returned by GET /api/checks")
+                raise SmokeError(f"created check {check_name} not returned by GET /api/checks")
             if created.get("type") != "http":
-                raise SmokeError(f"created check {check_id} has unexpected type {created.get('type')!r}")
+                raise SmokeError(f"created check {check_name} has unexpected type {created.get('type')!r}")
             if created.get("target") != payload["target"]:
-                raise SmokeError(f"created check {check_id} has unexpected target {created.get('target')!r}")
+                raise SmokeError(f"created check {check_name} has unexpected target {created.get('target')!r}")
 
-            encoded = urllib.parse.quote(check_id, safe="")
+            encoded = urllib.parse.quote(check_name, safe="")
             server.request(
                 "PUT",
                 f"/api/checks/{encoded}",
@@ -55,9 +55,9 @@ def test_crud(server, mock):
             )
 
             checks = server.list_checks(token)
-            matches = [check for check in checks if check.get("id") == check_id]
+            matches = [check for check in checks if check.get("name") == check_name]
             if len(matches) != 1:
-                raise SmokeError(f"expected exactly 1 updated check row for {check_id}, got {len(matches)}")
+                raise SmokeError(f"expected exactly 1 updated check row for {check_name}, got {len(matches)}")
 
             got = matches[0]
             assert_check_field(got, "type", "tcp")
@@ -68,7 +68,7 @@ def test_crud(server, mock):
             print(
                 json.dumps(
                     {
-                        "check_id": check_id,
+                        "check_name": check_name,
                         "created": payload,
                         "updated": got,
                     },
@@ -76,12 +76,12 @@ def test_crud(server, mock):
                 )
             )
     finally:
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()
 
     checks = server.list_checks(token)
-    if any(check.get("id") == check_id for check in checks):
-        raise SmokeError(f"deleted check {check_id} is still returned by GET /api/checks")
+    if any(check.get("name") == check_name for check in checks):
+        raise SmokeError(f"deleted check {check_name} is still returned by GET /api/checks")
 
 
 def assert_check_field(check, field, expected):

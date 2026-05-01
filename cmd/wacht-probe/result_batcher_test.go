@@ -41,8 +41,8 @@ func TestResultBatcherFlushesOnInterval(t *testing.T) {
 	batcher := newResultBatcher(poster, 10*time.Millisecond, 8)
 	defer batcher.Close()
 
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-1", Up: true})
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-2", Up: false})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000101", CheckName: "check-1", Up: true})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000102", CheckName: "check-2", Up: false})
 
 	select {
 	case batch := <-poster.callCh:
@@ -59,8 +59,8 @@ func TestResultBatcherFlushesWhenBatchIsFull(t *testing.T) {
 	batcher := newResultBatcher(poster, time.Hour, 2)
 	defer batcher.Close()
 
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-1", Up: true})
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-2", Up: true})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000101", CheckName: "check-1", Up: true})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000102", CheckName: "check-2", Up: true})
 
 	select {
 	case batch := <-poster.callCh:
@@ -86,7 +86,7 @@ func TestResultBatcherRetriesFailedBatchOnNextFlush(t *testing.T) {
 	batcher := newResultBatcher(poster, 10*time.Millisecond, 8)
 	defer batcher.Close()
 
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-1", Up: true})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000101", CheckName: "check-1", Up: true})
 
 	timeout := time.After(500 * time.Millisecond)
 	for attempts < 2 {
@@ -102,7 +102,7 @@ func TestResultBatcherCloseFlushesPendingResults(t *testing.T) {
 	poster := &fakeResultPoster{callCh: make(chan []proto.CheckResult, 1)}
 	batcher := newResultBatcher(poster, time.Hour, 8)
 
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-1", Up: true})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000101", CheckName: "check-1", Up: true})
 	batcher.Close()
 
 	select {
@@ -130,7 +130,7 @@ func TestResultBatcherDropsBatchOnNonRetryableError(t *testing.T) {
 	batcher := newResultBatcher(poster, 10*time.Millisecond, 8)
 	defer batcher.Close()
 
-	batcher.Enqueue(proto.CheckResult{CheckID: "check-1", Up: true})
+	batcher.Enqueue(proto.CheckResult{CheckID: "00000000-0000-0000-0000-000000000101", CheckName: "check-1", Up: true})
 
 	select {
 	case <-poster.callCh:
@@ -153,8 +153,17 @@ func TestResultBatcherCapsPendingQueueByDroppingOldestResults(t *testing.T) {
 	batcher.maxPending = 3
 	defer batcher.Close()
 
-	for i := 1; i <= 5; i++ {
-		batcher.Enqueue(proto.CheckResult{CheckID: "check-" + string(rune('0'+i)), Up: true})
+	for _, item := range []struct {
+		checkID   string
+		checkName string
+	}{
+		{checkID: "00000000-0000-0000-0000-000000000001", checkName: "check-1"},
+		{checkID: "00000000-0000-0000-0000-000000000002", checkName: "check-2"},
+		{checkID: "00000000-0000-0000-0000-000000000003", checkName: "check-3"},
+		{checkID: "00000000-0000-0000-0000-000000000004", checkName: "check-4"},
+		{checkID: "00000000-0000-0000-0000-000000000005", checkName: "check-5"},
+	} {
+		batcher.Enqueue(proto.CheckResult{CheckID: item.checkID, CheckName: item.checkName, Up: true})
 	}
 
 	if got := batcher.pendingCount(); got != 3 {
@@ -165,7 +174,7 @@ func TestResultBatcherCapsPendingQueueByDroppingOldestResults(t *testing.T) {
 	if len(batch) != 3 {
 		t.Fatalf("batch len = %d, want 3", len(batch))
 	}
-	if batch[0].CheckID != "check-3" || batch[1].CheckID != "check-4" || batch[2].CheckID != "check-5" {
+	if batch[0].CheckName != "check-3" || batch[1].CheckName != "check-4" || batch[2].CheckName != "check-5" {
 		t.Fatalf("kept batch = %#v, want newest check-3/check-4/check-5", batch)
 	}
 }

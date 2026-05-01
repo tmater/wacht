@@ -15,10 +15,10 @@ def test_webhook(server, mock):
     mock.set_state("up")
     mock.clear_webhooks()
     token = server.login()
-    check_id = f"smoke-webhook-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-webhook-{uuid.uuid4().hex[:8]}"
     webhook_url = "http://mock:9090/webhook"
     payload = {
-        "id": check_id,
+        "name": check_name,
         "type": "http",
         "target": "http://mock:9090/http/state",
         "webhook": webhook_url,
@@ -33,11 +33,11 @@ def test_webhook(server, mock):
                 "webhook check to become healthy before the outage",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: healthy_status(server, token, check_id),
+                fn=lambda: healthy_status(server, token, check_name),
             )
 
-            if deliveries_for_check(mock, check_id):
-                raise SmokeError(f"expected 0 webhook deliveries before outage for {check_id}")
+            if deliveries_for_check(mock, check_name):
+                raise SmokeError(f"expected 0 webhook deliveries before outage for {check_name}")
 
             mock.set_state("down")
 
@@ -45,17 +45,17 @@ def test_webhook(server, mock):
                 "real probes to open an incident for the webhook scenario",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: open_incident(server, token, check_id),
+                fn=lambda: open_incident(server, token, check_name),
             )
 
             first_attempts = wait_for(
                 "exactly one delivered webhook after the down transition",
                 timeout_seconds=30,
                 interval_seconds=2,
-                fn=lambda: expected_deliveries(mock, check_id, expected=1, statuses=["down"]),
+                fn=lambda: expected_deliveries(mock, check_name, expected=1, statuses=["down"]),
             )
 
-            assert_deliveries_stable(mock, check_id, expected=1, statuses=["down"], seconds=4)
+            assert_deliveries_stable(mock, check_name, expected=1, statuses=["down"], seconds=4)
 
             mock.set_state("up")
 
@@ -63,17 +63,17 @@ def test_webhook(server, mock):
                 "real probes to resolve the incident for the webhook scenario",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: resolved_incident(server, token, check_id),
+                fn=lambda: resolved_incident(server, token, check_name),
             )
 
             second_attempts = wait_for(
                 "exactly two delivered webhooks after recovery",
                 timeout_seconds=30,
                 interval_seconds=2,
-                fn=lambda: expected_deliveries(mock, check_id, expected=2, statuses=["down", "up"]),
+                fn=lambda: expected_deliveries(mock, check_name, expected=2, statuses=["down", "up"]),
             )
 
-            assert_deliveries_stable(mock, check_id, expected=2, statuses=["down", "up"], seconds=4)
+            assert_deliveries_stable(mock, check_name, expected=2, statuses=["down", "up"], seconds=4)
 
             print(
                 json.dumps(
@@ -89,5 +89,5 @@ def test_webhook(server, mock):
     finally:
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
         cleanup.run("clear mock webhooks", mock.clear_webhooks)
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()

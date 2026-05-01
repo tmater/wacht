@@ -94,6 +94,10 @@ func TestRuntimeObserveCheckDownRecomputesQuorum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ObserveCheckDown probe-b second: %v", err)
 	}
+	update, err = runtime.ObserveCheckDown("check-a", "probe-a", secondAt.Add(time.Second), ptrTime(secondExpiry.Add(time.Second)), "timeout")
+	if err != nil {
+		t.Fatalf("ObserveCheckDown probe-a third: %v", err)
+	}
 
 	if update.CheckTransition.To != CheckStateDown {
 		t.Fatalf("check transition to = %q, want %q", update.CheckTransition.To, CheckStateDown)
@@ -233,6 +237,9 @@ func TestRuntimeMarkProbeErrorInvalidatesAssignedChecksUntilFreshResults(t *test
 		if _, err := runtime.ObserveCheckDown("check-a", probeID, fourthAt, &fourthExpiry, "timeout"); err != nil {
 			t.Fatalf("ObserveCheckDown %s second: %v", probeID, err)
 		}
+	}
+	if _, err := runtime.ObserveCheckDown("check-a", "probe-a", at.Add(4*time.Second), ptrTime(at.Add(34*time.Second)), "timeout"); err != nil {
+		t.Fatalf("ObserveCheckDown probe-a third: %v", err)
 	}
 
 	if _, err := runtime.MarkProbeError("probe-a", "transport failed"); err != nil {

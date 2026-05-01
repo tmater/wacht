@@ -130,8 +130,8 @@ func TestCheckNormalizeAndValidateDefaultsHTTPAndInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeAndValidate() error = %v", err)
 	}
-	if check.ID != "api-check" {
-		t.Fatalf("ID = %q, want trimmed id", check.ID)
+	if check.Name != "api-check" {
+		t.Fatalf("Name = %q, want trimmed name", check.Name)
 	}
 	if check.Type != CheckHTTP {
 		t.Fatalf("Type = %q, want %q", check.Type, CheckHTTP)
@@ -158,14 +158,14 @@ func TestCheckNormalizeAndValidateCanonicalizesMixedCaseType(t *testing.T) {
 	}
 }
 
-func TestCheckNormalizeAndValidateRejectsMissingID(t *testing.T) {
+func TestCheckNormalizeAndValidateRejectsMissingName(t *testing.T) {
 	_, err := NewCheck("", "http", "https://1.1.1.1", "", 30).
 		NormalizeAndValidate(context.Background(), network.Policy{}, true)
 	if err == nil {
-		t.Fatal("NormalizeAndValidate() error = nil, want missing id error")
+		t.Fatal("NormalizeAndValidate() error = nil, want missing name error")
 	}
-	if err.Error() != "id is required" {
-		t.Fatalf("error = %q, want missing id error", err)
+	if err.Error() != "name is required" {
+		t.Fatalf("error = %q, want missing name error", err)
 	}
 }
 
@@ -204,8 +204,8 @@ func TestCheckJSONUsesLowercaseFieldNames(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	if got["id"] != "api-check" {
-		t.Fatalf("id = %#v, want api-check", got["id"])
+	if got["name"] != "api-check" {
+		t.Fatalf("name = %#v, want api-check", got["name"])
 	}
 	if got["interval"] != float64(45) {
 		t.Fatalf("interval = %#v, want 45", got["interval"])
@@ -213,18 +213,21 @@ func TestCheckJSONUsesLowercaseFieldNames(t *testing.T) {
 	if _, ok := got["ID"]; ok {
 		t.Fatalf("unexpected uppercase ID field in %#v", got)
 	}
+	if _, ok := got["Name"]; ok {
+		t.Fatalf("unexpected uppercase Name field in %#v", got)
+	}
 }
 
 func TestCheckYAMLUsesConfigFieldNames(t *testing.T) {
 	var check Check
-	data := []byte("id: api-check\ntype: http\ntarget: https://example.com\nwebhook: https://hooks.example.com\ninterval: 45\n")
+	data := []byte("name: api-check\ntype: http\ntarget: https://example.com\nwebhook: https://hooks.example.com\ninterval: 45\n")
 
 	if err := yaml.Unmarshal(data, &check); err != nil {
 		t.Fatalf("yaml.Unmarshal() error = %v", err)
 	}
 
-	if check.ID != "api-check" {
-		t.Fatalf("ID = %q, want api-check", check.ID)
+	if check.Name != "api-check" {
+		t.Fatalf("Name = %q, want api-check", check.Name)
 	}
 	if check.Interval != 45 {
 		t.Fatalf("Interval = %d, want 45", check.Interval)

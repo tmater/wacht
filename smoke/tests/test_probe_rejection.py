@@ -38,7 +38,7 @@ def test_probe_rejection(server):
         "probe_id does not match authenticated probe\n",
     )
 
-    unknown_check_id = f"smoke-missing-{uuid.uuid4().hex[:8]}"
+    unknown_check_id = str(uuid.uuid4())
     unknown_check = server.request(
         "POST",
         "/api/results",

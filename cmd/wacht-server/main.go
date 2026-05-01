@@ -87,7 +87,7 @@ func main() {
 		check, err := c.NormalizeAndValidate(ctx, policy, true)
 		if err != nil {
 			cancel()
-			fatal("configured check is invalid", "check_id", c.ID, "err", err)
+			fatal("configured check is invalid", "check_name", c.Name, "err", err)
 		}
 		cancel()
 		seed[i] = check

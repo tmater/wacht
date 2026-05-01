@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql"
 	"time"
 )
@@ -72,7 +71,7 @@ func (s *Store) ClaimDueIncidentNotifications(now, staleBefore time.Time, limit 
 			SELECT n.id
 			FROM incident_notifications n
 			JOIN incidents i ON i.id = n.incident_id
-			JOIN checks c ON c.uid = i.check_uid
+			JOIN checks c ON c.id = i.check_id
 			WHERE (
 				(n.state IN ($1, $2) AND n.next_attempt_at <= $3)
 				OR (n.state = $4 AND n.last_attempt_at <= $5)
@@ -90,8 +89,8 @@ func (s *Store) ClaimDueIncidentNotifications(now, staleBefore time.Time, limit 
 		FROM due, incidents i, checks c
 		WHERE n.id = due.id
 		  AND i.id = n.incident_id
-		  AND c.uid = i.check_uid
-		RETURNING n.id, n.incident_id, c.id, n.event, n.webhook_url, n.payload, n.attempts
+		  AND c.id = i.check_id
+		RETURNING n.id, n.incident_id, c.id::text, n.event, n.webhook_url, n.payload, n.attempts
 	`, notificationStatePending, notificationStateRetrying, now, notificationStateProcessing, staleBefore, notificationEventDown, limit)
 	if err != nil {
 		return nil, err
@@ -204,15 +203,15 @@ func scanIncidentNotification(
 	return summary
 }
 
-func openIncidentWithNotificationTx(tx *sql.Tx, checkID string, request *NotificationRequest, now time.Time) (bool, error) {
+func openIncidentWithNotificationByCheckIDTx(tx *sql.Tx, checkID string, request *NotificationRequest, now time.Time) (bool, error) {
 	var incidentID int64
 	err := tx.QueryRow(`
-		INSERT INTO incidents (check_uid, user_id, started_at)
-		SELECT uid, user_id, $2
+		INSERT INTO incidents (check_id, user_id, started_at)
+		SELECT id, user_id, $2
 		FROM checks
 		WHERE id = $1
 		  AND deleted_at IS NULL
-		ON CONFLICT (check_uid) WHERE resolved_at IS NULL DO NOTHING
+		ON CONFLICT (check_id) WHERE resolved_at IS NULL DO NOTHING
 		RETURNING id
 	`, checkID, now).Scan(&incidentID)
 	if err == sql.ErrNoRows {
@@ -228,36 +227,12 @@ func openIncidentWithNotificationTx(tx *sql.Tx, checkID string, request *Notific
 	return false, nil
 }
 
-func (s *Store) openIncidentWithNotification(checkID string, request *NotificationRequest) (bool, error) {
-	now := time.Now().UTC()
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
-	alreadyOpen, err := openIncidentWithNotificationTx(tx, checkID, request, now)
-	if err != nil {
-		return false, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return alreadyOpen, nil
-}
-
-func resolveIncidentWithNotificationTx(tx *sql.Tx, checkID string, request *NotificationRequest, now time.Time) (bool, error) {
+func resolveIncidentWithNotificationByCheckIDTx(tx *sql.Tx, checkID string, request *NotificationRequest, now time.Time) (bool, error) {
 	var incidentID int64
 	err := tx.QueryRow(`
 		UPDATE incidents
 		SET resolved_at = $1
-		WHERE check_uid = (
-			SELECT uid
-			FROM checks
-			WHERE id = $2
-			  AND deleted_at IS NULL
-		)
+		WHERE check_id = $2
 		  AND resolved_at IS NULL
 		RETURNING id
 	`, now, checkID).Scan(&incidentID)
@@ -284,23 +259,4 @@ func resolveIncidentWithNotificationTx(tx *sql.Tx, checkID string, request *Noti
 		return false, err
 	}
 	return true, nil
-}
-
-func (s *Store) resolveIncidentWithNotification(checkID string, request *NotificationRequest) (bool, error) {
-	now := time.Now().UTC()
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
-	resolved, err := resolveIncidentWithNotificationTx(tx, checkID, request, now)
-	if err != nil {
-		return false, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return resolved, nil
 }

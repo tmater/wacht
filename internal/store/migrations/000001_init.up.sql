@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE probes (
     probe_id      TEXT PRIMARY KEY,
     secret_hash   TEXT NOT NULL,
@@ -28,8 +30,8 @@ CREATE TABLE sessions (
 );
 
 CREATE TABLE checks (
-    uid              BIGSERIAL PRIMARY KEY,
-    id               TEXT NOT NULL,
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name             TEXT NOT NULL,
     type             TEXT NOT NULL,
     target           TEXT NOT NULL,
     webhook          TEXT NOT NULL DEFAULT '',
@@ -38,19 +40,19 @@ CREATE TABLE checks (
     deleted_at       TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX idx_checks_active_id
-    ON checks (id)
+CREATE UNIQUE INDEX idx_checks_active_scope_name
+    ON checks ((COALESCE(user_id, 0)), name)
     WHERE deleted_at IS NULL;
 
 CREATE TABLE check_probe_state (
-    check_id        TEXT NOT NULL,
-    probe_id        TEXT NOT NULL,
-    last_result_at  TIMESTAMPTZ NOT NULL,
-    last_outcome    TEXT NOT NULL,
-    streak_len      INTEGER NOT NULL,
-    expires_at      TIMESTAMPTZ NOT NULL,
-    state           TEXT NOT NULL,
-    last_error      TEXT NOT NULL DEFAULT '',
+    check_id       UUID NOT NULL REFERENCES checks(id),
+    probe_id       TEXT NOT NULL,
+    last_result_at TIMESTAMPTZ NOT NULL,
+    last_outcome   TEXT NOT NULL,
+    streak_len     INTEGER NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    state          TEXT NOT NULL,
+    last_error     TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (check_id, probe_id),
     CONSTRAINT check_probe_state_last_outcome_check CHECK (last_outcome IN ('', 'up', 'down', 'error')),
     CONSTRAINT check_probe_state_state_check CHECK (state IN ('up', 'down', 'missing', 'error')),
@@ -59,14 +61,14 @@ CREATE TABLE check_probe_state (
 
 CREATE TABLE incidents (
     id          BIGSERIAL PRIMARY KEY,
-    check_uid   BIGINT NOT NULL REFERENCES checks(uid),
+    check_id    UUID NOT NULL REFERENCES checks(id),
     user_id     INTEGER,
     started_at  TIMESTAMPTZ NOT NULL,
     resolved_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_incidents_user_started_at ON incidents (user_id, started_at DESC);
-CREATE UNIQUE INDEX idx_incidents_open_check ON incidents (check_uid) WHERE resolved_at IS NULL;
+CREATE UNIQUE INDEX idx_incidents_open_check ON incidents (check_id) WHERE resolved_at IS NULL;
 
 CREATE TABLE incident_notifications (
     id              BIGSERIAL PRIMARY KEY,

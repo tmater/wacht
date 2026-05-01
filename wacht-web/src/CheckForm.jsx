@@ -4,7 +4,7 @@ import * as ui from './ui.js'
 
 export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
   const isNew = !initial
-  const [id, setId] = useState(initial?.id ?? '')
+  const [name, setName] = useState(initial?.name ?? '')
   const [type, setType] = useState(initial?.type ?? 'http')
   const [target, setTarget] = useState(initial?.target ?? '')
   const [webhook, setWebhook] = useState(initial?.webhook ?? '')
@@ -17,10 +17,10 @@ export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
     setErr(null)
     setSaving(true)
     try {
-      const body = JSON.stringify({ id, type, target, webhook, interval: parseInt(interval, 10) })
+      const body = JSON.stringify({ name, type, target, webhook, interval: parseInt(interval, 10) })
       const res = isNew
         ? await fetch(`${API_URL}/api/checks`, { method: 'POST', headers: authHeaders(), body })
-        : await fetch(`${API_URL}/api/checks/${initial.id}`, { method: 'PUT', headers: authHeaders(), body })
+        : await fetch(`${API_URL}/api/checks/${encodeURIComponent(initial.name)}`, { method: 'PUT', headers: authHeaders(), body })
       if (!res.ok) {
         const text = await res.text()
         throw new Error(text.trim() || `HTTP ${res.status}`)
@@ -37,12 +37,12 @@ export default function CheckForm({ initial, onSave, onCancel, onDelete }) {
     <form onSubmit={handleSubmit} className={`${ui.card} p-4 mb-3`}>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <label className={ui.label}>ID</label>
+          <label className={ui.label}>Name</label>
           <input
             required
             disabled={!isNew}
-            value={id}
-            onChange={e => setId(e.target.value)}
+            value={name}
+            onChange={e => setName(e.target.value)}
             placeholder="check-my-api"
             className={ui.inputSm}
           />

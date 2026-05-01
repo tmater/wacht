@@ -15,9 +15,9 @@ def test_quorum(server, mock):
     server.wait_for_health()
     mock.set_state("up")
     token = server.login()
-    check_id = f"smoke-quorum-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-quorum-{uuid.uuid4().hex[:8]}"
     payload = {
-        "id": check_id,
+        "name": check_name,
         "type": "http",
         "target": "http://mock:9090/http/state",
         "interval": 1,
@@ -31,7 +31,7 @@ def test_quorum(server, mock):
                 "quorum check to become healthy before the outage",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: healthy_status(server, token, check_id),
+                fn=lambda: healthy_status(server, token, check_name),
             )
 
             mock.set_state("down")
@@ -40,14 +40,14 @@ def test_quorum(server, mock):
                 "real probes to open an incident after the target goes down",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: open_incident(server, token, check_id),
+                fn=lambda: open_incident(server, token, check_name),
             )
 
             # Keep the target down briefly to catch duplicate incident rows while
             # the outage is still ongoing.
             deadline = time.monotonic() + 4
             while time.monotonic() < deadline:
-                incidents = incidents_for_check(server, token, check_id)
+                incidents = incidents_for_check(server, token, check_name)
                 if len(incidents) != 1:
                     raise SmokeError(f"expected exactly 1 open incident during outage, got {len(incidents)}")
                 if incidents[0].get("resolved_at") is not None:
@@ -60,11 +60,11 @@ def test_quorum(server, mock):
                 "real probes to resolve the incident after recovery",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: resolved_incident(server, token, check_id),
+                fn=lambda: resolved_incident(server, token, check_name),
             )
 
             print(json.dumps({"opened": opened, "resolved": resolved}, indent=2))
     finally:
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()

@@ -63,6 +63,7 @@ func runMigrations(db *sql.DB) error {
 // render one authenticated status row from runtime-owned state.
 type StatusCheckView struct {
 	CheckID       string
+	CheckName     string
 	Target        string
 	IncidentSince *time.Time
 }
@@ -71,6 +72,7 @@ type StatusCheckView struct {
 // timestamp needed to render one public status row from runtime-owned state.
 type PublicStatusCheckView struct {
 	CheckID       string
+	CheckName     string
 	IncidentSince *time.Time
 }
 
@@ -79,13 +81,13 @@ type PublicStatusCheckView struct {
 // monitoring state in memory.
 func (s *Store) StatusCheckViews(userID int64) ([]StatusCheckView, error) {
 	rows, err := s.db.Query(`
-		SELECT c.id, c.target, i.started_at
+		SELECT c.id::text, c.name, c.target, i.started_at
 		FROM checks c
 		LEFT JOIN incidents i
-			ON i.check_uid = c.uid AND i.resolved_at IS NULL
+			ON i.check_id = c.id AND i.resolved_at IS NULL
 		WHERE c.user_id = $1
 		  AND c.deleted_at IS NULL
-		ORDER BY c.id
+		ORDER BY c.name, c.id
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -98,7 +100,7 @@ func (s *Store) StatusCheckViews(userID int64) ([]StatusCheckView, error) {
 			view      StatusCheckView
 			startedAt *time.Time
 		)
-		if err := rows.Scan(&view.CheckID, &view.Target, &startedAt); err != nil {
+		if err := rows.Scan(&view.CheckID, &view.CheckName, &view.Target, &startedAt); err != nil {
 			return nil, err
 		}
 		view.IncidentSince = startedAt
@@ -121,13 +123,13 @@ func (s *Store) PublicStatusCheckViews(slug string) ([]PublicStatusCheckView, bo
 	}
 
 	rows, err := s.db.Query(`
-		SELECT c.id, i.started_at
+		SELECT c.id::text, c.name, i.started_at
 		FROM checks c
 		LEFT JOIN incidents i
-			ON i.check_uid = c.uid AND i.resolved_at IS NULL
+			ON i.check_id = c.id AND i.resolved_at IS NULL
 		WHERE c.user_id = $1
 		  AND c.deleted_at IS NULL
-		ORDER BY c.id
+		ORDER BY c.name, c.id
 	`, userID)
 	if err != nil {
 		return nil, false, err
@@ -140,7 +142,7 @@ func (s *Store) PublicStatusCheckViews(slug string) ([]PublicStatusCheckView, bo
 			view      PublicStatusCheckView
 			startedAt *time.Time
 		)
-		if err := rows.Scan(&view.CheckID, &startedAt); err != nil {
+		if err := rows.Scan(&view.CheckID, &view.CheckName, &startedAt); err != nil {
 			return nil, false, err
 		}
 		view.IncidentSince = startedAt
@@ -150,16 +152,16 @@ func (s *Store) PublicStatusCheckViews(slug string) ([]PublicStatusCheckView, bo
 }
 
 // SeedChecks inserts checks that do not already exist in the database.
-// Existing checks (matched by id) are left unchanged. Used to bootstrap
+// Existing checks (matched by name) are left unchanged. Used to bootstrap
 // from YAML config on startup without overwriting DB-managed checks.
 // If userID is non-zero, newly inserted checks are assigned to that user.
 func (s *Store) SeedChecks(checks []checks.Check, userID int64) error {
 	for _, c := range checks {
 		_, err := s.db.Exec(`
-			INSERT INTO checks (id, type, target, webhook, user_id, interval_seconds)
+			INSERT INTO checks (name, type, target, webhook, user_id, interval_seconds)
 			VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6)
 			ON CONFLICT DO NOTHING
-		`, c.ID, string(c.Type), c.Target, c.Webhook, userID, c.Interval)
+		`, c.Name, string(c.Type), c.Target, c.Webhook, userID, c.Interval)
 		if err != nil {
 			return err
 		}
@@ -170,11 +172,11 @@ func (s *Store) SeedChecks(checks []checks.Check, userID int64) error {
 // ListChecks returns all checks owned by userID.
 func (s *Store) ListChecks(userID int64) ([]checks.Check, error) {
 	rows, err := s.db.Query(`
-		SELECT id, type, target, webhook, interval_seconds
+		SELECT id::text, name, type, target, webhook, interval_seconds
 		FROM checks
 		WHERE user_id = $1
 		  AND deleted_at IS NULL
-		ORDER BY id
+		ORDER BY name, id
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -195,10 +197,10 @@ func (s *Store) ListChecks(userID int64) ([]checks.Check, error) {
 // ListAllChecks returns all checks regardless of owner. Used by probes.
 func (s *Store) ListAllChecks() ([]checks.Check, error) {
 	rows, err := s.db.Query(`
-		SELECT id, type, target, webhook, interval_seconds
+		SELECT id::text, name, type, target, webhook, interval_seconds
 		FROM checks
 		WHERE deleted_at IS NULL
-		ORDER BY id
+		ORDER BY name, id
 	`)
 	if err != nil {
 		return nil, err
@@ -216,10 +218,35 @@ func (s *Store) ListAllChecks() ([]checks.Check, error) {
 	return checks, rows.Err()
 }
 
-// GetCheck returns a single check by id, or (nil, nil) if not found.
-func (s *Store) GetCheck(id string) (*checks.Check, error) {
+// GetCheckByName returns one active check owned by userID and addressed by its
+// human-facing name, or (nil, nil) if not found.
+func (s *Store) GetCheckByName(name string, userID int64) (*checks.Check, error) {
 	c, err := scanCheck(s.db.QueryRow(`
-		SELECT id, type, target, webhook, interval_seconds
+		SELECT id::text, name, type, target, webhook, interval_seconds
+		FROM checks
+		WHERE name = $1
+		  AND user_id = $2
+		  AND deleted_at IS NULL
+	`, name, userID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// GetCheckByID returns one active check addressed by its stable UUID ID, or
+// (nil, nil) if not found.
+func (s *Store) GetCheckByID(id string) (*checks.Check, error) {
+	id, err := normalizeCheckID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := scanCheck(s.db.QueryRow(`
+		SELECT id::text, name, type, target, webhook, interval_seconds
 		FROM checks
 		WHERE id = $1
 		  AND deleted_at IS NULL
@@ -233,11 +260,18 @@ func (s *Store) GetCheck(id string) (*checks.Check, error) {
 	return &c, nil
 }
 
-// CreateCheck inserts a new check owned by userID.
-func (s *Store) CreateCheck(c checks.Check, userID int64) error {
-	_, err := s.db.Exec(`INSERT INTO checks (id, type, target, webhook, user_id, interval_seconds) VALUES ($1, $2, $3, $4, $5, $6)`,
-		c.ID, string(c.Type), c.Target, c.Webhook, userID, c.Interval)
-	return err
+// CreateCheck inserts a new check owned by userID and returns it with its
+// stable ID populated.
+func (s *Store) CreateCheck(c checks.Check, userID int64) (checks.Check, error) {
+	err := s.db.QueryRow(`
+		INSERT INTO checks (name, type, target, webhook, user_id, interval_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id::text
+	`, c.Name, string(c.Type), c.Target, c.Webhook, userID, c.Interval).Scan(&c.ID)
+	if err != nil {
+		return checks.Check{}, err
+	}
+	return c, nil
 }
 
 // UpdateCheck replaces type, target, webhook, and interval_seconds for a check owned by userID.
@@ -245,38 +279,39 @@ func (s *Store) UpdateCheck(c checks.Check, userID int64) error {
 	_, err := s.db.Exec(`
 		UPDATE checks
 		SET type = $1, target = $2, webhook = $3, interval_seconds = $4
-		WHERE id = $5
+		WHERE name = $5
 		  AND user_id = $6
 		  AND deleted_at IS NULL
 	`,
-		string(c.Type), c.Target, c.Webhook, c.Interval, c.ID, userID)
+		string(c.Type), c.Target, c.Webhook, c.Interval, c.Name, userID)
 	return err
 }
 
 // DeleteCheck removes a check owned by userID. It returns whether an active
-// owned check was deleted; unauthorized, missing, or already-deleted checks are
-// treated as idempotent no-ops.
-func (s *Store) DeleteCheck(id string, userID int64) (bool, error) {
+// owned check was deleted plus the deleted check's stable ID so callers can
+// evict matching in-memory state. Unauthorized, missing, or already-deleted
+// checks are treated as idempotent no-ops.
+func (s *Store) DeleteCheck(name string, userID int64) (bool, string, error) {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer tx.Rollback()
 
-	var checkUID int64
+	var checkID string
 	err = tx.QueryRow(`
-		SELECT uid
+		SELECT id::text
 		FROM checks
-		WHERE id = $1
+		WHERE name = $1
 		  AND user_id = $2
 		  AND deleted_at IS NULL
 		FOR UPDATE
-	`, id, userID).Scan(&checkUID)
+	`, name, userID).Scan(&checkID)
 	if err == sql.ErrNoRows {
-		return false, tx.Commit()
+		return false, "", tx.Commit()
 	}
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	now := time.Now().UTC()
@@ -288,46 +323,47 @@ func (s *Store) DeleteCheck(id string, userID int64) (bool, error) {
 		    updated_at = $2
 		FROM incidents i
 		WHERE i.id = n.incident_id
-		  AND i.check_uid = $3
+		  AND i.check_id = $3
 		  AND n.state NOT IN ($1, $4)
-	`, notificationStateSuperseded, now, checkUID, notificationStateDelivered); err != nil {
-		return false, err
+	`, notificationStateSuperseded, now, checkID, notificationStateDelivered); err != nil {
+		return false, "", err
 	}
 
 	if _, err := tx.Exec(`
 		UPDATE incidents
 		SET resolved_at = $1
-		WHERE check_uid = $2
+		WHERE check_id = $2
 		  AND resolved_at IS NULL
-	`, now, checkUID); err != nil {
-		return false, err
+	`, now, checkID); err != nil {
+		return false, "", err
 	}
 
 	if _, err := tx.Exec(`
 		DELETE FROM check_probe_state
 		WHERE check_id = $1
-	`, id); err != nil {
-		return false, err
+	`, checkID); err != nil {
+		return false, "", err
 	}
 
 	if _, err := tx.Exec(`
 		UPDATE checks
 		SET deleted_at = $1
-		WHERE uid = $2
-	`, now, checkUID); err != nil {
-		return false, err
+		WHERE id = $2
+	`, now, checkID); err != nil {
+		return false, "", err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return true, nil
+	return true, checkID, nil
 }
 
 // Incident represents a recorded outage for a check.
 type Incident struct {
 	ID               int64
 	CheckID          string
+	CheckName        string
 	StartedAt        time.Time
 	ResolvedAt       *time.Time
 	DownNotification *IncidentNotification
@@ -340,7 +376,8 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			i.id,
-			c.id,
+			c.id::text,
+			c.name,
 			i.started_at,
 			i.resolved_at,
 			down_n.id,
@@ -359,7 +396,7 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 			up_n.delivered_at
 		FROM incidents i
 		INNER JOIN checks c
-			ON c.uid = i.check_uid
+			ON c.id = i.check_id
 		LEFT JOIN incident_notifications down_n
 			ON down_n.incident_id = i.id AND down_n.event = $2
 		LEFT JOIN incident_notifications up_n
@@ -387,6 +424,7 @@ func (s *Store) ListIncidents(userID int64, limit int) ([]Incident, error) {
 		if err := rows.Scan(
 			&inc.ID,
 			&inc.CheckID,
+			&inc.CheckName,
 			&inc.StartedAt,
 			&inc.ResolvedAt,
 			&downID,
@@ -426,7 +464,7 @@ type rowScanner interface {
 func scanCheck(scanner rowScanner) (checks.Check, error) {
 	var c checks.Check
 	var checkType string
-	if err := scanner.Scan(&c.ID, &checkType, &c.Target, &c.Webhook, &c.Interval); err != nil {
+	if err := scanner.Scan(&c.ID, &c.Name, &checkType, &c.Target, &c.Webhook, &c.Interval); err != nil {
 		return checks.Check{}, err
 	}
 	c.Type = checks.Type(checkType)

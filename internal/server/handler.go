@@ -97,8 +97,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /status", h.requireSession(h.handleStatus))
 	mux.HandleFunc("GET /api/checks", h.requireSession(h.handleListChecks))
 	mux.HandleFunc("POST /api/checks", h.requireSession(h.handleCreateCheck))
-	mux.HandleFunc("PUT /api/checks/{id}", h.requireSession(h.handleUpdateCheck))
-	mux.HandleFunc("DELETE /api/checks/{id}", h.requireSession(h.handleDeleteCheck))
+	mux.HandleFunc("PUT /api/checks/{name}", h.requireSession(h.handleUpdateCheck))
+	mux.HandleFunc("DELETE /api/checks/{name}", h.requireSession(h.handleDeleteCheck))
 	mux.HandleFunc("GET /api/auth/me", h.requireSession(h.handleMe))
 	mux.HandleFunc("PUT /api/auth/change-password", h.requireSession(h.handleChangePassword))
 	mux.HandleFunc("GET /api/incidents", h.requireSession(h.handleListIncidents))
@@ -172,7 +172,8 @@ func (h *Handler) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleProbeChecks returns the probe-visible check set. This currently stays
-// global for all authenticated probes, but strips server-only metadata.
+// global for all authenticated probes, but uses the stable check ID for probe
+// execution and keeps the tenant-scoped name as display metadata.
 func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
 	logger := requestLogger(r)
 	checks, err := h.store.ListAllChecks()
@@ -185,6 +186,7 @@ func (h *Handler) handleProbeChecks(w http.ResponseWriter, r *http.Request) {
 	for _, check := range checks {
 		payload = append(payload, proto.ProbeCheck{
 			ID:       check.ID,
+			Name:     check.Name,
 			Type:     string(check.Type),
 			Target:   check.Target,
 			Interval: check.Interval,
@@ -224,13 +226,14 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if err := h.store.CreateCheck(check, user.ID); err != nil {
-		logger.Error("create check failed", "component", "checks", "check_id", check.ID, "err", err)
+	created, err := h.store.CreateCheck(check, user.ID)
+	if err != nil {
+		logger.Error("create check failed", "component", "checks", "check_name", check.Name, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if h.monitoring != nil {
-		h.monitoring.EnsureCheck(check.ID)
+		h.monitoring.EnsureCheck(created.ID)
 	}
 	w.WriteHeader(http.StatusCreated)
 }
@@ -238,9 +241,9 @@ func (h *Handler) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 // handleUpdateCheck replaces type, target, and webhook for a check owned by the authenticated user.
 func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
-	id := r.PathValue("id")
+	name := r.PathValue("name")
 	logger := requestLogger(r)
-	check, err := h.decodeCheck(w, r, id)
+	check, err := h.decodeCheck(w, r, name)
 	if err != nil {
 		if writeProcessorError(w, err) {
 			return
@@ -249,20 +252,20 @@ func (h *Handler) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.UpdateCheck(check, user.ID); err != nil {
-		logger.Error("update check failed", "component", "checks", "check_id", id, "err", err)
+		logger.Error("update check failed", "component", "checks", "check_name", name, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) decodeCheck(w http.ResponseWriter, r *http.Request, id string) (checks.Check, error) {
+func (h *Handler) decodeCheck(w http.ResponseWriter, r *http.Request, name string) (checks.Check, error) {
 	var check checks.Check
 	if err := decodeJSONBody(w, r, &check, maxJSONRequestBodyBytes, false); err != nil {
 		return checks.Check{}, err
 	}
-	if id != "" {
-		check.ID = id
+	if name != "" {
+		check.Name = name
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -280,16 +283,16 @@ func (h *Handler) targetPolicy() network.Policy {
 // handleDeleteCheck removes a check owned by the authenticated user.
 func (h *Handler) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	user := sessionUser(r)
-	id := r.PathValue("id")
+	name := r.PathValue("name")
 	logger := requestLogger(r)
-	deleted, err := h.store.DeleteCheck(id, user.ID)
+	deleted, checkID, err := h.store.DeleteCheck(name, user.ID)
 	if err != nil {
-		logger.Error("delete check failed", "component", "checks", "check_id", id, "err", err)
+		logger.Error("delete check failed", "component", "checks", "check_name", name, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if deleted && h.monitoring != nil {
-		h.monitoring.RemoveCheck(id)
+		h.monitoring.RemoveCheck(checkID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -380,6 +383,7 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	type incidentJSON struct {
 		ID               int64             `json:"id"`
 		CheckID          string            `json:"check_id"`
+		CheckName        string            `json:"check_name"`
 		StartedAt        string            `json:"started_at"`
 		ResolvedAt       *string           `json:"resolved_at,omitempty"`
 		DurationMs       *int64            `json:"duration_ms,omitempty"`
@@ -392,6 +396,7 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 		ij := incidentJSON{
 			ID:        inc.ID,
 			CheckID:   inc.CheckID,
+			CheckName: inc.CheckName,
 			StartedAt: inc.StartedAt.UTC().Format(time.RFC3339),
 		}
 		if inc.ResolvedAt != nil {

@@ -17,6 +17,12 @@ type fakeRecoveryStore struct {
 	openIncidentCheckID []string
 }
 
+func testRecoveryCheck(checkID, id, checkType, target string, interval int) checks.Check {
+	check := checks.NewCheck(id, checkType, target, "", interval)
+	check.ID = checkID
+	return check
+}
+
 func (f *fakeRecoveryStore) ListAllChecks() ([]checks.Check, error) {
 	return append([]checks.Check(nil), f.checks...), nil
 }
@@ -42,10 +48,12 @@ func (f *fakeRecoveryStore) OpenIncidentCheckIDs() ([]string, error) {
 }
 
 func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
+	checkA := testRecoveryCheck("00000000-0000-0000-0000-000000000201", "check-a", "http", "https://a.example.com", 30)
+	checkB := testRecoveryCheck("00000000-0000-0000-0000-000000000202", "check-b", "http", "https://b.example.com", 30)
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
 		checks: []checks.Check{
-			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
-			checks.NewCheck("check-b", "http", "https://b.example.com", "", 30),
+			checkA,
+			checkB,
 		},
 		probes: []store.PersistedProbeState{
 			{ProbeID: "probe-a"},
@@ -64,7 +72,7 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 		t.Fatalf("probe state = %q, want %q", probe.State, ProbeStateOffline)
 	}
 
-	check, err := recovered.CheckSnapshot("check-a", "probe-a")
+	check, err := recovered.CheckSnapshot(checkA.ID, "probe-a")
 	if err != nil {
 		t.Fatalf("CheckSnapshot: %v", err)
 	}
@@ -72,7 +80,7 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
 	}
 
-	quorum, err := recovered.QuorumSnapshot("check-b")
+	quorum, err := recovered.QuorumSnapshot(checkB.ID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot: %v", err)
 	}
@@ -84,9 +92,11 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 	firstAt := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
 	secondAt := firstAt.Add(time.Second)
+	check := testRecoveryCheck("00000000-0000-0000-0000-000000000203", "check-a", "http", "https://a.example.com", 30)
+	checkID := check.ID
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
 		checks: []checks.Check{
-			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
+			check,
 		},
 		probes: []store.PersistedProbeState{
 			{ProbeID: "probe-a", LastSeenAt: &firstAt},
@@ -95,7 +105,7 @@ func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 		},
 		checkStates: []store.PersistedCheckState{
 			{
-				CheckID:      "check-a",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: firstAt,
 				LastOutcome:  "down",
@@ -105,7 +115,7 @@ func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 				LastError:    "timeout",
 			},
 			{
-				CheckID:      "check-a",
+				CheckID:      checkID,
 				ProbeID:      "probe-b",
 				LastResultAt: secondAt,
 				LastOutcome:  "down",
@@ -115,7 +125,7 @@ func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 				LastError:    "timeout",
 			},
 		},
-		openIncidentCheckID: []string{"check-a"},
+		openIncidentCheckID: []string{checkID},
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntime: %v", err)
@@ -140,18 +150,18 @@ func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 		t.Fatalf("probe-c state = %q, want %q", probeC.State, ProbeStateOffline)
 	}
 
-	check, err := recovered.CheckSnapshot("check-a", "probe-b")
+	state, err := recovered.CheckSnapshot(checkID, "probe-b")
 	if err != nil {
 		t.Fatalf("CheckSnapshot: %v", err)
 	}
-	if check.State != CheckStateDown {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateDown)
+	if state.State != CheckStateDown {
+		t.Fatalf("check state = %q, want %q", state.State, CheckStateDown)
 	}
-	if !check.LastResultAt.Equal(secondAt) {
-		t.Fatalf("check LastResultAt = %s, want %s", check.LastResultAt, secondAt)
+	if !state.LastResultAt.Equal(secondAt) {
+		t.Fatalf("check LastResultAt = %s, want %s", state.LastResultAt, secondAt)
 	}
 
-	quorum, err := recovered.QuorumSnapshot("check-a")
+	quorum, err := recovered.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot: %v", err)
 	}
@@ -168,16 +178,18 @@ func TestLoadRuntimeRestoresPersistedCurrentStateAndOpenIncident(t *testing.T) {
 
 func TestLoadRuntimeClearsPersistedVotesForProbesWithoutLiveness(t *testing.T) {
 	at := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
+	check := testRecoveryCheck("00000000-0000-0000-0000-000000000204", "check-a", "http", "https://a.example.com", 30)
+	checkID := check.ID
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
 		checks: []checks.Check{
-			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
+			check,
 		},
 		probes: []store.PersistedProbeState{
 			{ProbeID: "probe-a"},
 		},
 		checkStates: []store.PersistedCheckState{
 			{
-				CheckID:      "check-a",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: at,
 				LastOutcome:  "up",
@@ -201,18 +213,18 @@ func TestLoadRuntimeClearsPersistedVotesForProbesWithoutLiveness(t *testing.T) {
 		t.Fatalf("LoadRuntime: %v", err)
 	}
 
-	check, err := recovered.CheckSnapshot("check-a", "probe-a")
+	state, err := recovered.CheckSnapshot(checkID, "probe-a")
 	if err != nil {
 		t.Fatalf("CheckSnapshot: %v", err)
 	}
-	if check.State != CheckStateMissing {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	if state.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", state.State, CheckStateMissing)
 	}
-	if check.LastOutcome != "" {
-		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
+	if state.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", state.LastOutcome)
 	}
 
-	quorum, err := recovered.QuorumSnapshot("check-a")
+	quorum, err := recovered.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot: %v", err)
 	}
@@ -223,16 +235,18 @@ func TestLoadRuntimeClearsPersistedVotesForProbesWithoutLiveness(t *testing.T) {
 
 func TestLoadRuntimeDoesNotCountPersistedMissingStateAsVote(t *testing.T) {
 	at := time.Date(2026, time.April, 8, 7, 0, 0, 0, time.UTC)
+	check := testRecoveryCheck("00000000-0000-0000-0000-000000000205", "check-a", "http", "https://a.example.com", 30)
+	checkID := check.ID
 	recovered, err := LoadRuntime(&fakeRecoveryStore{
 		checks: []checks.Check{
-			checks.NewCheck("check-a", "http", "https://a.example.com", "", 30),
+			check,
 		},
 		probes: []store.PersistedProbeState{
 			{ProbeID: "probe-a", LastSeenAt: &at},
 		},
 		checkStates: []store.PersistedCheckState{
 			{
-				CheckID:      "check-a",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: at,
 				LastOutcome:  "",
@@ -246,18 +260,18 @@ func TestLoadRuntimeDoesNotCountPersistedMissingStateAsVote(t *testing.T) {
 		t.Fatalf("LoadRuntime: %v", err)
 	}
 
-	check, err := recovered.CheckSnapshot("check-a", "probe-a")
+	state, err := recovered.CheckSnapshot(checkID, "probe-a")
 	if err != nil {
 		t.Fatalf("CheckSnapshot: %v", err)
 	}
-	if check.State != CheckStateMissing {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	if state.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want %q", state.State, CheckStateMissing)
 	}
-	if check.LastOutcome != "" {
-		t.Fatalf("last outcome = %q, want empty", check.LastOutcome)
+	if state.LastOutcome != "" {
+		t.Fatalf("last outcome = %q, want empty", state.LastOutcome)
 	}
 
-	quorum, err := recovered.QuorumSnapshot("check-a")
+	quorum, err := recovered.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot: %v", err)
 	}

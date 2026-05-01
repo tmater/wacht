@@ -19,14 +19,14 @@ def test_probe_degradation(server, mock, probes):
     server.wait_for_health()
     mock.set_state("up")
     token = server.login()
-    check_id = f"smoke-probe-degradation-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-probe-degradation-{uuid.uuid4().hex[:8]}"
     probe_stopped = False
     cleanup = CleanupScope()
 
     server.create_check(
         token,
         {
-            "id": check_id,
+            "name": check_name,
             "type": "http",
             "target": "http://mock:9090/http/state",
             "interval": 1,
@@ -39,7 +39,7 @@ def test_probe_degradation(server, mock, probes):
                 "probe degradation check to become healthy with all three probes online",
                 timeout_seconds=90,
                 interval_seconds=3,
-                fn=lambda: healthy_snapshot(server, token, check_id),
+                fn=lambda: healthy_snapshot(server, token, check_name),
             )
 
             probes.stop(DEGRADED_PROBE_ID)
@@ -49,7 +49,7 @@ def test_probe_degradation(server, mock, probes):
                 "probe-3 to show offline in /status while the check stays healthy",
                 timeout_seconds=140,
                 interval_seconds=5,
-                fn=lambda: degraded_snapshot(server, token, check_id),
+                fn=lambda: degraded_snapshot(server, token, check_name),
             )
 
             mock.set_state("down")
@@ -58,10 +58,10 @@ def test_probe_degradation(server, mock, probes):
                 "the remaining two probes to open one incident during the outage",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: open_incident_with_degraded_probe(server, token, check_id),
+                fn=lambda: open_incident_with_degraded_probe(server, token, check_name),
             )
 
-            assert_incident_stable(server, token, check_id, seconds=4)
+            assert_incident_stable(server, token, check_name, seconds=4)
 
             mock.set_state("up")
 
@@ -69,13 +69,13 @@ def test_probe_degradation(server, mock, probes):
                 "the remaining two probes to resolve the incident after recovery",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: resolved_incident_with_degraded_probe(server, token, check_id),
+                fn=lambda: resolved_incident_with_degraded_probe(server, token, check_name),
             )
 
             print(
                 json.dumps(
                     {
-                        "check_id": check_id,
+                        "check_name": check_name,
                         "degraded": degraded,
                         "opened": opened,
                         "resolved": resolved,
@@ -87,12 +87,12 @@ def test_probe_degradation(server, mock, probes):
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
         if probe_stopped:
             cleanup.run(f"restart {DEGRADED_PROBE_ID}", lambda: restore_probe(probes, DEGRADED_PROBE_ID))
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()
 
 
-def healthy_snapshot(server, token, check_id):
-    snapshot = status_snapshot(server, token, check_id)
+def healthy_snapshot(server, token, check_name):
+    snapshot = status_snapshot(server, token, check_name)
     check = snapshot["check"]
     if check is None:
         return None
@@ -111,8 +111,8 @@ def healthy_snapshot(server, token, check_id):
     return snapshot
 
 
-def degraded_snapshot(server, token, check_id):
-    snapshot = status_snapshot(server, token, check_id)
+def degraded_snapshot(server, token, check_name):
+    snapshot = status_snapshot(server, token, check_name)
     check = snapshot["check"]
     if check is None:
         return None
@@ -125,8 +125,8 @@ def degraded_snapshot(server, token, check_id):
     return snapshot
 
 
-def open_incident_with_degraded_probe(server, token, check_id):
-    snapshot = status_snapshot(server, token, check_id)
+def open_incident_with_degraded_probe(server, token, check_name):
+    snapshot = status_snapshot(server, token, check_name)
     check = snapshot["check"]
     if check is None:
         return None
@@ -137,7 +137,7 @@ def open_incident_with_degraded_probe(server, token, check_id):
     if not degraded_probe_visible(snapshot["probes"]):
         return None
 
-    incidents = incidents_for_check(server, token, check_id)
+    incidents = incidents_for_check(server, token, check_name)
     if len(incidents) != 1:
         return None
     if incidents[0].get("resolved_at") is not None:
@@ -146,8 +146,8 @@ def open_incident_with_degraded_probe(server, token, check_id):
     return {"status": check, "probes": list(snapshot["probes"].values()), "incidents": incidents}
 
 
-def resolved_incident_with_degraded_probe(server, token, check_id):
-    snapshot = status_snapshot(server, token, check_id)
+def resolved_incident_with_degraded_probe(server, token, check_name):
+    snapshot = status_snapshot(server, token, check_name)
     check = snapshot["check"]
     if check is None:
         return None
@@ -158,7 +158,7 @@ def resolved_incident_with_degraded_probe(server, token, check_id):
     if not degraded_probe_visible(snapshot["probes"]):
         return None
 
-    incidents = incidents_for_check(server, token, check_id)
+    incidents = incidents_for_check(server, token, check_name)
     if len(incidents) != 1:
         return None
     if incidents[0].get("resolved_at") is None:
@@ -186,19 +186,19 @@ def degraded_probe_visible(probes):
     return True
 
 
-def status_snapshot(server, token, check_id):
+def status_snapshot(server, token, check_name):
     status = server.get_status(token)
-    checks = {check["check_id"]: check for check in status.get("checks", [])}
+    checks = {check["check_name"]: check for check in status.get("checks", [])}
     probes = {probe["probe_id"]: probe for probe in status.get("probes", [])}
-    return {"check": checks.get(check_id), "probes": probes}
+    return {"check": checks.get(check_name), "probes": probes}
 
 
-def assert_incident_stable(server, token, check_id, seconds):
+def assert_incident_stable(server, token, check_name, seconds):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        opened = open_incident_with_degraded_probe(server, token, check_id)
+        opened = open_incident_with_degraded_probe(server, token, check_name)
         if opened is None:
-            raise SmokeError(f"expected exactly 1 open incident for degraded-probe check {check_id} while down")
+            raise SmokeError(f"expected exactly 1 open incident for degraded-probe check {check_name} while down")
         time.sleep(1)
 
 

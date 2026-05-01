@@ -12,16 +12,16 @@ seed_user:
   email: dev@wacht.local
   password: devpassword
 checks:
-  - id: check-up
+  - name: check-up
     type: http
     target: http://mock:9090/up
-  - id: check-down
+  - name: check-down
     type: http
     target: http://mock:9090/down
     webhook: http://mock:9090/webhook
-  - id: check-flap
+  - name: check-flap
     type: http
     target: http://mock:9090/flap
-  - id: check-slow
+  - name: check-slow
     type: http
     target: http://mock:9090/slow

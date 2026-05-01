@@ -21,9 +21,9 @@ def test_flapping(server, mock):
     server.wait_for_health()
     mock.clear_webhooks()
     token = server.login()
-    check_id = f"smoke-flapping-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-flapping-{uuid.uuid4().hex[:8]}"
     payload = {
-        "id": check_id,
+        "name": check_name,
         "type": "http",
         "target": "http://mock:9090/flap",
         "webhook": "http://mock:9090/webhook",
@@ -38,42 +38,42 @@ def test_flapping(server, mock):
                 "flapping check to receive its first probe result",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: status_for_check(server, token, check_id),
+                fn=lambda: status_for_check(server, token, check_name),
             )
 
-            snapshot = assert_no_alerts_during_flapping(server, mock, token, check_id, seconds=OBSERVATION_SECONDS)
+            snapshot = assert_no_alerts_during_flapping(server, mock, token, check_name, seconds=OBSERVATION_SECONDS)
 
             print(json.dumps(snapshot, indent=2))
     finally:
         cleanup.run("clear mock webhooks", mock.clear_webhooks)
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()
 
 
-def assert_no_alerts_during_flapping(server, mock, token, check_id, seconds):
+def assert_no_alerts_during_flapping(server, mock, token, check_name, seconds):
     deadline = time.monotonic() + seconds
     status_checks = 0
 
     while time.monotonic() < deadline:
         status_checks += 1
-        status = status_for_check(server, token, check_id)
+        status = status_for_check(server, token, check_name)
         if status is None:
-            raise SmokeError(f"flapping check {check_id} disappeared from /status")
+            raise SmokeError(f"flapping check {check_name} disappeared from /status")
         if status.get("incident_since") is not None:
-            raise SmokeError(f"expected no open incident for flapping check {check_id}, got {status}")
+            raise SmokeError(f"expected no open incident for flapping check {check_name}, got {status}")
 
-        incidents = incidents_for_check(server, token, check_id)
+        incidents = incidents_for_check(server, token, check_name)
         if incidents:
-            raise SmokeError(f"expected no incident rows for flapping check {check_id}, got {incidents}")
+            raise SmokeError(f"expected no incident rows for flapping check {check_name}, got {incidents}")
 
-        deliveries = deliveries_for_check(mock, check_id)
+        deliveries = deliveries_for_check(mock, check_name)
         if deliveries:
-            raise SmokeError(f"expected 0 webhook deliveries for flapping check {check_id}, got {deliveries}")
+            raise SmokeError(f"expected 0 webhook deliveries for flapping check {check_name}, got {deliveries}")
 
         time.sleep(1)
 
     return {
-        "check_id": check_id,
+        "check_name": check_name,
         "observation_seconds": seconds,
         "status_checks": status_checks,
         "webhook_deliveries": 0,

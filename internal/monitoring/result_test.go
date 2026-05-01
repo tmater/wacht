@@ -11,18 +11,9 @@ import (
 )
 
 type fakeResultStore struct {
-	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
 	persistMonitoringBatchFn func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error)
 	persistedWrites          []store.MonitoringWrite
 	persistedBatches         [][]store.MonitoringWrite
-}
-
-func (f *fakeResultStore) PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error) {
-	f.persistedWrites = append(f.persistedWrites, write)
-	if f.persistMonitoringWriteFn != nil {
-		return f.persistMonitoringWriteFn(write)
-	}
-	return write, nil
 }
 
 func (f *fakeResultStore) PersistMonitoringBatch(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
@@ -35,11 +26,26 @@ func (f *fakeResultStore) PersistMonitoringBatch(writes []store.MonitoringWrite)
 	return batch, nil
 }
 
+func testObservedCheck(checkID, id, checkType, target, webhook string, interval int) checks.Check {
+	check := checks.NewCheck(id, checkType, target, webhook, interval)
+	check.ID = checkID
+	return check
+}
+
+func applyResultForTest(runtime *Runtime, st *fakeResultStore, check checks.Check, result proto.CheckResult) error {
+	return ApplyResultBatch(runtime, st, []ObservedResult{
+		{
+			Check:  check,
+			Result: result,
+		},
+	})
+}
+
 func applyResultSequence(t *testing.T, runtime *Runtime, st *fakeResultStore, check checks.Check, results []proto.CheckResult) {
 	t.Helper()
 	for _, result := range results {
-		if err := ApplyResult(runtime, st, check, result); err != nil {
-			t.Fatalf("ApplyResult(%+v) error = %v", result, err)
+		if err := applyResultForTest(runtime, st, check, result); err != nil {
+			t.Fatalf("apply result %+v: %v", result, err)
 		}
 	}
 }
@@ -47,16 +53,18 @@ func applyResultSequence(t *testing.T, runtime *Runtime, st *fakeResultStore, ch
 func TestApplyResultRollsBackRuntimeWhenPersistFails(t *testing.T) {
 	persistErr := errors.New("persist failed")
 	st := &fakeResultStore{
-		persistMonitoringWriteFn: func(write store.MonitoringWrite) (store.MonitoringWrite, error) {
-			return store.MonitoringWrite{}, persistErr
+		persistMonitoringBatchFn: func(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error) {
+			return nil, persistErr
 		},
 	}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000101", "check-a", "http", "https://example.com", "", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
-	err := ApplyResult(runtime, st, check, proto.CheckResult{
-		CheckID:   "check-a",
+	err := applyResultForTest(runtime, st, check, proto.CheckResult{
+		CheckID:   checkID,
+		CheckName: "check-a",
 		ProbeID:   "probe-a",
 		Up:        false,
 		Error:     "timeout",
@@ -65,10 +73,10 @@ func TestApplyResultRollsBackRuntimeWhenPersistFails(t *testing.T) {
 		Target:    check.Target,
 	})
 	if !errors.Is(err, persistErr) {
-		t.Fatalf("ApplyResult() error = %v, want %v", err, persistErr)
+		t.Fatalf("apply result error = %v, want %v", err, persistErr)
 	}
 
-	exec, err := runtime.CheckSnapshot("check-a", "probe-a")
+	exec, err := runtime.CheckSnapshot(checkID, "probe-a")
 	if err != nil {
 		t.Fatalf("CheckSnapshot() error = %v", err)
 	}
@@ -82,7 +90,7 @@ func TestApplyResultRollsBackRuntimeWhenPersistFails(t *testing.T) {
 		t.Fatalf("last result at = %v, want zero", exec.LastResultAt)
 	}
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -96,19 +104,20 @@ func TestApplyResultRollsBackRuntimeWhenPersistFails(t *testing.T) {
 
 func TestApplyResultDoesNotResolveWithoutOpenIncident(t *testing.T) {
 	st := &fakeResultStore{}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000102", "check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
 	results := []proto.CheckResult{
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(2 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(3 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(4 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(5 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(6 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(7 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(2 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(3 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(4 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(5 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(6 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(7 * time.Second)},
 	}
 	applyResultSequence(t, runtime, st, check, results)
 
@@ -125,7 +134,7 @@ func TestApplyResultDoesNotResolveWithoutOpenIncident(t *testing.T) {
 		t.Fatal("ResolveIncident = true, want false")
 	}
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -139,43 +148,52 @@ func TestApplyResultDoesNotResolveWithoutOpenIncident(t *testing.T) {
 
 func TestApplyResultResolvesExistingIncident(t *testing.T) {
 	st := &fakeResultStore{}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000103", "check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
 	results := []proto.CheckResult{
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(2 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(3 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(4 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(5 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(6 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(7 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(8 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(9 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(10 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(11 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(2 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(3 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(4 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(5 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(6 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(7 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(8 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(9 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(10 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(11 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(12 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(13 * time.Second)},
 	}
 	applyResultSequence(t, runtime, st, check, results)
 
-	openWrite := st.persistedWrites[7]
-	if openWrite.IncidentCheckID != "check-a" {
-		t.Fatalf("open IncidentCheckID = %q, want check-a", openWrite.IncidentCheckID)
+	var openWrite store.MonitoringWrite
+	for _, write := range st.persistedWrites {
+		if write.IncidentCheckID != "" && !write.ResolveIncident {
+			openWrite = write
+			break
+		}
+	}
+	if openWrite.IncidentCheckID != checkID {
+		t.Fatalf("open IncidentCheckID = %q, want %s", openWrite.IncidentCheckID, checkID)
 	}
 	if openWrite.ResolveIncident {
 		t.Fatal("open ResolveIncident = true, want false")
 	}
 
 	resolveWrite := st.persistedWrites[len(st.persistedWrites)-1]
-	if resolveWrite.IncidentCheckID != "check-a" {
-		t.Fatalf("resolve IncidentCheckID = %q, want check-a", resolveWrite.IncidentCheckID)
+	if resolveWrite.IncidentCheckID != checkID {
+		t.Fatalf("resolve IncidentCheckID = %q, want %s", resolveWrite.IncidentCheckID, checkID)
 	}
 	if !resolveWrite.ResolveIncident {
 		t.Fatal("ResolveIncident = false, want true")
 	}
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -189,21 +207,25 @@ func TestApplyResultResolvesExistingIncident(t *testing.T) {
 
 func TestApplyResultOpensIncidentAfterInitialHealthyBaseline(t *testing.T) {
 	st := &fakeResultStore{}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000104", "check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
 	results := []proto.CheckResult{
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(2 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(3 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(4 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(5 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(2 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(3 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(4 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(5 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(6 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(7 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at.Add(8 * time.Second)},
 	}
 	applyResultSequence(t, runtime, st, check, results)
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -215,8 +237,8 @@ func TestApplyResultOpensIncidentAfterInitialHealthyBaseline(t *testing.T) {
 	}
 
 	openWrite := st.persistedWrites[len(st.persistedWrites)-1]
-	if openWrite.IncidentCheckID != "check-a" {
-		t.Fatalf("IncidentCheckID = %q, want check-a", openWrite.IncidentCheckID)
+	if openWrite.IncidentCheckID != checkID {
+		t.Fatalf("IncidentCheckID = %q, want %s", openWrite.IncidentCheckID, checkID)
 	}
 	if openWrite.ResolveIncident {
 		t.Fatal("ResolveIncident = true, want false")
@@ -225,17 +247,18 @@ func TestApplyResultOpensIncidentAfterInitialHealthyBaseline(t *testing.T) {
 
 func TestApplyResultDoesNotOpenIncidentDuringFlapping(t *testing.T) {
 	st := &fakeResultStore{}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b", "probe-c"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000105", "check-a", "http", "https://example.com", "https://hooks.example.com/wacht", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b", "probe-c"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
 	results := []proto.CheckResult{
-		{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-c", Up: false, Error: "timeout", Timestamp: at.Add(2 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(3 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(4 * time.Second)},
-		{CheckID: "check-a", ProbeID: "probe-c", Up: true, Timestamp: at.Add(5 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-c", Up: false, Error: "timeout", Timestamp: at.Add(2 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at.Add(3 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(4 * time.Second)},
+		{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-c", Up: true, Timestamp: at.Add(5 * time.Second)},
 	}
 	applyResultSequence(t, runtime, st, check, results)
 
@@ -245,7 +268,7 @@ func TestApplyResultDoesNotOpenIncidentDuringFlapping(t *testing.T) {
 		}
 	}
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -259,18 +282,19 @@ func TestApplyResultDoesNotOpenIncidentDuringFlapping(t *testing.T) {
 
 func TestApplyResultBatchPersistsMultipleWritesInSingleBatch(t *testing.T) {
 	st := &fakeResultStore{}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000106", "check-a", "http", "https://example.com", "", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
 	err := ApplyResultBatch(runtime, st, []ObservedResult{
 		{
 			Check:  check,
-			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
+			Result: proto.CheckResult{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: true, Timestamp: at},
 		},
 		{
 			Check:  check,
-			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
+			Result: proto.CheckResult{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: true, Timestamp: at.Add(time.Second)},
 		},
 	})
 	if err != nil {
@@ -283,7 +307,7 @@ func TestApplyResultBatchPersistsMultipleWritesInSingleBatch(t *testing.T) {
 		t.Fatalf("batch writes = %d, want 2", len(st.persistedBatches[0]))
 	}
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
@@ -299,25 +323,26 @@ func TestApplyResultBatchRollsBackRuntimeWhenBatchPersistFails(t *testing.T) {
 			return nil, persistErr
 		},
 	}
-	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a", "probe-b"})
-	check := checks.NewCheck("check-a", "http", "https://example.com", "", 30)
+	check := testObservedCheck("00000000-0000-0000-0000-000000000107", "check-a", "http", "https://example.com", "", 30)
+	checkID := check.ID
+	runtime := NewRuntime([]string{checkID}, []string{"probe-a", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 
 	err := ApplyResultBatch(runtime, st, []ObservedResult{
 		{
 			Check:  check,
-			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
+			Result: proto.CheckResult{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-a", Up: false, Error: "timeout", Timestamp: at},
 		},
 		{
 			Check:  check,
-			Result: proto.CheckResult{CheckID: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(time.Second)},
+			Result: proto.CheckResult{CheckID: checkID, CheckName: "check-a", ProbeID: "probe-b", Up: false, Error: "timeout", Timestamp: at.Add(time.Second)},
 		},
 	})
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("ApplyResultBatch() error = %v, want %v", err, persistErr)
 	}
 
-	exec, err := runtime.CheckSnapshot("check-a", "probe-a")
+	exec, err := runtime.CheckSnapshot(checkID, "probe-a")
 	if err != nil {
 		t.Fatalf("CheckSnapshot() error = %v", err)
 	}
@@ -328,7 +353,7 @@ func TestApplyResultBatchRollsBackRuntimeWhenBatchPersistFails(t *testing.T) {
 		t.Fatalf("streak = %d, want 0", exec.StreakLen)
 	}
 
-	quorum, err := runtime.QuorumSnapshot("check-a")
+	quorum, err := runtime.QuorumSnapshot(checkID)
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}

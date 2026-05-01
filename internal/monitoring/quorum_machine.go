@@ -140,14 +140,19 @@ func (m *QuorumMachine) Recompute() QuorumTransition {
 	switch {
 	case len(m.checks) > 0 && upVotes >= required:
 		next.State = QuorumStateUp
-		next.LastStableState = QuorumStateUp
 	case len(m.checks) > 0 && downVotes >= required:
 		next.State = QuorumStateDown
-		next.LastStableState = QuorumStateDown
 	case current.LastStableState == "":
 		next.State = QuorumStatePending
 	default:
 		next.State = QuorumStateError
+	}
+
+	// Promote stable up/down only after the aggregate quorum repeats on two
+	// consecutive recomputes. This prevents asynchronous probes sampling a
+	// globally flapping target from synthesizing a stable incident transition.
+	if isStableQuorumState(next.State) && (current.LastStableState == next.State || current.State == next.State) {
+		next.LastStableState = next.State
 	}
 
 	switch {
@@ -163,6 +168,10 @@ func (m *QuorumMachine) Recompute() QuorumTransition {
 		To:              next.State,
 		LastStableState: next.LastStableState,
 	}
+}
+
+func isStableQuorumState(state QuorumState) bool {
+	return state == QuorumStateUp || state == QuorumStateDown
 }
 
 // quorumContribution maps one child check runtime to the vote it should cast

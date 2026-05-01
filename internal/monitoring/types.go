@@ -21,11 +21,6 @@ const (
 	CheckStateError   CheckState = "error"
 )
 
-// CountsAsVote reports whether the per-probe check state contributes to quorum.
-func (s CheckState) CountsAsVote() bool {
-	return s == CheckStateUp || s == CheckStateDown
-}
-
 // QuorumState is the aggregate state of a check.
 type QuorumState string
 

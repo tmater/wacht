@@ -11,7 +11,7 @@ import (
 
 type fakeSweeperStore struct {
 	persistMonitoringWriteFn func(write store.MonitoringWrite) (store.MonitoringWrite, error)
-	getCheckFn               func(id string) (*checks.Check, error)
+	getCheckByCheckIDFn      func(checkID string) (*checks.Check, error)
 	persistedWrites          []store.MonitoringWrite
 }
 
@@ -23,9 +23,9 @@ func (f *fakeSweeperStore) PersistMonitoringWrite(write store.MonitoringWrite) (
 	return write, nil
 }
 
-func (f *fakeSweeperStore) GetCheck(id string) (*checks.Check, error) {
-	if f.getCheckFn != nil {
-		return f.getCheckFn(id)
+func (f *fakeSweeperStore) GetCheckByID(checkID string) (*checks.Check, error) {
+	if f.getCheckByCheckIDFn != nil {
+		return f.getCheckByCheckIDFn(checkID)
 	}
 	return nil, nil
 }

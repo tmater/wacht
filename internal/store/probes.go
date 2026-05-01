@@ -125,31 +125,6 @@ func (s *Store) RegisterProbe(probeID, version string) error {
 	return err
 }
 
-// ActiveProbeIDs returns all active probe IDs ordered for deterministic
-// runtime bootstrap.
-func (s *Store) ActiveProbeIDs() ([]string, error) {
-	rows, err := s.db.Query(`
-		SELECT probe_id
-		FROM probes
-		WHERE status = 'active'
-		ORDER BY probe_id
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var probeIDs []string
-	for rows.Next() {
-		var probeID string
-		if err := rows.Scan(&probeID); err != nil {
-			return nil, err
-		}
-		probeIDs = append(probeIDs, probeID)
-	}
-	return probeIDs, rows.Err()
-}
-
 // updateProbeHeartbeatTx refreshes a probe's persisted last-seen metadata
 // inside an existing transaction.
 func updateProbeHeartbeatTx(tx *sql.Tx, probeID string, at time.Time) (time.Time, error) {

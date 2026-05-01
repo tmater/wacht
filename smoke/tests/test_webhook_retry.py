@@ -17,9 +17,9 @@ def test_webhook_retry(server, mock):
     mock.clear_webhooks()
     mock.configure_webhook(fail_next=1)
     token = server.login()
-    check_id = f"smoke-webhook-retry-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-webhook-retry-{uuid.uuid4().hex[:8]}"
     payload = {
-        "id": check_id,
+        "name": check_name,
         "type": "http",
         "target": "http://mock:9090/http/state",
         "webhook": "http://mock:9090/webhook",
@@ -34,11 +34,11 @@ def test_webhook_retry(server, mock):
                 "webhook retry check to become healthy before the outage",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: healthy_status(server, token, check_id),
+                fn=lambda: healthy_status(server, token, check_name),
             )
 
-            if deliveries_for_check(mock, check_id):
-                raise SmokeError(f"expected 0 webhook deliveries before outage for {check_id}")
+            if deliveries_for_check(mock, check_name):
+                raise SmokeError(f"expected 0 webhook deliveries before outage for {check_name}")
 
             mock.set_state("down")
 
@@ -46,17 +46,17 @@ def test_webhook_retry(server, mock):
                 "real probes to open an incident for the webhook retry scenario",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: open_incident(server, token, check_id),
+                fn=lambda: open_incident(server, token, check_name),
             )
 
             delivered = wait_for(
                 "webhook retry delivery to succeed after one forced failure",
                 timeout_seconds=45,
                 interval_seconds=2,
-                fn=lambda: delivered_down_notification(server, mock, token, check_id),
+                fn=lambda: delivered_down_notification(server, mock, token, check_name),
             )
 
-            assert_deliveries_stable(mock, check_id, expected=1, statuses=["down"], seconds=4)
+            assert_deliveries_stable(mock, check_name, expected=1, statuses=["down"], seconds=4)
 
             print(
                 json.dumps(
@@ -71,18 +71,18 @@ def test_webhook_retry(server, mock):
         cleanup.run("reset webhook control", lambda: mock.configure_webhook(fail_next=0))
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
         cleanup.run("clear mock webhooks", mock.clear_webhooks)
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()
 
 
-def delivered_down_notification(server, mock, token, check_id):
-    deliveries = deliveries_for_check(mock, check_id)
+def delivered_down_notification(server, mock, token, check_name):
+    deliveries = deliveries_for_check(mock, check_name)
     if len(deliveries) != 1:
         return None
     if deliveries[0].get("status") != "down":
         return None
 
-    incidents = incidents_for_check(server, token, check_id)
+    incidents = incidents_for_check(server, token, check_name)
     if len(incidents) != 1:
         return None
 

@@ -15,6 +15,7 @@ type statusViewStore interface {
 
 type statusCheckDTO struct {
 	CheckID       string  `json:"check_id"`
+	CheckName     string  `json:"check_name"`
 	Target        string  `json:"target,omitempty"`
 	Status        string  `json:"status"`
 	IncidentSince *string `json:"incident_since,omitempty"`
@@ -46,16 +47,17 @@ func buildAuthenticatedStatusResponse(runtime *monitoring.Runtime, st statusView
 		checkIDs = append(checkIDs, view.CheckID)
 	}
 
-	quorumByCheck := make(map[string]monitoring.CheckQuorumState, len(checkIDs))
+	quorumByCheckID := make(map[string]monitoring.CheckQuorumState, len(checkIDs))
 	for _, quorum := range runtime.QuorumSnapshots(checkIDs) {
-		quorumByCheck[quorum.CheckID] = quorum
+		quorumByCheckID[quorum.CheckID] = quorum
 	}
 
 	checks := make([]statusCheckDTO, 0, len(views))
 	for _, view := range views {
-		quorum := quorumByCheck[view.CheckID]
+		quorum := quorumByCheckID[view.CheckID]
 		checks = append(checks, statusCheckDTO{
 			CheckID:       view.CheckID,
+			CheckName:     view.CheckName,
 			Target:        view.Target,
 			Status:        string(quorum.State),
 			IncidentSince: formatOptionalTimestamp(view.IncidentSince),
@@ -98,16 +100,17 @@ func buildPublicStatusResponse(runtime *monitoring.Runtime, st statusViewStore, 
 		checkIDs = append(checkIDs, view.CheckID)
 	}
 
-	quorumByCheck := make(map[string]monitoring.CheckQuorumState, len(checkIDs))
+	quorumByCheckID := make(map[string]monitoring.CheckQuorumState, len(checkIDs))
 	for _, quorum := range runtime.QuorumSnapshots(checkIDs) {
-		quorumByCheck[quorum.CheckID] = quorum
+		quorumByCheckID[quorum.CheckID] = quorum
 	}
 
 	checks := make([]statusCheckDTO, 0, len(views))
 	for _, view := range views {
-		quorum := quorumByCheck[view.CheckID]
+		quorum := quorumByCheckID[view.CheckID]
 		checks = append(checks, statusCheckDTO{
 			CheckID:       view.CheckID,
+			CheckName:     view.CheckName,
 			Status:        string(quorum.State),
 			IncidentSince: formatOptionalTimestamp(view.IncidentSince),
 		})

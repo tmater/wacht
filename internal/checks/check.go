@@ -24,16 +24,17 @@ const (
 
 // Check is the canonical definition of a monitored check after normalization.
 type Check struct {
-	ID       string `json:"id" yaml:"id"`
+	ID       string `json:"id,omitempty" yaml:"-"`
+	Name     string `json:"name" yaml:"name"`
 	Type     Type   `json:"type" yaml:"type"`
 	Target   string `json:"target" yaml:"target"`
 	Webhook  string `json:"webhook" yaml:"webhook"`
 	Interval int    `json:"interval" yaml:"interval"`
 }
 
-func NewCheck(id, checkType, target, webhook string, interval int) Check {
+func NewCheck(name, checkType, target, webhook string, interval int) Check {
 	return Check{
-		ID:       id,
+		Name:     name,
 		Type:     Type(checkType),
 		Target:   target,
 		Webhook:  webhook,
@@ -43,7 +44,7 @@ func NewCheck(id, checkType, target, webhook string, interval int) Check {
 
 // Normalize trims user input, canonicalizes the type, and applies defaults.
 func (c Check) Normalize() Check {
-	c.ID = strings.TrimSpace(c.ID)
+	c.Name = strings.TrimSpace(c.Name)
 	c.Type = Type(network.NormalizeCheckType(string(c.Type)))
 	c.Target = strings.TrimSpace(c.Target)
 	c.Webhook = strings.TrimSpace(c.Webhook)
@@ -55,11 +56,11 @@ func (c Check) Normalize() Check {
 
 // NormalizeAndValidate returns the canonical form of the check or an error when
 // the definition is invalid under the given outbound target policy.
-func (c Check) NormalizeAndValidate(ctx context.Context, policy network.Policy, requireID bool) (Check, error) {
+func (c Check) NormalizeAndValidate(ctx context.Context, policy network.Policy, requireName bool) (Check, error) {
 	c = c.Normalize()
 
-	if requireID && c.ID == "" {
-		return Check{}, fmt.Errorf("id is required")
+	if requireName && c.Name == "" {
+		return Check{}, fmt.Errorf("name is required")
 	}
 	if c.Target == "" {
 		return Check{}, fmt.Errorf("target is required")
