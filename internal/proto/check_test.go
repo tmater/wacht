@@ -8,7 +8,8 @@ import (
 
 func TestProbeCheckJSONOmitsWebhookField(t *testing.T) {
 	body, err := json.Marshal(ProbeCheck{
-		ID:       "check-1",
+		ID:       "00000000-0000-0000-0000-000000000101",
+		Name:     "check-1",
 		Type:     "http",
 		Target:   "https://example.com",
 		Interval: 45,

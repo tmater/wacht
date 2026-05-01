@@ -99,7 +99,7 @@ export default function IncidentRow({ incident }) {
 
   return (
     <div className="flex items-center gap-4 py-2">
-      <p className="font-mono text-sm text-gray-300 w-30 shrink-0 truncate">{incident.check_id}</p>
+      <p className="font-mono text-sm text-gray-300 w-30 shrink-0 truncate">{incident.check_name}</p>
       <div className="flex-1 min-w-0">
         <p className="text-xs text-gray-500 truncate">{started.toLocaleString()}</p>
       </div>

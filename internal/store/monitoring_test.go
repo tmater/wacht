@@ -20,16 +20,18 @@ func TestPersistMonitoringWriteUpsertsCheckStateAndListsRecoverySnapshots(t *tes
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	check, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
+	checkID := check.ID
 
 	firstAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	secondAt := firstAt.Add(2 * time.Minute)
 	if _, err := s.PersistMonitoringWrite(MonitoringWrite{
 		CheckStateWrites: []CheckStateWrite{
 			{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-b",
 				LastResultAt: secondAt,
 				LastOutcome:  "up",
@@ -38,7 +40,7 @@ func TestPersistMonitoringWriteUpsertsCheckStateAndListsRecoverySnapshots(t *tes
 				State:        "up",
 			},
 			{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: firstAt,
 				LastOutcome:  "down",
@@ -54,7 +56,7 @@ func TestPersistMonitoringWriteUpsertsCheckStateAndListsRecoverySnapshots(t *tes
 
 	if _, err := s.PersistMonitoringWrite(MonitoringWrite{
 		CheckStateWrites: []CheckStateWrite{{
-			CheckID:      "check-1",
+			CheckID:      checkID,
 			ProbeID:      "probe-a",
 			LastResultAt: secondAt,
 			LastOutcome:  "down",
@@ -106,14 +108,16 @@ func TestPersistMonitoringWriteCommitsCurrentStateAndIncidentAtomically(t *testi
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+	check, err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
+	checkID := check.ID
 
 	result, err := s.PersistMonitoringWrite(MonitoringWrite{
 		CheckStateWrites: []CheckStateWrite{
 			{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 				LastOutcome:  "down",
@@ -123,7 +127,7 @@ func TestPersistMonitoringWriteCommitsCurrentStateAndIncidentAtomically(t *testi
 				LastError:    "timeout",
 			},
 		},
-		IncidentCheckID: "check-1",
+		IncidentCheckID: checkID,
 		IncidentNotification: &NotificationRequest{
 			WebhookURL: "https://hooks.example.com/wacht",
 			Payload:    []byte(`{"status":"down"}`),
@@ -149,10 +153,10 @@ func TestPersistMonitoringWriteCommitsCurrentStateAndIncidentAtomically(t *testi
 	if err := s.db.QueryRow(`
 		SELECT COUNT(1)
 		FROM incidents i
-		JOIN checks c ON c.uid = i.check_uid
+		JOIN checks c ON c.id = i.check_id
 		WHERE c.id = $1
 		  AND i.resolved_at IS NULL
-	`, "check-1").Scan(&openIncidents); err != nil {
+	`, checkID).Scan(&openIncidents); err != nil {
 		t.Fatalf("count open incidents: %v", err)
 	}
 	if openIncidents != 1 {
@@ -163,8 +167,8 @@ func TestPersistMonitoringWriteCommitsCurrentStateAndIncidentAtomically(t *testi
 	if err != nil {
 		t.Fatalf("OpenIncidentCheckIDs: %v", err)
 	}
-	if len(checkIDs) != 1 || checkIDs[0] != "check-1" {
-		t.Fatalf("OpenIncidentCheckIDs = %#v, want [check-1]", checkIDs)
+	if len(checkIDs) != 1 || checkIDs[0] != checkID {
+		t.Fatalf("OpenIncidentCheckIDs = %#v, want [%s]", checkIDs, checkID)
 	}
 }
 
@@ -210,14 +214,16 @@ func TestPersistMonitoringWriteRollsBackOnInvalidIncidentAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	check, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
+	checkID := check.ID
 
 	_, err = s.PersistMonitoringWrite(MonitoringWrite{
 		CheckStateWrites: []CheckStateWrite{
 			{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 				LastOutcome:  "down",
@@ -284,7 +290,7 @@ func TestPersistMonitoringWriteRejectsIncompleteInputs(t *testing.T) {
 
 	_, err = s.PersistMonitoringWrite(MonitoringWrite{
 		CheckStateWrites: []CheckStateWrite{{
-			CheckID:      "check-1",
+			CheckID:      "not-a-uuid",
 			LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 			LastOutcome:  "up",
 			StreakLen:    1,
@@ -308,14 +314,16 @@ func TestPersistMonitoringWriteAllowsMissingCheckStateWithoutOutcome(t *testing.
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	check, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
+	checkID := check.ID
 
 	lastResultAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	if _, err := s.PersistMonitoringWrite(MonitoringWrite{
 		CheckStateWrites: []CheckStateWrite{{
-			CheckID:      "check-1",
+			CheckID:      checkID,
 			ProbeID:      "probe-a",
 			LastResultAt: lastResultAt,
 			StreakLen:    0,
@@ -363,15 +371,17 @@ func TestPersistMonitoringBatchCommitsMultipleWritesInOneTransaction(t *testing.
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	check, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
+	checkID := check.ID
 
 	at := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	writes, err := s.PersistMonitoringBatch([]MonitoringWrite{
 		{
 			CheckStateWrites: []CheckStateWrite{{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: at,
 				LastOutcome:  "up",
@@ -382,7 +392,7 @@ func TestPersistMonitoringBatchCommitsMultipleWritesInOneTransaction(t *testing.
 		},
 		{
 			CheckStateWrites: []CheckStateWrite{{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-b",
 				LastResultAt: at.Add(time.Second),
 				LastOutcome:  "down",
@@ -416,14 +426,16 @@ func TestPersistMonitoringBatchRollsBackAllWritesOnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	check, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
+	checkID := check.ID
 
 	_, err = s.PersistMonitoringBatch([]MonitoringWrite{
 		{
 			CheckStateWrites: []CheckStateWrite{{
-				CheckID:      "check-1",
+				CheckID:      checkID,
 				ProbeID:      "probe-a",
 				LastResultAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
 				LastOutcome:  "up",

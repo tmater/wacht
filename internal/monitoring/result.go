@@ -13,12 +13,6 @@ import (
 	"github.com/tmater/wacht/internal/store"
 )
 
-// resultStore is the persistence surface needed for runtime-owned result
-// ingestion.
-type resultStore interface {
-	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
-}
-
 type resultBatchStore interface {
 	PersistMonitoringBatch(writes []store.MonitoringWrite) ([]store.MonitoringWrite, error)
 }
@@ -27,19 +21,6 @@ type resultBatchStore interface {
 type ObservedResult struct {
 	Check  checks.Check
 	Result proto.CheckResult
-}
-
-// ApplyResult updates runtime-owned monitoring state and durably records the
-// resulting compact current-state row and any incident side effects.
-func ApplyResult(runtime *Runtime, st resultStore, check checks.Check, result proto.CheckResult) error {
-	if runtime == nil {
-		return fmt.Errorf("monitoring: runtime is required")
-	}
-	if st == nil {
-		return fmt.Errorf("monitoring: store is required")
-	}
-
-	return runtime.applyObservedResult(st, check, result)
 }
 
 // ApplyResultBatch updates runtime-owned monitoring state for one accepted
@@ -57,26 +38,6 @@ func ApplyResultBatch(runtime *Runtime, st resultBatchStore, observed []Observed
 	}
 
 	return runtime.applyObservedResultBatch(st, observed)
-}
-
-// applyObservedResult updates runtime-owned check state for one observed probe
-// result and durably records the resulting compact current-state row and any
-// incident side effects.
-func (r *Runtime) applyObservedResult(st resultStore, check checks.Check, result proto.CheckResult) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	write, rollback, err := r.applyObservedResultLocked(check, result)
-	if err != nil {
-		return err
-	}
-
-	if _, err := st.PersistMonitoringWrite(write); err != nil {
-		r.rollbackObservedResultsLocked([]observedResultRollback{rollback})
-		return err
-	}
-
-	return nil
 }
 
 func (r *Runtime) applyObservedResultBatch(st resultBatchStore, observed []ObservedResult) error {
@@ -114,20 +75,21 @@ type observedResultRollback struct {
 
 func (r *Runtime) applyObservedResultLocked(check checks.Check, result proto.CheckResult) (store.MonitoringWrite, observedResultRollback, error) {
 	expiresAt := evidenceExpiresAt(check, result.Timestamp)
+	checkID := check.ID
 
 	if _, ok := r.probes[result.ProbeID]; !ok {
 		return store.MonitoringWrite{}, observedResultRollback{}, ErrUnknownProbe
 	}
 
-	_, quorumExisted := r.quorums[check.ID]
-	quorum := r.ensureQuorumLocked(check.ID)
+	_, quorumExisted := r.quorums[checkID]
+	quorum := r.ensureQuorumLocked(checkID)
 	child, ok := quorum.checks[result.ProbeID]
 	if !ok {
 		return store.MonitoringWrite{}, observedResultRollback{}, ErrUnknownCheckAssignment
 	}
 
 	rollback := observedResultRollback{
-		CheckID:        check.ID,
+		CheckID:        checkID,
 		ProbeID:        result.ProbeID,
 		CreatedQuorum:  !quorumExisted,
 		PreviousCheck:  child.state,
@@ -150,7 +112,7 @@ func (r *Runtime) applyObservedResultLocked(check checks.Check, result proto.Che
 	write := store.MonitoringWrite{
 		CheckStateWrites: []store.CheckStateWrite{
 			{
-				CheckID:      check.ID,
+				CheckID:      checkID,
 				ProbeID:      result.ProbeID,
 				LastResultAt: child.state.LastResultAt,
 				LastOutcome:  string(child.state.LastOutcome),
@@ -260,6 +222,7 @@ func notificationRequest(check checks.Check, status string, quorum *QuorumMachin
 	probesDown, probesTotal := quorumCounts(quorum)
 	body, err := json.Marshal(alert.AlertPayload{
 		CheckID:     check.ID,
+		CheckName:   check.Name,
 		Target:      check.Target,
 		Status:      status,
 		ProbesDown:  probesDown,

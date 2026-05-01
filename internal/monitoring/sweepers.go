@@ -13,7 +13,7 @@ import (
 // probe and stale evidence sweepers.
 type sweeperStore interface {
 	PersistMonitoringWrite(write store.MonitoringWrite) (store.MonitoringWrite, error)
-	GetCheck(id string) (*checks.Check, error)
+	GetCheckByID(checkID string) (*checks.Check, error)
 }
 
 type probeSweepRollback struct {
@@ -168,7 +168,7 @@ func SweepChecks(runtime *Runtime, st sweeperStore, now time.Time) (int, error) 
 		}
 
 		if previousQuorum.LastStableState != update.Quorum.LastStableState {
-			checkDef, err := st.GetCheck(assignment.CheckID)
+			checkDef, err := st.GetCheckByID(assignment.CheckID)
 			if err != nil {
 				check.state = previousCheck
 				quorum.state = previousQuorum

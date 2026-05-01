@@ -98,7 +98,7 @@ func (s *Store) ActiveProbeStates() ([]PersistedProbeState, error) {
 // to rebuild runtime state after restart.
 func (s *Store) PersistedCheckStates() ([]PersistedCheckState, error) {
 	rows, err := s.db.Query(`
-		SELECT check_id, probe_id, last_result_at, last_outcome, streak_len, expires_at, state, last_error
+		SELECT check_id::text, probe_id, last_result_at, last_outcome, streak_len, expires_at, state, last_error
 		FROM check_probe_state
 		ORDER BY check_id, probe_id
 	`)
@@ -131,16 +131,17 @@ func (s *Store) PersistedCheckStates() ([]PersistedCheckState, error) {
 	return states, rows.Err()
 }
 
-// OpenIncidentCheckIDs returns active check IDs with unresolved incidents so
-// runtime recovery can restore incident-open semantics without replaying a log.
+// OpenIncidentCheckIDs returns active check IDs with unresolved
+// incidents so runtime recovery can restore incident-open semantics without
+// replaying a log.
 func (s *Store) OpenIncidentCheckIDs() ([]string, error) {
 	rows, err := s.db.Query(`
-		SELECT c.id
+		SELECT i.check_id::text
 		FROM incidents i
-		JOIN checks c ON c.uid = i.check_uid
+		JOIN checks c ON c.id = i.check_id
 		WHERE i.resolved_at IS NULL
 		  AND c.deleted_at IS NULL
-		ORDER BY c.id
+		ORDER BY i.check_id
 	`)
 	if err != nil {
 		return nil, err
@@ -274,6 +275,11 @@ func upsertCheckStateTx(tx *sql.Tx, state CheckStateWrite) (CheckStateWrite, err
 	if err != nil {
 		return CheckStateWrite{}, err
 	}
+	checkID, err := normalizeCheckID(state.CheckID)
+	if err != nil {
+		return CheckStateWrite{}, ErrInvalidMonitoringCheckStateWrite
+	}
+	state.CheckID = checkID
 
 	_, err = tx.Exec(`
 		INSERT INTO check_probe_state (
@@ -287,7 +293,7 @@ func upsertCheckStateTx(tx *sql.Tx, state CheckStateWrite) (CheckStateWrite, err
 		    expires_at = excluded.expires_at,
 		    state = excluded.state,
 		    last_error = excluded.last_error
-	`, state.CheckID, state.ProbeID, state.LastResultAt, state.LastOutcome, state.StreakLen, state.ExpiresAt, state.State, state.LastError)
+	`, checkID, state.ProbeID, state.LastResultAt, state.LastOutcome, state.StreakLen, state.ExpiresAt, state.State, state.LastError)
 	if err != nil {
 		return CheckStateWrite{}, err
 	}
@@ -322,12 +328,16 @@ func applyMonitoringIncidentTx(tx *sql.Tx, checkID string, resolve bool, request
 	if checkID == "" {
 		return false, nil
 	}
-
-	if resolve {
-		return resolveIncidentWithNotificationTx(tx, checkID, request, time.Now().UTC())
+	checkID, err := normalizeCheckID(checkID)
+	if err != nil {
+		return false, ErrInvalidMonitoringIncidentWrite
 	}
 
-	alreadyOpen, err := openIncidentWithNotificationTx(tx, checkID, request, time.Now().UTC())
+	if resolve {
+		return resolveIncidentWithNotificationByCheckIDTx(tx, checkID, request, time.Now().UTC())
+	}
+
+	alreadyOpen, err := openIncidentWithNotificationByCheckIDTx(tx, checkID, request, time.Now().UTC())
 	if err != nil {
 		return false, err
 	}
@@ -341,14 +351,4 @@ func normalizeTime(t time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return t.UTC()
-}
-
-// normalizeOptionalTime applies normalizeTime to optional timestamps.
-func normalizeOptionalTime(t *time.Time) *time.Time {
-	if t == nil {
-		return nil
-	}
-
-	normalized := t.UTC()
-	return &normalized
 }

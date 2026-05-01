@@ -77,7 +77,7 @@ export default function PublicStatusPage({ slug, appName = 'Wacht' }) {
             <div className={`${ui.card} divide-y divide-gray-700 px-4`}>
               {checks.map(check => (
                 <div key={check.check_id} className="flex items-center gap-4 py-3">
-                  <p className="min-w-0 flex-1 truncate font-mono text-sm text-gray-100">{check.check_id}</p>
+                  <p className="min-w-0 flex-1 truncate font-mono text-sm text-gray-100">{check.check_name}</p>
                   {check.incident_since && (
                     <p className="shrink-0 text-xs text-red-400">
                       {check.status === 'down' ? 'down since ' : 'incident since '}

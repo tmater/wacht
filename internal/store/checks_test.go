@@ -20,12 +20,15 @@ func TestSeedChecks_SkipsExisting(t *testing.T) {
 		t.Fatalf("SeedChecks second call: %v", err)
 	}
 
-	c, err := s.GetCheck("c1")
+	stored, err := s.ListAllChecks()
 	if err != nil {
-		t.Fatalf("GetCheck: %v", err)
+		t.Fatalf("ListAllChecks: %v", err)
 	}
-	if c.Target != "https://a.com" {
-		t.Errorf("expected original target to be preserved, got %q", c.Target)
+	if len(stored) != 1 {
+		t.Fatalf("ListAllChecks = %d rows, want 1", len(stored))
+	}
+	if stored[0].Target != "https://a.com" {
+		t.Errorf("expected original target to be preserved, got %q", stored[0].Target)
 	}
 }
 
@@ -38,7 +41,7 @@ func TestCheckCRUD(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	deleted, err := s.DeleteCheck("missing-check", user.ID)
+	deleted, _, err := s.DeleteCheck("missing-check", user.ID)
 	if err != nil {
 		t.Fatalf("DeleteCheck missing: %v", err)
 	}
@@ -48,12 +51,13 @@ func TestCheckCRUD(t *testing.T) {
 
 	// Create
 	c := testCheck("c1", "http", "https://example.com")
-	if err := s.CreateCheck(c, user.ID); err != nil {
+	created, err := s.CreateCheck(c, user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
 	// Get
-	got, err := s.GetCheck("c1")
+	got, err := s.GetCheckByName("c1", user.ID)
 	if err != nil {
 		t.Fatalf("GetCheck: %v", err)
 	}
@@ -76,20 +80,23 @@ func TestCheckCRUD(t *testing.T) {
 	if err := s.UpdateCheck(c, user.ID); err != nil {
 		t.Fatalf("UpdateCheck: %v", err)
 	}
-	got, _ = s.GetCheck("c1")
+	got, _ = s.GetCheckByName("c1", user.ID)
 	if got.Target != "https://updated.com" || got.Webhook != "https://hooks.example.com" {
 		t.Errorf("UpdateCheck: unexpected values %+v", got)
 	}
 
 	// Delete
-	deleted, err = s.DeleteCheck("c1", user.ID)
+	deleted, checkID, err := s.DeleteCheck("c1", user.ID)
 	if err != nil {
 		t.Fatalf("DeleteCheck: %v", err)
 	}
 	if !deleted {
 		t.Fatal("DeleteCheck = false, want true")
 	}
-	got, err = s.GetCheck("c1")
+	if checkID != created.ID {
+		t.Fatalf("DeleteCheck checkID = %q, want %q", checkID, created.ID)
+	}
+	got, err = s.GetCheckByName("c1", user.ID)
 	if err != nil {
 		t.Fatalf("GetCheck after delete: %v", err)
 	}
@@ -97,7 +104,7 @@ func TestCheckCRUD(t *testing.T) {
 		t.Errorf("expected nil after delete, got %+v", got)
 	}
 
-	deleted, err = s.DeleteCheck("c1", user.ID)
+	deleted, _, err = s.DeleteCheck("c1", user.ID)
 	if err != nil {
 		t.Fatalf("DeleteCheck second: %v", err)
 	}
@@ -119,7 +126,7 @@ func TestCheckCrossUserIsolation(t *testing.T) {
 	}
 
 	aliceCheck := testCheck("alice-check", "http", "https://alice.com")
-	if err := s.CreateCheck(aliceCheck, alice.ID); err != nil {
+	if _, err := s.CreateCheck(aliceCheck, alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
 
@@ -133,7 +140,7 @@ func TestCheckCrossUserIsolation(t *testing.T) {
 	}
 
 	// Bob must not be able to delete Alice's check.
-	deleted, err := s.DeleteCheck("alice-check", bob.ID)
+	deleted, _, err := s.DeleteCheck("alice-check", bob.ID)
 	if err != nil {
 		t.Fatalf("DeleteCheck returned error: %v", err)
 	}
@@ -141,12 +148,27 @@ func TestCheckCrossUserIsolation(t *testing.T) {
 		t.Fatal("DeleteCheck = true for non-owner, want false")
 	}
 	// Check must still exist.
-	got, err := s.GetCheck("alice-check")
+	got, err := s.GetCheckByName("alice-check", alice.ID)
 	if err != nil {
 		t.Fatalf("GetCheck: %v", err)
 	}
 	if got == nil {
 		t.Error("alice's check was deleted by bob")
+	}
+
+	if _, err := s.CreateCheck(testCheck("shared-name", "http", "https://alice-shared.example.com"), alice.ID); err != nil {
+		t.Fatalf("CreateCheck alice shared-name: %v", err)
+	}
+	if _, err := s.CreateCheck(testCheck("shared-name", "http", "https://bob-shared.example.com"), bob.ID); err != nil {
+		t.Fatalf("CreateCheck bob shared-name: %v", err)
+	}
+
+	bobChecks, err = s.ListChecks(bob.ID)
+	if err != nil {
+		t.Fatalf("ListChecks bob shared-name: %v", err)
+	}
+	if len(bobChecks) != 1 || bobChecks[0].Name != "shared-name" {
+		t.Fatalf("bob checks after shared-name = %#v, want one bob-owned shared-name", bobChecks)
 	}
 }
 
@@ -159,17 +181,19 @@ func TestCheckCRUD_PersistsCanonicalDefinition(t *testing.T) {
 	}
 
 	c := testCheckWithWebhook("c1", "http", "https://example.com", "https://hooks.example.com", 30)
-	if err := s.CreateCheck(c, user.ID); err != nil {
+	created, err := s.CreateCheck(c, user.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
-	got, err := s.GetCheck("c1")
+	got, err := s.GetCheckByName("c1", user.ID)
 	if err != nil {
 		t.Fatalf("GetCheck: %v", err)
 	}
 	if got == nil {
 		t.Fatal("GetCheck: expected check, got nil")
 	}
+	c.ID = created.ID
 	if *got != c {
 		t.Fatalf("GetCheck = %+v, want %+v", *got, c)
 	}
@@ -188,7 +212,8 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 	}
 
 	check := testCheckWithWebhook("reused-check", "http", "https://alice.example.com", "https://hooks.example.com/wacht", 30)
-	if err := s.CreateCheck(check, alice.ID); err != nil {
+	aliceCheck, err := s.CreateCheck(check, alice.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
 
@@ -199,36 +224,43 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 		t.Fatalf("OpenIncidentWithNotification: %v", err)
 	}
 
-	deleted, err := s.DeleteCheck("reused-check", alice.ID)
+	deleted, deletedID, err := s.DeleteCheck("reused-check", alice.ID)
 	if err != nil {
 		t.Fatalf("DeleteCheck alice: %v", err)
 	}
 	if !deleted {
 		t.Fatal("DeleteCheck = false, want true")
 	}
+	if deletedID != aliceCheck.ID {
+		t.Fatalf("DeleteCheck checkID = %q, want %q", deletedID, aliceCheck.ID)
+	}
 
 	var (
 		totalChecks   int
 		deletedChecks int
 	)
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM checks WHERE id = $1`, "reused-check").Scan(&totalChecks); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM checks WHERE name = $1`, "reused-check").Scan(&totalChecks); err != nil {
 		t.Fatalf("count checks: %v", err)
 	}
 	if totalChecks != 1 {
 		t.Fatalf("expected 1 historical check row after delete, got %d", totalChecks)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM checks WHERE id = $1 AND deleted_at IS NOT NULL`, "reused-check").Scan(&deletedChecks); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM checks WHERE name = $1 AND deleted_at IS NOT NULL`, "reused-check").Scan(&deletedChecks); err != nil {
 		t.Fatalf("count deleted checks: %v", err)
 	}
 	if deletedChecks != 1 {
 		t.Fatalf("expected deleted generation to be retained, got %d", deletedChecks)
 	}
 
-	if err := s.CreateCheck(testCheck("reused-check", "http", "https://bob.example.com"), bob.ID); err != nil {
+	bobCheck, err := s.CreateCheck(testCheck("reused-check", "http", "https://bob.example.com"), bob.ID)
+	if err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
+	if bobCheck.ID == aliceCheck.ID {
+		t.Fatal("expected recreated check to receive a fresh check ID")
+	}
 
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM checks WHERE id = $1`, "reused-check").Scan(&totalChecks); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM checks WHERE name = $1`, "reused-check").Scan(&totalChecks); err != nil {
 		t.Fatalf("count checks after recreate: %v", err)
 	}
 	if totalChecks != 2 {
@@ -242,8 +274,8 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 	if len(aliceIncidents) != 1 {
 		t.Fatalf("expected 1 preserved incident for alice, got %d", len(aliceIncidents))
 	}
-	if aliceIncidents[0].CheckID != "reused-check" {
-		t.Fatalf("expected preserved incident to keep reused-check id, got %s", aliceIncidents[0].CheckID)
+	if aliceIncidents[0].CheckName != "reused-check" {
+		t.Fatalf("expected preserved incident to keep reused-check name, got %s", aliceIncidents[0].CheckName)
 	}
 	if aliceIncidents[0].ResolvedAt == nil {
 		t.Fatal("expected delete to close the historical open incident")
@@ -267,8 +299,8 @@ func TestDeleteCheck_PreservesHistoryWithoutLeakingStateOnIDReuse(t *testing.T) 
 	if len(views) != 1 {
 		t.Fatalf("expected 1 recreated view, got %d", len(views))
 	}
-	if views[0].CheckID != "reused-check" {
-		t.Fatalf("expected reused-check view, got %s", views[0].CheckID)
+	if views[0].CheckName != "reused-check" {
+		t.Fatalf("expected reused-check view, got %s", views[0].CheckName)
 	}
 	if views[0].IncidentSince != nil {
 		t.Fatal("expected no stale incident timestamp after recreate")

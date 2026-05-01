@@ -48,10 +48,11 @@ export default function Dashboard({ onLogout, showProbes = true }) {
     return () => clearInterval(id)
   }, [onLogout])
 
-  async function handleDelete(id) {
-    if (!confirm(`Delete check "${id}"?`)) return
+  async function handleDelete(check) {
+    if (!check) return
+    if (!confirm(`Delete check "${check.name}"?`)) return
     try {
-      const res = await fetch(`${API_URL}/api/checks/${id}`, { method: 'DELETE', headers: authHeaders() })
+      const res = await fetch(`${API_URL}/api/checks/${encodeURIComponent(check.name)}`, { method: 'DELETE', headers: authHeaders() })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError)
     } catch (e) {
@@ -66,6 +67,7 @@ export default function Dashboard({ onLogout, showProbes = true }) {
   }
 
   const statusByID = Object.fromEntries(statuses.map(s => [s.check_id, s]))
+  const editingCheck = checks.find(c => c.id === editingId)
   const allUp = statuses.length > 0 && statuses.every(s => s.status === 'up')
   const downCount = statuses.filter(s => s.status === 'down').length
   const errorCount = statuses.filter(s => s.status === 'error').length
@@ -120,12 +122,12 @@ export default function Dashboard({ onLogout, showProbes = true }) {
             <CheckForm onSave={handleSaved} onCancel={() => setShowAddForm(false)} />
           )}
 
-          {editingId && (
+          {editingId && editingCheck && (
             <CheckForm
-              initial={checks.find(c => c.id === editingId)}
+              initial={editingCheck}
               onSave={handleSaved}
               onCancel={() => setEditingId(null)}
-              onDelete={() => handleDelete(editingId)}
+              onDelete={() => handleDelete(editingCheck)}
             />
           )}
 

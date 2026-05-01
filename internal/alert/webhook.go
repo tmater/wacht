@@ -10,6 +10,7 @@ import (
 // AlertPayload is the JSON body sent to a webhook URL on a state transition.
 type AlertPayload struct {
 	CheckID     string `json:"check_id"`
+	CheckName   string `json:"check_name"`
 	Target      string `json:"target"`
 	Status      string `json:"status"` // "down" or "up"
 	ProbesDown  int    `json:"probes_down"`

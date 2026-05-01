@@ -13,7 +13,7 @@ import (
 )
 
 // runningCheck tracks one live worker so reconcile can stop or replace it by
-// check ID instead of rebuilding the whole scheduler.
+// stable check ID instead of rebuilding the whole scheduler.
 type runningCheck struct {
 	check  proto.ProbeCheck
 	cancel context.CancelFunc
@@ -121,11 +121,13 @@ func runAndQueue(cfg *config.ProbeConfig, policy network.Policy, sink resultSink
 	case string(checks.CheckDNS):
 		result = checks.DNS(check.ID, cfg.ProbeID, check.Target, policy)
 	default:
-		slog.Default().Warn("unknown check type; skipping", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID, "check_type", check.Type)
+		slog.Default().Warn("unknown check type; skipping", "component", "probe", "check_id", check.ID, "check_name", check.Name, "probe_id", cfg.ProbeID, "check_type", check.Type)
 		return
 	}
+	result.CheckID = check.ID
+	result.CheckName = check.Name
 	if sink == nil {
-		slog.Default().Warn("result sink missing; dropping result", "component", "probe", "check_id", check.ID, "probe_id", cfg.ProbeID)
+		slog.Default().Warn("result sink missing; dropping result", "component", "probe", "check_id", check.ID, "check_name", check.Name, "probe_id", cfg.ProbeID)
 		return
 	}
 	sink.Enqueue(result)

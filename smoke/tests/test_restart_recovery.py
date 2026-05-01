@@ -22,13 +22,13 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
     mock.set_state("up")
     token = server.login()
     slug = public_status_slug(server, token)
-    check_id = f"smoke-restart-recovery-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-restart-recovery-{uuid.uuid4().hex[:8]}"
     cleanup = CleanupScope()
 
     server.create_check(
         token,
         {
-            "id": check_id,
+            "name": check_name,
             "type": "http",
             "target": "http://mock:9090/http/state",
             "interval": 1,
@@ -41,7 +41,7 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
                 "restart-recovery check to become healthy on authenticated and public status views",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: healthy_everywhere(server, token, slug, check_id),
+                fn=lambda: healthy_everywhere(server, token, slug, check_name),
             )
 
             mock.set_state("down")
@@ -50,7 +50,7 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
                 "restart-recovery outage to open one incident across authenticated and public status views",
                 timeout_seconds=60,
                 interval_seconds=2,
-                fn=lambda: open_incident_everywhere(server, token, slug, check_id),
+                fn=lambda: open_incident_everywhere(server, token, slug, check_name),
             )
 
             for probe_id in PROBE_IDS:
@@ -65,14 +65,14 @@ def test_restart_recovery_preserves_open_incident(server, mock, probes, stack):
                 "restarted server to keep the incident visible without fresh probe writes",
                 timeout_seconds=20,
                 interval_seconds=2,
-                fn=lambda: unresolved_incident_everywhere(server, token, slug, check_id),
+                fn=lambda: unresolved_incident_everywhere(server, token, slug, check_name),
             )
 
             print(json.dumps({"healthy": healthy, "opened": opened, "recovered": recovered}, indent=2))
     finally:
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
         cleanup.run("restart stopped probes", lambda: restore_stopped_probes(probes))
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()
 
 
@@ -85,13 +85,13 @@ def test_restart_recovery_expires_stale_runtime_on_boot(server, mock, probes, st
     mock.set_state("up")
     token = server.login()
     slug = public_status_slug(server, token)
-    check_id = f"smoke-restart-expiry-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-restart-expiry-{uuid.uuid4().hex[:8]}"
     cleanup = CleanupScope()
 
     server.create_check(
         token,
         {
-            "id": check_id,
+            "name": check_name,
             "type": "http",
             "target": "http://mock:9090/http/state",
             "interval": 1,
@@ -104,7 +104,7 @@ def test_restart_recovery_expires_stale_runtime_on_boot(server, mock, probes, st
                 "boot-expiry check to become healthy everywhere with all probes online before downtime",
                 timeout_seconds=90,
                 interval_seconds=3,
-                fn=lambda: healthy_everywhere(server, token, slug, check_id, require_seen_probes=True),
+                fn=lambda: healthy_everywhere(server, token, slug, check_name, require_seen_probes=True),
             )
 
             stack.stop_service("server")
@@ -121,14 +121,14 @@ def test_restart_recovery_expires_stale_runtime_on_boot(server, mock, probes, st
                 "boot sweeps to expire stale probes and check evidence before any fresh probe writes",
                 timeout_seconds=20,
                 interval_seconds=2,
-                fn=lambda: expired_runtime_everywhere(server, token, slug, check_id),
+                fn=lambda: expired_runtime_everywhere(server, token, slug, check_name),
             )
 
             print(json.dumps({"ready": ready, "expired": expired}, indent=2))
     finally:
         cleanup.run("restore mock HTTP state", lambda: mock.set_state("up"))
         cleanup.run("restart stopped probes", lambda: restore_stopped_probes(probes))
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()
 
 
@@ -140,8 +140,8 @@ def public_status_slug(server, token):
     return slug
 
 
-def healthy_everywhere(server, token, slug, check_id, require_seen_probes=False):
-    authenticated = status_for_check(server, token, check_id)
+def healthy_everywhere(server, token, slug, check_name, require_seen_probes=False):
+    authenticated = status_for_check(server, token, check_name)
     if authenticated is None:
         return None
     if authenticated.get("status") != "up":
@@ -149,7 +149,7 @@ def healthy_everywhere(server, token, slug, check_id, require_seen_probes=False)
     if authenticated.get("incident_since") is not None:
         return None
 
-    public = public_status_for_check(server, slug, check_id)
+    public = public_status_for_check(server, slug, check_name)
     if public is None:
         return None
     if public.get("status") != "up":
@@ -169,8 +169,8 @@ def healthy_everywhere(server, token, slug, check_id, require_seen_probes=False)
     return {**healthy, "probes": [probes[probe_id] for probe_id in PROBE_IDS]}
 
 
-def open_incident_everywhere(server, token, slug, check_id):
-    authenticated = status_for_check(server, token, check_id)
+def open_incident_everywhere(server, token, slug, check_name):
+    authenticated = status_for_check(server, token, check_name)
     if authenticated is None:
         return None
     if authenticated.get("status") != "down":
@@ -179,7 +179,7 @@ def open_incident_everywhere(server, token, slug, check_id):
     if incident_since is None:
         return None
 
-    public = public_status_for_check(server, slug, check_id)
+    public = public_status_for_check(server, slug, check_name)
     if public is None:
         return None
     if public.get("status") != "down":
@@ -187,7 +187,7 @@ def open_incident_everywhere(server, token, slug, check_id):
     if public.get("incident_since") != incident_since:
         return None
 
-    incidents = incidents_for_check(server, token, check_id)
+    incidents = incidents_for_check(server, token, check_name)
     if len(incidents) != 1:
         return None
     incident = incidents[0]
@@ -199,8 +199,8 @@ def open_incident_everywhere(server, token, slug, check_id):
     return {"status": authenticated, "public": public, "incidents": incidents}
 
 
-def unresolved_incident_everywhere(server, token, slug, check_id):
-    authenticated = status_for_check(server, token, check_id)
+def unresolved_incident_everywhere(server, token, slug, check_name):
+    authenticated = status_for_check(server, token, check_name)
     if authenticated is None:
         return None
     if authenticated.get("status") not in {"down", "error"}:
@@ -209,7 +209,7 @@ def unresolved_incident_everywhere(server, token, slug, check_id):
     if incident_since is None:
         return None
 
-    public = public_status_for_check(server, slug, check_id)
+    public = public_status_for_check(server, slug, check_name)
     if public is None:
         return None
     if public.get("status") != authenticated.get("status"):
@@ -217,7 +217,7 @@ def unresolved_incident_everywhere(server, token, slug, check_id):
     if public.get("incident_since") != incident_since:
         return None
 
-    incidents = incidents_for_check(server, token, check_id)
+    incidents = incidents_for_check(server, token, check_name)
     if len(incidents) != 1:
         return None
     incident = incidents[0]
@@ -229,8 +229,8 @@ def unresolved_incident_everywhere(server, token, slug, check_id):
     return {"status": authenticated, "public": public, "incidents": incidents}
 
 
-def expired_runtime_everywhere(server, token, slug, check_id):
-    authenticated = status_for_check(server, token, check_id)
+def expired_runtime_everywhere(server, token, slug, check_name):
+    authenticated = status_for_check(server, token, check_name)
     if authenticated is None:
         return None
     if authenticated.get("status") != "error":
@@ -238,7 +238,7 @@ def expired_runtime_everywhere(server, token, slug, check_id):
     if authenticated.get("incident_since") is not None:
         return None
 
-    public = public_status_for_check(server, slug, check_id)
+    public = public_status_for_check(server, slug, check_name)
     if public is None:
         return None
     if public.get("status") != "error":
@@ -258,7 +258,7 @@ def expired_runtime_everywhere(server, token, slug, check_id):
         if probe.get("last_seen_at") is None:
             return None
 
-    incidents = incidents_for_check(server, token, check_id)
+    incidents = incidents_for_check(server, token, check_name)
     if incidents:
         return None
 
@@ -269,9 +269,9 @@ def expired_runtime_everywhere(server, token, slug, check_id):
     }
 
 
-def public_status_for_check(server, slug, check_id):
+def public_status_for_check(server, slug, check_name):
     checks = server.get_public_status(slug).get("checks", [])
-    return next((check for check in checks if check.get("check_id") == check_id), None)
+    return next((check for check in checks if check.get("check_name") == check_name), None)
 
 
 def probes_by_id(server, token):

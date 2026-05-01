@@ -34,11 +34,11 @@ seed_user:
   email: admin@wacht.local
   password: changeme
 checks:
-  - id: my-site
+  - name: my-site
     type: http
     target: https://example.com
     webhook: https://hooks.example.com/your-webhook-url
-  - id: my-db
+  - name: my-db
     type: tcp
     target: db.example.com:5432
 ```
@@ -95,7 +95,8 @@ Webhook payload:
 
 ```json
 {
-  "check_id": "my-site",
+  "check_id": "550e8400-e29b-41d4-a716-446655440000",
+  "check_name": "my-site",
   "target": "https://example.com",
   "status": "down",
   "probes_down": 2,

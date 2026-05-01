@@ -182,14 +182,14 @@ class SmokeClient:
     def create_check(self, token, check):
         self.request("POST", "/api/checks", payload=check, headers=self.auth_headers(token), expected_status=(201,))
 
-    def delete_check(self, token, check_id):
-        encoded = urllib.parse.quote(check_id, safe="")
+    def delete_check(self, token, check_name):
+        encoded = urllib.parse.quote(check_name, safe="")
         self.request("DELETE", f"/api/checks/{encoded}", headers=self.auth_headers(token), expected_status=(204,))
 
-    def delete_check_if_present(self, token, check_id):
+    def delete_check_if_present(self, token, check_name):
         checks = self.list_checks(token)
-        if any(check.get("id") == check_id for check in checks):
-            self.delete_check(token, check_id)
+        if any(check.get("name") == check_name for check in checks):
+            self.delete_check(token, check_name)
 
     @staticmethod
     def auth_headers(token):

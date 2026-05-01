@@ -68,19 +68,72 @@ func newTestStore(t *testing.T) *Store {
 }
 
 func openIncidentForTest(s *Store, checkID string) (bool, error) {
-	return s.openIncidentWithNotification(checkID, nil)
+	return applyIncidentForTest(s, checkID, nil, false)
 }
 
 func openIncidentWithNotificationForTest(s *Store, checkID string, request *NotificationRequest) (bool, error) {
-	return s.openIncidentWithNotification(checkID, request)
+	return applyIncidentForTest(s, checkID, request, false)
 }
 
 func resolveIncidentForTest(s *Store, checkID string) (bool, error) {
-	return s.resolveIncidentWithNotification(checkID, nil)
+	return applyIncidentForTest(s, checkID, nil, true)
 }
 
 func resolveIncidentWithNotificationForTest(s *Store, checkID string, request *NotificationRequest) (bool, error) {
-	return s.resolveIncidentWithNotification(checkID, request)
+	return applyIncidentForTest(s, checkID, request, true)
+}
+
+func applyIncidentForTest(s *Store, nameOrCheckID string, request *NotificationRequest, resolve bool) (bool, error) {
+	checkID, found, err := lookupCheckIDForTest(s, nameOrCheckID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var changed bool
+	if resolve {
+		changed, err = resolveIncidentWithNotificationByCheckIDTx(tx, checkID, request, time.Now().UTC())
+	} else {
+		changed, err = openIncidentWithNotificationByCheckIDTx(tx, checkID, request, time.Now().UTC())
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+func lookupCheckIDForTest(s *Store, nameOrCheckID string) (string, bool, error) {
+	if checkID, err := normalizeCheckID(nameOrCheckID); err == nil {
+		return checkID, true, nil
+	}
+
+	var checkID string
+	err := s.db.QueryRow(`
+		SELECT id::text
+		FROM checks
+		WHERE name = $1
+		  AND deleted_at IS NULL
+		ORDER BY id
+		LIMIT 1
+	`, nameOrCheckID).Scan(&checkID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return checkID, true, nil
 }
 
 func TestOpenIncident_Deduplication(t *testing.T) {
@@ -90,7 +143,7 @@ func TestOpenIncident_Deduplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -118,7 +171,7 @@ func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -170,8 +223,8 @@ func TestOpenIncident_ConcurrentDeduplication(t *testing.T) {
 	if err := s.db.QueryRow(`
 		SELECT COUNT(1)
 		FROM incidents i
-		JOIN checks c ON c.uid = i.check_uid
-		WHERE c.id = $1
+		JOIN checks c ON c.id = i.check_id
+		WHERE c.name = $1
 		  AND c.deleted_at IS NULL
 		  AND i.resolved_at IS NULL
 	`, "check-1").Scan(&openCount); err != nil {
@@ -189,7 +242,7 @@ func TestResolveIncident_AllowsReopening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -232,7 +285,7 @@ func TestOpenIncidentWithNotification_CreatesDurableDownNotification(t *testing.
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -284,7 +337,7 @@ func TestResolveIncidentWithNotification_SupersedesPendingDownNotification(t *te
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -342,7 +395,7 @@ func TestMarkIncidentNotificationRetry_SupersedesDownAfterResolve(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -381,7 +434,7 @@ func TestMarkIncidentNotificationDelivered_DoesNotOverrideSupersededDownNotifica
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -438,10 +491,10 @@ func TestStatusCheckViews_ReturnAllChecksWithIncidentTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck down-check: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("pending-check", "http", "https://pending.example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("pending-check", "http", "https://pending.example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck pending-check: %v", err)
 	}
 
@@ -456,13 +509,13 @@ func TestStatusCheckViews_ReturnAllChecksWithIncidentTimestamps(t *testing.T) {
 	if len(views) != 2 {
 		t.Fatalf("expected 2 views, got %d", len(views))
 	}
-	if views[0].CheckID != "down-check" || views[0].Target != "https://down.example.com" {
+	if views[0].CheckName != "down-check" || views[0].Target != "https://down.example.com" {
 		t.Fatalf("views[0] = %#v, want down-check metadata", views[0])
 	}
 	if views[0].IncidentSince == nil {
 		t.Fatal("expected down-check incident timestamp")
 	}
-	if views[1].CheckID != "pending-check" || views[1].Target != "https://pending.example.com" {
+	if views[1].CheckName != "pending-check" || views[1].Target != "https://pending.example.com" {
 		t.Fatalf("views[1] = %#v, want pending-check metadata", views[1])
 	}
 	if views[1].IncidentSince != nil {
@@ -482,10 +535,10 @@ func TestStatusCheckViews_ScopedToUser(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	if err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
 	if _, err := openIncidentForTest(s, "bob-check"); err != nil {
@@ -499,8 +552,8 @@ func TestStatusCheckViews_ScopedToUser(t *testing.T) {
 	if len(aliceViews) != 1 {
 		t.Fatalf("expected 1 alice view, got %d", len(aliceViews))
 	}
-	if aliceViews[0].CheckID != "alice-check" {
-		t.Fatalf("expected alice-check, got %s", aliceViews[0].CheckID)
+	if aliceViews[0].CheckName != "alice-check" {
+		t.Fatalf("expected alice-check, got %s", aliceViews[0].CheckName)
 	}
 	if aliceViews[0].IncidentSince != nil {
 		t.Fatal("expected alice view to omit incident timestamp")
@@ -513,8 +566,8 @@ func TestStatusCheckViews_ScopedToUser(t *testing.T) {
 	if len(bobViews) != 1 {
 		t.Fatalf("expected 1 bob view, got %d", len(bobViews))
 	}
-	if bobViews[0].CheckID != "bob-check" {
-		t.Fatalf("expected bob-check, got %s", bobViews[0].CheckID)
+	if bobViews[0].CheckName != "bob-check" {
+		t.Fatalf("expected bob-check, got %s", bobViews[0].CheckName)
 	}
 	if bobViews[0].IncidentSince == nil {
 		t.Fatal("expected bob view to include incident timestamp")
@@ -540,7 +593,7 @@ func TestPublicStatusCheckViews_DistinguishesUnknownSlugAndNoChecks(t *testing.T
 		t.Fatalf("expected no views for a user with no checks, got %d", len(views))
 	}
 
-	if err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("down-check", "http", "https://down.example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 	if _, err := openIncidentForTest(s, "down-check"); err != nil {
@@ -557,8 +610,8 @@ func TestPublicStatusCheckViews_DistinguishesUnknownSlugAndNoChecks(t *testing.T
 	if len(views) != 1 {
 		t.Fatalf("expected 1 view, got %d", len(views))
 	}
-	if views[0].CheckID != "down-check" {
-		t.Fatalf("views[0].CheckID = %q, want down-check", views[0].CheckID)
+	if views[0].CheckName != "down-check" {
+		t.Fatalf("views[0].CheckName = %q, want down-check", views[0].CheckName)
 	}
 	if views[0].IncidentSince == nil {
 		t.Fatal("expected down-check incident timestamp")
@@ -583,10 +636,10 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck check-1: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-2", "http", "https://example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("check-2", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck check-2: %v", err)
 	}
 
@@ -618,8 +671,8 @@ func TestListIncidents_OrderAndResolved(t *testing.T) {
 	}
 
 	// Newest first — the still-open check-1 incident was inserted last.
-	if incidents[0].CheckID != "check-1" {
-		t.Errorf("incidents[0]: expected check-1, got %s", incidents[0].CheckID)
+	if incidents[0].CheckName != "check-1" {
+		t.Errorf("incidents[0]: expected check-1, got %s", incidents[0].CheckName)
 	}
 	if incidents[0].ResolvedAt != nil {
 		t.Errorf("incidents[0]: expected open (ResolvedAt nil), got resolved")
@@ -640,7 +693,7 @@ func TestListIncidents_IncludesNotificationSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheckWithWebhook("check-1", "http", "https://example.com", "https://hooks.example.com/wacht", 30), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -687,7 +740,7 @@ func TestListIncidents_RespectsLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("check-1", "http", "https://example.com"), user.ID); err != nil {
 		t.Fatalf("CreateCheck: %v", err)
 	}
 
@@ -721,10 +774,10 @@ func TestListIncidents_ScopedToUser(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	if err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("alice-check", "http", "https://alice.example.com"), alice.ID); err != nil {
 		t.Fatalf("CreateCheck alice: %v", err)
 	}
-	if err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
+	if _, err := s.CreateCheck(testCheck("bob-check", "http", "https://bob.example.com"), bob.ID); err != nil {
 		t.Fatalf("CreateCheck bob: %v", err)
 	}
 
@@ -742,8 +795,8 @@ func TestListIncidents_ScopedToUser(t *testing.T) {
 	if len(aliceIncidents) != 1 {
 		t.Fatalf("expected 1 alice incident, got %d", len(aliceIncidents))
 	}
-	if aliceIncidents[0].CheckID != "alice-check" {
-		t.Fatalf("expected alice-check, got %s", aliceIncidents[0].CheckID)
+	if aliceIncidents[0].CheckName != "alice-check" {
+		t.Fatalf("expected alice-check, got %s", aliceIncidents[0].CheckName)
 	}
 
 	bobIncidents, err := s.ListIncidents(bob.ID, 10)
@@ -753,7 +806,7 @@ func TestListIncidents_ScopedToUser(t *testing.T) {
 	if len(bobIncidents) != 1 {
 		t.Fatalf("expected 1 bob incident, got %d", len(bobIncidents))
 	}
-	if bobIncidents[0].CheckID != "bob-check" {
-		t.Fatalf("expected bob-check, got %s", bobIncidents[0].CheckID)
+	if bobIncidents[0].CheckName != "bob-check" {
+		t.Fatalf("expected bob-check, got %s", bobIncidents[0].CheckName)
 	}
 }

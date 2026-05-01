@@ -19,7 +19,7 @@ def test_invalid_check(server):
         "POST",
         "/api/checks",
         payload={
-            "id": invalid_target_id,
+            "name": invalid_target_id,
             "type": "http",
             "target": "http:///missing-host",
             "interval": 1,
@@ -33,7 +33,7 @@ def test_invalid_check(server):
         "POST",
         "/api/checks",
         payload={
-            "id": invalid_webhook_id,
+            "name": invalid_webhook_id,
             "type": "http",
             "target": "http://mock:9090/http/state",
             "webhook": "http://user:pass@example.com/webhook",
@@ -45,7 +45,7 @@ def test_invalid_check(server):
     assert_body("invalid webhook", invalid_webhook, "webhook: userinfo is not allowed\n")
 
     checks = server.list_checks(token)
-    created = [check for check in checks if check.get("id") in {invalid_target_id, invalid_webhook_id}]
+    created = [check for check in checks if check.get("name") in {invalid_target_id, invalid_webhook_id}]
     if created:
         raise SmokeError(f"rejected checks should not be persisted, but GET /api/checks returned {created!r}")
 
@@ -53,11 +53,11 @@ def test_invalid_check(server):
         json.dumps(
             {
                 "invalid_target": {
-                    "check_id": invalid_target_id,
+                    "check_name": invalid_target_id,
                     "response": invalid_target.strip(),
                 },
                 "invalid_webhook": {
-                    "check_id": invalid_webhook_id,
+                    "check_name": invalid_webhook_id,
                     "response": invalid_webhook.strip(),
                 },
                 "persisted_matches": 0,

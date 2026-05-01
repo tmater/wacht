@@ -13,9 +13,9 @@ def test_startup(server, mock):
     server.wait_for_health()
     mock.set_state("up")
     token = server.login()
-    check_id = f"smoke-startup-{uuid.uuid4().hex[:8]}"
+    check_name = f"smoke-startup-{uuid.uuid4().hex[:8]}"
     payload = {
-        "id": check_id,
+        "name": check_name,
         "type": "http",
         "target": "http://mock:9090/http/state",
         "interval": 1,
@@ -27,10 +27,10 @@ def test_startup(server, mock):
         with cleanup.preserve_primary_error():
             def ready():
                 status = server.get_status(token)
-                checks = {check["check_id"]: check for check in status.get("checks", [])}
+                checks = {check["check_name"]: check for check in status.get("checks", [])}
                 probes = {probe["probe_id"]: probe for probe in status.get("probes", [])}
 
-                check = checks.get(check_id)
+                check = checks.get(check_name)
                 if check is None:
                     return None
                 if check.get("status") != "up":
@@ -56,9 +56,9 @@ def test_startup(server, mock):
             # observed when it succeeded.
             print(json.dumps(status, indent=2))
 
-            checks = {check["check_id"]: check for check in status.get("checks", [])}
-            if check_id not in checks:
-                raise SmokeError(f"created startup check {check_id} is missing from /status")
+            checks = {check["check_name"]: check for check in status.get("checks", [])}
+            if check_name not in checks:
+                raise SmokeError(f"created startup check {check_name} is missing from /status")
     finally:
-        cleanup.run(f"delete check {check_id}", lambda: server.delete_check_if_present(token, check_id))
+        cleanup.run(f"delete check {check_name}", lambda: server.delete_check_if_present(token, check_name))
         cleanup.finish()

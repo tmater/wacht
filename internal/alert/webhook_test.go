@@ -27,7 +27,8 @@ func TestFire(t *testing.T) {
 	defer srv.Close()
 
 	payload := AlertPayload{
-		CheckID:     "check-google",
+		CheckID:     "00000000-0000-0000-0000-000000000901",
+		CheckName:   "check-google",
 		Target:      "https://google.com",
 		Status:      "down",
 		ProbesDown:  2,

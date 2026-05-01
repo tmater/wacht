@@ -29,7 +29,12 @@ func (f *fakeStatusViewStore) PublicStatusCheckViews(slug string) ([]store.Publi
 }
 
 func TestBuildAuthenticatedStatusResponseUsesRuntimeState(t *testing.T) {
-	runtime := monitoring.NewRuntime([]string{"down-check", "error-check"}, []string{"probe-e", "probe-c", "probe-a", "probe-d", "probe-b"})
+	const (
+		pendingCheckID = "00000000-0000-0000-0000-000000000501"
+		downCheckID    = "00000000-0000-0000-0000-000000000502"
+		errorCheckID   = "00000000-0000-0000-0000-000000000503"
+	)
+	runtime := monitoring.NewRuntime([]string{downCheckID, errorCheckID}, []string{"probe-e", "probe-c", "probe-a", "probe-d", "probe-b"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 	expiresAt := at.Add(30 * time.Second)
 	incidentSince := at.Add(10 * time.Minute)
@@ -47,39 +52,44 @@ func TestBuildAuthenticatedStatusResponseUsesRuntimeState(t *testing.T) {
 	}
 
 	for _, probeID := range []string{"probe-a", "probe-b", "probe-c"} {
-		if _, err := runtime.ObserveCheckUp("down-check", probeID, at, &expiresAt); err != nil {
+		if _, err := runtime.ObserveCheckUp(downCheckID, probeID, at, &expiresAt); err != nil {
 			t.Fatalf("ObserveCheckUp down-check %s: %v", probeID, err)
 		}
 	}
 	downAt := at.Add(5 * time.Second)
 	downExpiry := downAt.Add(30 * time.Second)
 	for _, probeID := range []string{"probe-a", "probe-b", "probe-c"} {
-		if _, err := runtime.ObserveCheckDown("down-check", probeID, downAt, &downExpiry, "timeout"); err != nil {
+		if _, err := runtime.ObserveCheckDown(downCheckID, probeID, downAt, &downExpiry, "timeout"); err != nil {
 			t.Fatalf("ObserveCheckDown down-check first %s: %v", probeID, err)
 		}
 	}
 	secondDownAt := downAt.Add(time.Second)
 	secondDownExpiry := secondDownAt.Add(30 * time.Second)
 	for _, probeID := range []string{"probe-a", "probe-b", "probe-c"} {
-		if _, err := runtime.ObserveCheckDown("down-check", probeID, secondDownAt, &secondDownExpiry, "timeout"); err != nil {
+		if _, err := runtime.ObserveCheckDown(downCheckID, probeID, secondDownAt, &secondDownExpiry, "timeout"); err != nil {
 			t.Fatalf("ObserveCheckDown down-check second %s: %v", probeID, err)
 		}
 	}
 
 	for _, probeID := range []string{"probe-a", "probe-b", "probe-c"} {
-		if _, err := runtime.ObserveCheckUp("error-check", probeID, at, &expiresAt); err != nil {
+		if _, err := runtime.ObserveCheckUp(errorCheckID, probeID, at, &expiresAt); err != nil {
 			t.Fatalf("ObserveCheckUp error-check %s: %v", probeID, err)
 		}
 	}
-	if _, err := runtime.LoseCheckEvidence("error-check", "probe-c"); err != nil {
+	secondAt := at.Add(time.Second)
+	secondExpiry := secondAt.Add(30 * time.Second)
+	if _, err := runtime.ObserveCheckUp(errorCheckID, "probe-a", secondAt, &secondExpiry); err != nil {
+		t.Fatalf("ObserveCheckUp error-check probe-a second: %v", err)
+	}
+	if _, err := runtime.LoseCheckEvidence(errorCheckID, "probe-c"); err != nil {
 		t.Fatalf("LoseCheckEvidence error-check probe-c: %v", err)
 	}
 
 	st := &fakeStatusViewStore{
 		statusViews: []store.StatusCheckView{
-			{CheckID: "pending-check", Target: "https://pending.example.com"},
-			{CheckID: "down-check", Target: "https://down.example.com", IncidentSince: &incidentSince},
-			{CheckID: "error-check", Target: "https://error.example.com"},
+			{CheckID: pendingCheckID, CheckName: "pending-check", Target: "https://pending.example.com"},
+			{CheckID: downCheckID, CheckName: "down-check", Target: "https://down.example.com", IncidentSince: &incidentSince},
+			{CheckID: errorCheckID, CheckName: "error-check", Target: "https://error.example.com"},
 		},
 	}
 
@@ -141,35 +151,39 @@ func TestBuildAuthenticatedStatusResponseOmitsProbesWithoutChecks(t *testing.T) 
 }
 
 func TestBuildPublicStatusResponseUsesRuntimeState(t *testing.T) {
-	runtime := monitoring.NewRuntime([]string{"down-check"}, []string{"probe-a", "probe-b", "probe-c"})
+	const (
+		downCheckID    = "00000000-0000-0000-0000-000000000601"
+		pendingCheckID = "00000000-0000-0000-0000-000000000602"
+	)
+	runtime := monitoring.NewRuntime([]string{downCheckID}, []string{"probe-a", "probe-b", "probe-c"})
 	at := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 	expiresAt := at.Add(30 * time.Second)
 	incidentSince := at.Add(2 * time.Minute)
 
 	for _, probeID := range []string{"probe-a", "probe-b"} {
-		if _, err := runtime.ObserveCheckUp("down-check", probeID, at, &expiresAt); err != nil {
+		if _, err := runtime.ObserveCheckUp(downCheckID, probeID, at, &expiresAt); err != nil {
 			t.Fatalf("ObserveCheckUp %s: %v", probeID, err)
 		}
 	}
 	downAt := at.Add(5 * time.Second)
 	downExpiry := downAt.Add(30 * time.Second)
 	for _, probeID := range []string{"probe-a", "probe-b"} {
-		if _, err := runtime.ObserveCheckDown("down-check", probeID, downAt, &downExpiry, "timeout"); err != nil {
+		if _, err := runtime.ObserveCheckDown(downCheckID, probeID, downAt, &downExpiry, "timeout"); err != nil {
 			t.Fatalf("ObserveCheckDown first %s: %v", probeID, err)
 		}
 	}
 	secondDownAt := downAt.Add(time.Second)
 	secondDownExpiry := secondDownAt.Add(30 * time.Second)
 	for _, probeID := range []string{"probe-a", "probe-b"} {
-		if _, err := runtime.ObserveCheckDown("down-check", probeID, secondDownAt, &secondDownExpiry, "timeout"); err != nil {
+		if _, err := runtime.ObserveCheckDown(downCheckID, probeID, secondDownAt, &secondDownExpiry, "timeout"); err != nil {
 			t.Fatalf("ObserveCheckDown second %s: %v", probeID, err)
 		}
 	}
 
 	st := &fakeStatusViewStore{
 		publicViews: []store.PublicStatusCheckView{
-			{CheckID: "down-check", IncidentSince: &incidentSince},
-			{CheckID: "pending-check"},
+			{CheckID: downCheckID, CheckName: "down-check", IncidentSince: &incidentSince},
+			{CheckID: pendingCheckID, CheckName: "pending-check"},
 		},
 		publicFound: true,
 	}
