@@ -17,7 +17,7 @@ general observability platform.
 
 > **Status:** Early development. Self-hosting works, but expect rough edges.
 
-Docs preview: <https://tmater.github.io/wacht/>. The docs are work in
+Docs preview: <https://wacht.cloud/>. The docs are work in
 progress while the first release is prepared.
 
 ## Features

@@ -53,7 +53,7 @@ WACHT_WEB_PORT=127.0.0.1:3000
 EOF
 
 # Download the example stack.
-curl -fsSL https://tmater.github.io/wacht/examples/compose.yaml \
+curl -fsSL https://wacht.cloud/examples/compose.yaml \
   -o compose.yaml
 
 # Keep the first login credentials locally.
