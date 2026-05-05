@@ -11,8 +11,8 @@ const config = {
     v4: true,
   },
 
-  url: 'https://tmater.github.io',
-  baseUrl: '/wacht/',
+  url: 'https://wacht.cloud',
+  baseUrl: '/',
   organizationName: 'tmater',
   projectName: 'wacht',
 
