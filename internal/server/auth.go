@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -23,6 +25,14 @@ const (
 	contextKeyUser  contextKey = "user"
 	contextKeyProbe contextKey = "probe"
 )
+
+type probeCredentialStore interface {
+	CreateProbeCredential(probeID string) (store.ProbeCredential, error)
+}
+
+type createProbeCredentialRequest struct {
+	ProbeID string `json:"probe_id"`
+}
 
 // requireProbeAuth authenticates an individual probe using its provisioned
 // probe_id + secret and injects that probe into the request context.
@@ -436,4 +446,48 @@ func (h *Handler) handleRejectSignupRequest(w http.ResponseWriter, r *http.Reque
 
 	logger.Info("signup request rejected", "component", "admin", "signup_request_id", id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCreateProbeCredential creates one reusable probe credential and returns
+// the raw secret. Protected by requireAdmin.
+func (h *Handler) handleCreateProbeCredential(w http.ResponseWriter, r *http.Request) {
+	logger := requestLogger(r)
+	var req createProbeCredentialRequest
+	if err := decodeJSONBody(w, r, &req, maxJSONRequestBodyBytes, true); err != nil {
+		if writeProcessorError(w, err) {
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	credential, err := h.probeCredentials.CreateProbeCredential(req.ProbeID)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrInvalidProbeID):
+			err = &badRequestError{message: "probe_id must be 1-64 letters, numbers, dots, underscores, or hyphens and start with a letter or number"}
+		case errors.Is(err, store.ErrProbeAlreadyExists):
+			err = &badRequestError{message: "probe_id already exists"}
+		default:
+			err = fmt.Errorf("create probe credential: %w", err)
+		}
+		if writeProcessorError(w, err) {
+			return
+		}
+		logger.Error("create probe credential failed", "component", "admin", "probe_id", req.ProbeID, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	h.monitoring.AddProbe(credential.ProbeID)
+
+	logger.Info("probe credential created", "component", "admin", "probe_id", credential.ProbeID)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(map[string]string{
+		"probe_id": credential.ProbeID,
+		"secret":   credential.Secret,
+	}); err != nil {
+		logger.Warn("encode created probe credential failed", "component", "admin", "probe_id", credential.ProbeID, "err", err)
+	}
 }

@@ -76,7 +76,7 @@ export default function App({ appName = 'Wacht', navExtra = null, showProbes = t
     <div className="min-h-screen bg-gray-900">
       <Navbar email={email} page={page} onNavigate={setPage} onLogout={handleLogout} appName={appName} navExtra={navExtra} />
       {page === 'account'   && <AccountPage email={email} isAdmin={isAdmin} onLogout={handleLogout} publicStatusSlug={publicStatusSlug} />}
-      {page === 'dashboard' && <Dashboard onLogout={handleLogout} showProbes={showProbes} />}
+      {page === 'dashboard' && <Dashboard onLogout={handleLogout} showProbes={showProbes} isAdmin={isAdmin} />}
     </div>
   )
 }

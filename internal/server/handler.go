@@ -19,16 +19,17 @@ import (
 
 // Handler holds the dependencies for HTTP handlers.
 type Handler struct {
-	store          *store.Store
-	monitoring     *monitoring.Runtime
-	config         *config.ServerConfig
-	webhooks       *alert.Sender
-	authProcessor  authProcessor
-	probeProcessor probeProcessor
-	loginLimiter   *rateLimiter
-	signupLimiter  *rateLimiter
-	publicLimiter  *rateLimiter
-	trustedProxies []netip.Prefix
+	store            *store.Store
+	monitoring       *monitoring.Runtime
+	config           *config.ServerConfig
+	webhooks         *alert.Sender
+	authProcessor    authProcessor
+	probeProcessor   probeProcessor
+	probeCredentials probeCredentialStore
+	loginLimiter     *rateLimiter
+	signupLimiter    *rateLimiter
+	publicLimiter    *rateLimiter
+	trustedProxies   []netip.Prefix
 }
 
 // notificationJSON is the API response shape for one durable incident
@@ -46,16 +47,17 @@ type notificationJSON struct {
 func New(store *store.Store, monitoringRuntime *monitoring.Runtime, cfg *config.ServerConfig) *Handler {
 	authRateLimit := cfg.AuthRateLimit
 	return &Handler{
-		store:          store,
-		monitoring:     monitoringRuntime,
-		config:         cfg,
-		webhooks:       alert.NewSender(store, network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
-		authProcessor:  NewAuthProcessor(store),
-		probeProcessor: NewProbeProcessor(store, monitoringRuntime),
-		loginLimiter:   newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
-		signupLimiter:  newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
-		publicLimiter:  newRateLimiter(60, time.Minute),
-		trustedProxies: append([]netip.Prefix(nil), cfg.TrustedProxyCIDRs...),
+		store:            store,
+		monitoring:       monitoringRuntime,
+		config:           cfg,
+		webhooks:         alert.NewSender(store, network.Policy{AllowPrivateTargets: cfg.AllowPrivateTargets}),
+		authProcessor:    NewAuthProcessor(store),
+		probeProcessor:   NewProbeProcessor(store, monitoringRuntime),
+		probeCredentials: store,
+		loginLimiter:     newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
+		signupLimiter:    newRateLimiter(authRateLimit.Requests, authRateLimit.Window),
+		publicLimiter:    newRateLimiter(60, time.Minute),
+		trustedProxies:   append([]netip.Prefix(nil), cfg.TrustedProxyCIDRs...),
 	}
 }
 
@@ -92,6 +94,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/signup-requests", h.requireAdmin(h.handleListSignupRequests))
 	mux.HandleFunc("POST /api/admin/signup-requests/{id}/approve", h.requireAdmin(h.handleApproveSignupRequest))
 	mux.HandleFunc("POST /api/admin/signup-requests/{id}/reject", h.requireAdmin(h.handleRejectSignupRequest))
+	mux.HandleFunc("POST /api/admin/probes", h.requireAdmin(h.handleCreateProbeCredential))
 
 	// Dashboard routes — session auth.
 	mux.HandleFunc("GET /status", h.requireSession(h.handleStatus))

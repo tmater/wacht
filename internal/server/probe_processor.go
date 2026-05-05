@@ -46,6 +46,7 @@ func (p *ProbeProcessor) Heartbeat(probe *store.Probe, req probeapi.HeartbeatReq
 	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
 		return &badRequestError{message: "probe_id does not match authenticated probe"}
 	}
+	p.runtime.AddProbe(probe.ProbeID)
 	if err := monitoring.ApplyHeartbeat(p.runtime, p.store, probe.ProbeID, time.Now().UTC()); err != nil {
 		return fmt.Errorf("apply heartbeat: %w", err)
 	}
@@ -60,7 +61,11 @@ func (p *ProbeProcessor) Register(probe *store.Probe, req probeapi.RegisterReque
 	if req.ProbeID != "" && req.ProbeID != probe.ProbeID {
 		return &badRequestError{message: "probe_id does not match authenticated probe"}
 	}
-	return p.store.RegisterProbe(probe.ProbeID, req.Version)
+	if err := p.store.RegisterProbe(probe.ProbeID, req.Version); err != nil {
+		return err
+	}
+	p.runtime.AddProbe(probe.ProbeID)
+	return nil
 }
 
 // ProcessBatch validates and normalizes one flushed probe result batch before

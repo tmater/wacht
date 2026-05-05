@@ -44,12 +44,6 @@ func TestBuildAuthenticatedStatusResponseUsesRuntimeState(t *testing.T) {
 			t.Fatalf("ReceiveHeartbeat %s: %v", probeID, err)
 		}
 	}
-	if _, err := runtime.ExpireHeartbeat("probe-d"); err != nil {
-		t.Fatalf("ExpireHeartbeat probe-d: %v", err)
-	}
-	if _, err := runtime.MarkProbeError("probe-e", "dial failed"); err != nil {
-		t.Fatalf("MarkProbeError probe-e: %v", err)
-	}
 
 	for _, probeID := range []string{"probe-a", "probe-b", "probe-c"} {
 		if _, err := runtime.ObserveCheckUp(downCheckID, probeID, at, &expiresAt); err != nil {
@@ -71,7 +65,7 @@ func TestBuildAuthenticatedStatusResponseUsesRuntimeState(t *testing.T) {
 		}
 	}
 
-	for _, probeID := range []string{"probe-a", "probe-b", "probe-c"} {
+	for _, probeID := range []string{"probe-a", "probe-b", "probe-c", "probe-d", "probe-e"} {
 		if _, err := runtime.ObserveCheckUp(errorCheckID, probeID, at, &expiresAt); err != nil {
 			t.Fatalf("ObserveCheckUp error-check %s: %v", probeID, err)
 		}
@@ -80,6 +74,12 @@ func TestBuildAuthenticatedStatusResponseUsesRuntimeState(t *testing.T) {
 	secondExpiry := secondAt.Add(30 * time.Second)
 	if _, err := runtime.ObserveCheckUp(errorCheckID, "probe-a", secondAt, &secondExpiry); err != nil {
 		t.Fatalf("ObserveCheckUp error-check probe-a second: %v", err)
+	}
+	if _, err := runtime.ExpireHeartbeat("probe-d"); err != nil {
+		t.Fatalf("ExpireHeartbeat probe-d: %v", err)
+	}
+	if _, err := runtime.MarkProbeError("probe-e", "dial failed"); err != nil {
+		t.Fatalf("MarkProbeError probe-e: %v", err)
 	}
 	if _, err := runtime.LoseCheckEvidence(errorCheckID, "probe-c"); err != nil {
 		t.Fatalf("LoseCheckEvidence error-check probe-c: %v", err)
@@ -134,7 +134,7 @@ func TestBuildAuthenticatedStatusResponseUsesRuntimeState(t *testing.T) {
 	}
 }
 
-func TestBuildAuthenticatedStatusResponseOmitsProbesWithoutChecks(t *testing.T) {
+func TestBuildAuthenticatedStatusResponseIncludesProbesWithoutChecks(t *testing.T) {
 	runtime := monitoring.NewRuntime(nil, []string{"probe-a"})
 	st := &fakeStatusViewStore{}
 
@@ -145,8 +145,11 @@ func TestBuildAuthenticatedStatusResponseOmitsProbesWithoutChecks(t *testing.T) 
 	if len(checks) != 0 {
 		t.Fatalf("len(checks) = %d, want 0", len(checks))
 	}
-	if len(probes) != 0 {
-		t.Fatalf("len(probes) = %d, want 0", len(probes))
+	if len(probes) != 1 {
+		t.Fatalf("len(probes) = %d, want 1", len(probes))
+	}
+	if probes[0].ProbeID != "probe-a" || probes[0].Status != "offline" {
+		t.Fatalf("probe = %#v, want offline probe-a", probes[0])
 	}
 }
 

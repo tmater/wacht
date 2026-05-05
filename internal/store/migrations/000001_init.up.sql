@@ -3,11 +3,13 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE probes (
     probe_id      TEXT PRIMARY KEY,
     secret_hash   TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'active',
+    provisioned_by TEXT NOT NULL DEFAULT 'config',
     version       TEXT NOT NULL DEFAULT '',
-    registered_at TIMESTAMPTZ NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    registered_at TIMESTAMPTZ,
     last_seen_at  TIMESTAMPTZ,
-    CONSTRAINT probes_status_check CHECK (status IN ('active', 'revoked'))
+    revoked_at    TIMESTAMPTZ,
+    CONSTRAINT probes_provisioned_by_check CHECK (provisioned_by IN ('config', 'api'))
 );
 
 CREATE TABLE users (

@@ -39,6 +39,19 @@ func (m *QuorumMachine) CheckSnapshot(probeID string) (CheckExecState, bool) {
 	return check.Snapshot(), true
 }
 
+// AddProbe creates the child check machine for a probe after it has produced a
+// result for this quorum.
+func (m *QuorumMachine) AddProbe(probeID string) CheckExecState {
+	if check, ok := m.checks[probeID]; ok {
+		return check.Snapshot()
+	}
+
+	check := NewCheckMachine(m.state.CheckID, probeID)
+	m.checks[probeID] = check
+	m.Recompute()
+	return check.Snapshot()
+}
+
 // ObserveUp routes a successful result to the owning child check machine and
 // recomputes aggregate quorum.
 func (m *QuorumMachine) ObserveUp(probeID string, at time.Time, expiresAt *time.Time) (CheckUpdate, error) {

@@ -6,7 +6,7 @@ import (
 )
 
 // TestNewRuntimeInitializesMachineRegistries verifies the runtime boot shape
-// for active checks and probes.
+// for active checks and known probes.
 func TestNewRuntimeInitializesMachineRegistries(t *testing.T) {
 	runtime := NewRuntime(
 		[]string{"check-a", "check-b", "check-a", ""},
@@ -19,7 +19,7 @@ func TestNewRuntimeInitializesMachineRegistries(t *testing.T) {
 	if got, want := len(runtime.quorums), 2; got != want {
 		t.Fatalf("len(quorums) = %d, want %d", got, want)
 	}
-	if got, want := len(runtime.quorums["check-a"].checks), 2; got != want {
+	if got, want := len(runtime.quorums["check-a"].checks), 0; got != want {
 		t.Fatalf("len(quorum children) = %d, want %d", got, want)
 	}
 
@@ -31,12 +31,8 @@ func TestNewRuntimeInitializesMachineRegistries(t *testing.T) {
 		t.Fatalf("probe state = %q, want %q", probe.State, ProbeStateOffline)
 	}
 
-	check, err := runtime.CheckSnapshot("check-a", "probe-a")
-	if err != nil {
-		t.Fatalf("CheckSnapshot: %v", err)
-	}
-	if check.State != CheckStateMissing {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	if _, err := runtime.CheckSnapshot("check-a", "probe-a"); err != ErrUnknownCheckAssignment {
+		t.Fatalf("CheckSnapshot error = %v, want %v", err, ErrUnknownCheckAssignment)
 	}
 
 	quorum, err := runtime.QuorumSnapshot("check-a")
@@ -68,6 +64,67 @@ func TestRuntimeRoutesHeartbeatToProbeMachine(t *testing.T) {
 	}
 	if probe.LastHeartbeatAt == nil || !probe.LastHeartbeatAt.Equal(at) {
 		t.Fatalf("last heartbeat = %v, want %v", probe.LastHeartbeatAt, at)
+	}
+}
+
+func TestRuntimeAddProbeDefersCheckAssignmentUntilFirstResult(t *testing.T) {
+	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
+
+	probe := runtime.AddProbe("probe-b")
+	if probe.ProbeID != "probe-b" || probe.State != ProbeStateOffline {
+		t.Fatalf("AddProbe = %+v, want offline probe-b", probe)
+	}
+
+	if _, err := runtime.ProbeSnapshot("probe-b"); err != nil {
+		t.Fatalf("ProbeSnapshot probe-b: %v", err)
+	}
+	if _, err := runtime.CheckSnapshot("check-a", "probe-b"); err != ErrUnknownCheckAssignment {
+		t.Fatalf("CheckSnapshot before result error = %v, want %v", err, ErrUnknownCheckAssignment)
+	}
+	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	expiresAt := at.Add(30 * time.Second)
+	if _, err := runtime.ObserveCheckUp("check-a", "probe-b", at, &expiresAt); err != nil {
+		t.Fatalf("ObserveCheckUp check-a/probe-b: %v", err)
+	}
+	check, err := runtime.CheckSnapshot("check-a", "probe-b")
+	if err != nil {
+		t.Fatalf("CheckSnapshot after result error = %v", err)
+	}
+	if check.State != CheckStateMissing {
+		t.Fatalf("check state = %q, want missing before stable evidence", check.State)
+	}
+}
+
+func TestRuntimeAddProbeDoesNotChangeExistingQuorumBeforeResult(t *testing.T) {
+	runtime := NewRuntime([]string{"check-a"}, []string{"probe-a"})
+	at := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	expiresAt := at.Add(30 * time.Second)
+
+	if _, err := runtime.ObserveCheckUp("check-a", "probe-a", at, &expiresAt); err != nil {
+		t.Fatalf("ObserveCheckUp first: %v", err)
+	}
+	if _, err := runtime.ObserveCheckUp("check-a", "probe-a", at.Add(time.Second), ptrTime(expiresAt.Add(time.Second))); err != nil {
+		t.Fatalf("ObserveCheckUp second: %v", err)
+	}
+	before, err := runtime.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot before AddProbe: %v", err)
+	}
+	if before.State != QuorumStateUp {
+		t.Fatalf("quorum before AddProbe = %q, want up", before.State)
+	}
+
+	runtime.AddProbe("probe-b")
+
+	after, err := runtime.QuorumSnapshot("check-a")
+	if err != nil {
+		t.Fatalf("QuorumSnapshot after AddProbe: %v", err)
+	}
+	if after.State != QuorumStateUp {
+		t.Fatalf("quorum after AddProbe = %q, want unchanged up", after.State)
+	}
+	if _, err := runtime.CheckSnapshot("check-a", "probe-b"); err != ErrUnknownCheckAssignment {
+		t.Fatalf("probe-b assignment error = %v, want %v", err, ErrUnknownCheckAssignment)
 	}
 }
 

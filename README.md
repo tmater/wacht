@@ -20,7 +20,8 @@ git clone https://github.com/tmater/wacht.git
 cd wacht
 ```
 
-Edit `config/server.yaml` — provision each probe with its own secret and configure your checks:
+Edit `config/server.yaml` — configure the seed user and checks. The sample
+file also statically provisions the bundled local probes:
 
 ```yaml
 probes:
@@ -49,7 +50,7 @@ monitoring Docker, VPN, and RFC1918 services is a common self-hosted use
 case. For hosted or managed-probe deployments, keep that setting disabled on
 both the server and the matching probe config.
 
-Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each probe must use the matching secret provisioned in `config/server.yaml`:
+Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each bundled probe must use the matching secret provisioned in `config/server.yaml`:
 
 ```yaml
 secret: replace-with-a-strong-secret-1
@@ -67,6 +68,23 @@ docker compose up -d
 The dashboard is available at `http://<your-host>:3000`.
 
 **First login:** open `http://localhost:3000`, sign in with the `seed_user` credentials (`admin@wacht.local` / `changeme`), and change the password immediately. The seed user is only created on first boot when no users exist yet.
+
+## Adding probes
+
+The dashboard can create probe credentials without editing `server.yaml`.
+Sign in as an admin, create a probe from the Probes section, then paste the
+generated reusable config into the new probe's config file:
+
+```yaml
+server: https://wacht.example.com
+probe_id: probe-api-1
+secret: generated-secret
+heartbeat_interval: 30s
+```
+
+The probe reuses this secret across restarts. The server stores only a hash, so
+the raw secret can only be displayed when the credential is created.
+Static `server.yaml` provisioning remains supported for compose/dev setups.
 
 ## Check types
 

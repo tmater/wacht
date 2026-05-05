@@ -27,7 +27,7 @@ func (f *fakeRecoveryStore) ListAllChecks() ([]checks.Check, error) {
 	return append([]checks.Check(nil), f.checks...), nil
 }
 
-func (f *fakeRecoveryStore) ActiveProbeStates() ([]store.PersistedProbeState, error) {
+func (f *fakeRecoveryStore) RecoverableProbeStates() ([]store.PersistedProbeState, error) {
 	probes := make([]store.PersistedProbeState, 0, len(f.probes))
 	for _, probe := range f.probes {
 		if probe.LastSeenAt != nil {
@@ -72,12 +72,8 @@ func TestLoadRuntimeUsesMetadataDefaultsWithoutRecoveryData(t *testing.T) {
 		t.Fatalf("probe state = %q, want %q", probe.State, ProbeStateOffline)
 	}
 
-	check, err := recovered.CheckSnapshot(checkA.ID, "probe-a")
-	if err != nil {
-		t.Fatalf("CheckSnapshot: %v", err)
-	}
-	if check.State != CheckStateMissing {
-		t.Fatalf("check state = %q, want %q", check.State, CheckStateMissing)
+	if _, err := recovered.CheckSnapshot(checkA.ID, "probe-a"); err != ErrUnknownCheckAssignment {
+		t.Fatalf("CheckSnapshot error = %v, want %v", err, ErrUnknownCheckAssignment)
 	}
 
 	quorum, err := recovered.QuorumSnapshot(checkB.ID)

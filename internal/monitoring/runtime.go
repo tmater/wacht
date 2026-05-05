@@ -24,9 +24,10 @@ type Runtime struct {
 	quorums map[string]*QuorumMachine
 }
 
-// NewRuntime creates runtime state for the active checks and active probes.
-// In v1, every probe is assigned to every check, so each quorum machine owns
-// one child check machine per active probe.
+// NewRuntime creates runtime state for the active checks and known probes.
+// Probes join a check's quorum only after submitting a valid result for that
+// check, so newly known probes do not change existing check outcomes before
+// they have execution evidence.
 func NewRuntime(checkIDs, probeIDs []string) *Runtime {
 	checkIDs = uniqueIDs(checkIDs)
 	probeIDs = uniqueIDs(probeIDs)
@@ -36,12 +37,12 @@ func NewRuntime(checkIDs, probeIDs []string) *Runtime {
 		quorums: make(map[string]*QuorumMachine, len(checkIDs)),
 	}
 
-	for _, probeID := range probeIDs {
-		r.probes[probeID] = NewProbeMachine(probeID)
+	for _, checkID := range checkIDs {
+		r.quorums[checkID] = NewQuorumMachine(checkID, nil)
 	}
 
-	for _, checkID := range checkIDs {
-		r.quorums[checkID] = NewQuorumMachine(checkID, probeIDs)
+	for _, probeID := range probeIDs {
+		r.addProbeLocked(probeID)
 	}
 
 	return r
@@ -96,6 +97,29 @@ func (r *Runtime) EnsureCheck(checkID string) CheckQuorumState {
 	defer r.mu.Unlock()
 
 	return r.ensureQuorumLocked(checkID).Snapshot()
+}
+
+// AddProbe creates an explicit offline probe entry when the runtime does not
+// already know about it. It does not assign the probe to check quorums; that
+// happens when the probe submits its first accepted result for each check.
+func (r *Runtime) AddProbe(probeID string) ProbeRuntimeState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.addProbeLocked(probeID)
+}
+
+func (r *Runtime) addProbeLocked(probeID string) ProbeRuntimeState {
+	if probeID == "" {
+		return ProbeRuntimeState{}
+	}
+	if probe, ok := r.probes[probeID]; ok {
+		return probe.Snapshot()
+	}
+
+	probe := NewProbeMachine(probeID)
+	r.probes[probeID] = probe
+	return probe.Snapshot()
 }
 
 // RemoveCheck drops one check's runtime state after the owning metadata has
@@ -203,10 +227,14 @@ func (r *Runtime) ObserveCheckUp(checkID, probeID string, at time.Time, expiresA
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if _, ok := r.probes[probeID]; !ok {
+		return CheckUpdate{}, ErrUnknownProbe
+	}
 	quorum, ok := r.quorums[checkID]
 	if !ok {
 		return CheckUpdate{}, ErrUnknownCheck
 	}
+	quorum.AddProbe(probeID)
 	return quorum.ObserveUp(probeID, at, expiresAt)
 }
 
@@ -215,10 +243,14 @@ func (r *Runtime) ObserveCheckDown(checkID, probeID string, at time.Time, expire
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if _, ok := r.probes[probeID]; !ok {
+		return CheckUpdate{}, ErrUnknownProbe
+	}
 	quorum, ok := r.quorums[checkID]
 	if !ok {
 		return CheckUpdate{}, ErrUnknownCheck
 	}
+	quorum.AddProbe(probeID)
 	return quorum.ObserveDown(probeID, at, expiresAt, message)
 }
 

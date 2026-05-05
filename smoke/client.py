@@ -138,6 +138,18 @@ class SmokeClient:
             expected_status=(204,),
         )
 
+    def create_probe_credential(self, admin_token, probe_id=None):
+        payload = {}
+        if probe_id is not None:
+            payload["probe_id"] = probe_id
+        return self.request(
+            "POST",
+            "/api/admin/probes",
+            payload=payload,
+            headers=self.auth_headers(admin_token),
+            expected_status=(201,),
+        )
+
     def setup_password(self, setup_token, new_password):
         response = self.request(
             "POST",

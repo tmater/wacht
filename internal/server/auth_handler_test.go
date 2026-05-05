@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmater/wacht/internal/monitoring"
 	"github.com/tmater/wacht/internal/store"
 )
 
@@ -51,6 +52,14 @@ func (f fakeAuthProcessor) RejectSignupRequest(id int64) error {
 
 func (f fakeAuthProcessor) SetupPassword(req SetupPasswordRequest) (SetupPasswordOutcome, error) {
 	return f.setupPasswordFn(req)
+}
+
+type fakeProbeCredentialStore struct {
+	createFn func(probeID string) (store.ProbeCredential, error)
+}
+
+func (f fakeProbeCredentialStore) CreateProbeCredential(probeID string) (store.ProbeCredential, error) {
+	return f.createFn(probeID)
 }
 
 func TestHandleLoginMapsUnauthorizedError(t *testing.T) {
@@ -488,6 +497,113 @@ func TestHandleApproveSignupRequestReturnsSetupToken(t *testing.T) {
 	}
 	if body["expires_at"] != "2026-03-16T12:00:00Z" {
 		t.Fatalf("expires_at = %q, want 2026-03-16T12:00:00Z", body["expires_at"])
+	}
+}
+
+func TestHandleCreateProbeCredentialReturnsSecretAndUpdatesRuntime(t *testing.T) {
+	runtime := monitoring.NewRuntime([]string{"check-a"}, []string{"probe-a"})
+	h := &Handler{
+		monitoring: runtime,
+		probeCredentials: fakeProbeCredentialStore{
+			createFn: func(probeID string) (store.ProbeCredential, error) {
+				if probeID != "probe-api-1" {
+					t.Fatalf("probeID = %q, want probe-api-1", probeID)
+				}
+				return store.ProbeCredential{ProbeID: "probe-api-1", Secret: "secret-1"}, nil
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/probes", bytes.NewBufferString(`{"probe_id":"probe-api-1"}`))
+	rec := httptest.NewRecorder()
+
+	h.handleCreateProbeCredential(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if body["probe_id"] != "probe-api-1" || body["secret"] != "secret-1" {
+		t.Fatalf("body = %#v, want probe credential payload", body)
+	}
+	if _, err := runtime.ProbeSnapshot("probe-api-1"); err != nil {
+		t.Fatalf("runtime missing created probe: %v", err)
+	}
+	if _, err := runtime.CheckSnapshot("check-a", "probe-api-1"); err != monitoring.ErrUnknownCheckAssignment {
+		t.Fatalf("runtime check assignment error = %v, want %v", err, monitoring.ErrUnknownCheckAssignment)
+	}
+}
+
+func TestHandleCreateProbeCredentialMapsBadRequestError(t *testing.T) {
+	h := &Handler{
+		monitoring: monitoring.NewRuntime(nil, nil),
+		probeCredentials: fakeProbeCredentialStore{
+			createFn: func(probeID string) (store.ProbeCredential, error) {
+				return store.ProbeCredential{}, store.ErrProbeAlreadyExists
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/probes", bytes.NewBufferString(`{"probe_id":"probe-api-1"}`))
+	rec := httptest.NewRecorder()
+
+	h.handleCreateProbeCredential(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if body := rec.Body.String(); body != "probe_id already exists\n" {
+		t.Fatalf("body = %q, want duplicate message", body)
+	}
+}
+
+func TestHandleCreateProbeCredentialMapsInternalError(t *testing.T) {
+	h := &Handler{
+		monitoring: monitoring.NewRuntime(nil, nil),
+		probeCredentials: fakeProbeCredentialStore{
+			createFn: func(probeID string) (store.ProbeCredential, error) {
+				return store.ProbeCredential{}, errors.New("boom")
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/probes", bytes.NewBufferString(`{"probe_id":"probe-api-1"}`))
+	rec := httptest.NewRecorder()
+
+	h.handleCreateProbeCredential(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); body != "internal error\n" {
+		t.Fatalf("body = %q, want internal error", body)
+	}
+}
+
+func TestHandleCreateProbeCredentialRejectsTooLargeBody(t *testing.T) {
+	h := &Handler{
+		probeCredentials: fakeProbeCredentialStore{
+			createFn: func(probeID string) (store.ProbeCredential, error) {
+				t.Fatal("CreateProbeCredential should not be called for an oversized body")
+				return store.ProbeCredential{}, nil
+			},
+		},
+	}
+
+	body := `{"probe_id":"` + strings.Repeat("x", int(maxJSONRequestBodyBytes)) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/probes", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	h.handleCreateProbeCredential(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if got := rec.Body.String(); got != "request body too large\n" {
+		t.Fatalf("body = %q, want request body too large", got)
 	}
 }
 

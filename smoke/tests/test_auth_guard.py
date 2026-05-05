@@ -64,13 +64,20 @@ def test_auth_guard(server):
     if identity.get("is_admin") is not False:
         raise SmokeError(f"expected approved signup user to be non-admin, got {identity!r}")
 
-    forbidden = normal_user.request(
-        "GET",
-        "/api/admin/signup-requests",
-        headers=normal_user.auth_headers(normal_token),
-        expected_status=(403,),
-    )
-    assert_body("non-admin admin route", forbidden, "forbidden\n")
+    forbidden_routes = {}
+    for method, path, body in (
+        ("GET", "/api/admin/signup-requests", None),
+        ("POST", "/api/admin/probes", {"probe_id": f"probe-smoke-{uuid.uuid4().hex[:8]}"}),
+    ):
+        forbidden = normal_user.request(
+            method,
+            path,
+            payload=body,
+            headers=normal_user.auth_headers(normal_token),
+            expected_status=(403,),
+        )
+        assert_body(f"non-admin admin route {path}", forbidden, "forbidden\n")
+        forbidden_routes[path] = forbidden.strip()
 
     print(
         json.dumps(
@@ -78,7 +85,7 @@ def test_auth_guard(server):
                 "missing_token_routes": missing_token_bodies,
                 "setup_password_email": setup.get("email"),
                 "approved_user": identity,
-                "non_admin_admin_route": forbidden.strip(),
+                "non_admin_admin_routes": forbidden_routes,
             },
             indent=2,
         )

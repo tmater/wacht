@@ -3,7 +3,6 @@ package monitoring
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -66,11 +65,12 @@ func (r *Runtime) applyObservedResultBatch(st resultBatchStore, observed []Obser
 }
 
 type observedResultRollback struct {
-	CheckID        string
-	ProbeID        string
-	CreatedQuorum  bool
-	PreviousCheck  CheckExecState
-	PreviousQuorum CheckQuorumState
+	CheckID           string
+	ProbeID           string
+	CreatedQuorum     bool
+	CreatedAssignment bool
+	PreviousCheck     CheckExecState
+	PreviousQuorum    CheckQuorumState
 }
 
 func (r *Runtime) applyObservedResultLocked(check checks.Check, result proto.CheckResult) (store.MonitoringWrite, observedResultRollback, error) {
@@ -83,17 +83,20 @@ func (r *Runtime) applyObservedResultLocked(check checks.Check, result proto.Che
 
 	_, quorumExisted := r.quorums[checkID]
 	quorum := r.ensureQuorumLocked(checkID)
-	child, ok := quorum.checks[result.ProbeID]
-	if !ok {
-		return store.MonitoringWrite{}, observedResultRollback{}, ErrUnknownCheckAssignment
+	previousQuorum := quorum.state
+	child, assignmentExisted := quorum.checks[result.ProbeID]
+	if !assignmentExisted {
+		quorum.AddProbe(result.ProbeID)
+		child = quorum.checks[result.ProbeID]
 	}
 
 	rollback := observedResultRollback{
-		CheckID:        checkID,
-		ProbeID:        result.ProbeID,
-		CreatedQuorum:  !quorumExisted,
-		PreviousCheck:  child.state,
-		PreviousQuorum: quorum.state,
+		CheckID:           checkID,
+		ProbeID:           result.ProbeID,
+		CreatedQuorum:     !quorumExisted,
+		CreatedAssignment: !assignmentExisted,
+		PreviousCheck:     child.state,
+		PreviousQuorum:    previousQuorum,
 	}
 
 	var (
@@ -106,6 +109,7 @@ func (r *Runtime) applyObservedResultLocked(check checks.Check, result proto.Che
 		update, err = quorum.ObserveDown(result.ProbeID, result.Timestamp, &expiresAt, strings.TrimSpace(result.Error))
 	}
 	if err != nil {
+		r.rollbackObservedResultsLocked([]observedResultRollback{rollback})
 		return store.MonitoringWrite{}, observedResultRollback{}, err
 	}
 
@@ -144,10 +148,11 @@ func (r *Runtime) rollbackObservedResultsLocked(rollbacks []observedResultRollba
 			continue
 		}
 		child, ok := quorum.checks[rollback.ProbeID]
-		if !ok {
-			continue
+		if rollback.CreatedAssignment {
+			delete(quorum.checks, rollback.ProbeID)
+		} else if ok {
+			child.state = rollback.PreviousCheck
 		}
-		child.state = rollback.PreviousCheck
 		quorum.state = rollback.PreviousQuorum
 	}
 }
@@ -171,13 +176,7 @@ func (r *Runtime) ensureQuorumLocked(checkID string) *QuorumMachine {
 		return quorum
 	}
 
-	probeIDs := make([]string, 0, len(r.probes))
-	for probeID := range r.probes {
-		probeIDs = append(probeIDs, probeID)
-	}
-	sort.Strings(probeIDs)
-
-	quorum = NewQuorumMachine(checkID, probeIDs)
+	quorum = NewQuorumMachine(checkID, nil)
 	r.quorums[checkID] = quorum
 	return quorum
 }

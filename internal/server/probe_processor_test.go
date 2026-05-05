@@ -194,8 +194,8 @@ func TestProbeProcessorProcessNormalizesResultAndCreatesQuorum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QuorumSnapshot() error = %v", err)
 	}
-	if quorum.State != monitoring.QuorumStatePending {
-		t.Fatalf("quorum state = %q, want %q", quorum.State, monitoring.QuorumStatePending)
+	if quorum.State != monitoring.QuorumStateUp {
+		t.Fatalf("quorum state = %q, want %q", quorum.State, monitoring.QuorumStateUp)
 	}
 }
 

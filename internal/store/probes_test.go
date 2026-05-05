@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestSeedProbes_AuthenticateProbe(t *testing.T) {
 	s := newTestStore(t)
@@ -86,5 +89,82 @@ func TestSeedProbes_RevokesMissingProbe(t *testing.T) {
 	}
 	if probe != nil {
 		t.Fatal("expected revoked probe to fail authentication")
+	}
+}
+
+func TestCreateProbeCredential_AuthenticateProbe(t *testing.T) {
+	s := newTestStore(t)
+
+	credential, err := s.CreateProbeCredential("probe-api-1")
+	if err != nil {
+		t.Fatalf("CreateProbeCredential: %v", err)
+	}
+	if credential.ProbeID != "probe-api-1" {
+		t.Fatalf("ProbeID = %q, want probe-api-1", credential.ProbeID)
+	}
+	if credential.Secret == "" {
+		t.Fatal("expected generated secret")
+	}
+
+	probe, err := s.AuthenticateProbe("probe-api-1", credential.Secret)
+	if err != nil {
+		t.Fatalf("AuthenticateProbe: %v", err)
+	}
+	if probe == nil {
+		t.Fatal("expected probe, got nil")
+	}
+}
+
+func TestCreateProbeCredential_GeneratesProbeID(t *testing.T) {
+	s := newTestStore(t)
+
+	credential, err := s.CreateProbeCredential("")
+	if err != nil {
+		t.Fatalf("CreateProbeCredential: %v", err)
+	}
+	if credential.ProbeID == "" {
+		t.Fatal("expected generated probe id")
+	}
+	if credential.Secret == "" {
+		t.Fatal("expected generated secret")
+	}
+}
+
+func TestCreateProbeCredential_RejectsDuplicateProbeID(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateProbeCredential("probe-api-1"); err != nil {
+		t.Fatalf("CreateProbeCredential first: %v", err)
+	}
+	if _, err := s.CreateProbeCredential("probe-api-1"); !errors.Is(err, ErrProbeAlreadyExists) {
+		t.Fatalf("CreateProbeCredential duplicate error = %v, want ErrProbeAlreadyExists", err)
+	}
+}
+
+func TestCreateProbeCredential_RejectsInvalidProbeID(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.CreateProbeCredential("bad probe"); !errors.Is(err, ErrInvalidProbeID) {
+		t.Fatalf("CreateProbeCredential error = %v, want ErrInvalidProbeID", err)
+	}
+}
+
+func TestSeedProbes_DoesNotRevokeAPICreatedProbe(t *testing.T) {
+	s := newTestStore(t)
+
+	credential, err := s.CreateProbeCredential("probe-api-1")
+	if err != nil {
+		t.Fatalf("CreateProbeCredential: %v", err)
+	}
+	if err := s.SeedProbes([]ProbeSeed{{ProbeID: "probe-config-1", Secret: "secret-1"}}); err != nil {
+		t.Fatalf("SeedProbes: %v", err)
+	}
+
+	probe, err := s.AuthenticateProbe("probe-api-1", credential.Secret)
+	if err != nil {
+		t.Fatalf("AuthenticateProbe api probe: %v", err)
+	}
+	if probe == nil {
+		t.Fatal("expected API-created probe to remain active after config seeding")
 	}
 }
