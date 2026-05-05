@@ -5,7 +5,21 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
+)
+
+var (
+	// ErrInvalidProbeID reports an API-created probe ID that is empty or uses
+	// unsupported characters.
+	ErrInvalidProbeID = errors.New("store: invalid probe id")
+	// ErrProbeAlreadyExists reports that a requested probe ID is already taken.
+	ErrProbeAlreadyExists = errors.New("store: probe id already exists")
+
+	probeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
 
 // ProbeSeed is a pre-provisioned probe credential loaded from config.
@@ -14,12 +28,18 @@ type ProbeSeed struct {
 	Secret  string
 }
 
+// ProbeCredential is a newly provisioned reusable probe credential. Secret is
+// returned to the caller at creation time; only its hash is stored.
+type ProbeCredential struct {
+	ProbeID string
+	Secret  string
+}
+
 // Probe is an authenticated or stored probe record.
 type Probe struct {
 	ProbeID      string
 	Version      string
-	Status       string
-	RegisteredAt time.Time
+	RegisteredAt *time.Time
 	LastSeenAt   *time.Time
 }
 
@@ -41,18 +61,19 @@ func (s *Store) SeedProbes(probes []ProbeSeed) error {
 		keep[probe.ProbeID] = struct{}{}
 		now := time.Now().UTC()
 		_, err := s.db.Exec(`
-			INSERT INTO probes (probe_id, secret_hash, status, version, registered_at, last_seen_at)
-			VALUES ($1, $2, 'active', '', $3, NULL)
+			INSERT INTO probes (probe_id, secret_hash, provisioned_by, version, created_at, registered_at, last_seen_at, revoked_at)
+			VALUES ($1, $2, 'config', '', $3, NULL, NULL, NULL)
 			ON CONFLICT (probe_id) DO UPDATE
 			SET secret_hash = excluded.secret_hash,
-			    status = 'active'
+			    provisioned_by = 'config',
+			    revoked_at = NULL
 		`, probe.ProbeID, hashProbeSecret(probe.Secret), now)
 		if err != nil {
 			return err
 		}
 	}
 
-	rows, err := s.db.Query(`SELECT probe_id FROM probes`)
+	rows, err := s.db.Query(`SELECT probe_id FROM probes WHERE provisioned_by = 'config'`)
 	if err != nil {
 		return err
 	}
@@ -66,7 +87,7 @@ func (s *Store) SeedProbes(probes []ProbeSeed) error {
 		if _, ok := keep[probeID]; ok {
 			continue
 		}
-		if _, err := s.db.Exec(`UPDATE probes SET status='revoked' WHERE probe_id=$1`, probeID); err != nil {
+		if _, err := s.db.Exec(`UPDATE probes SET revoked_at=$1 WHERE probe_id=$2`, time.Now().UTC(), probeID); err != nil {
 			return err
 		}
 	}
@@ -76,23 +97,83 @@ func (s *Store) SeedProbes(probes []ProbeSeed) error {
 	return nil
 }
 
+// CreateProbeCredential provisions one API-managed probe credential. If
+// requestedProbeID is blank, a unique probe ID is generated.
+func (s *Store) CreateProbeCredential(requestedProbeID string) (ProbeCredential, error) {
+	probeID := strings.TrimSpace(requestedProbeID)
+	if probeID != "" {
+		return s.insertProbeCredential(probeID)
+	}
+
+	for i := 0; i < 8; i++ {
+		generated, err := randomProbeID()
+		if err != nil {
+			return ProbeCredential{}, err
+		}
+		credential, err := s.insertProbeCredential(generated)
+		if errors.Is(err, ErrProbeAlreadyExists) {
+			continue
+		}
+		return credential, err
+	}
+
+	return ProbeCredential{}, fmt.Errorf("%w: generated id collision", ErrProbeAlreadyExists)
+}
+
+func (s *Store) insertProbeCredential(probeID string) (ProbeCredential, error) {
+	probeID = strings.TrimSpace(probeID)
+	if !probeIDPattern.MatchString(probeID) {
+		return ProbeCredential{}, fmt.Errorf("%w: %q", ErrInvalidProbeID, probeID)
+	}
+
+	secret, err := randomHexToken(32)
+	if err != nil {
+		return ProbeCredential{}, err
+	}
+	now := time.Now().UTC()
+
+	var insertedProbeID string
+	err = s.db.QueryRow(`
+		INSERT INTO probes (probe_id, secret_hash, provisioned_by, version, created_at, registered_at, last_seen_at, revoked_at)
+		VALUES ($1, $2, 'api', '', $3, NULL, NULL, NULL)
+		ON CONFLICT (probe_id) DO NOTHING
+		RETURNING probe_id
+	`, probeID, hashProbeSecret(secret), now).Scan(&insertedProbeID)
+	if err == sql.ErrNoRows {
+		return ProbeCredential{}, ErrProbeAlreadyExists
+	}
+	if err != nil {
+		return ProbeCredential{}, err
+	}
+
+	return ProbeCredential{ProbeID: insertedProbeID, Secret: secret}, nil
+}
+
+func randomProbeID() (string, error) {
+	suffix, err := randomHexToken(6)
+	if err != nil {
+		return "", err
+	}
+	return "probe-" + suffix, nil
+}
+
 // AuthenticateProbe returns the active probe record for the given probe_id and
 // secret. Returns nil if the credentials are invalid.
 func (s *Store) AuthenticateProbe(probeID, secret string) (*Probe, error) {
 	var (
-		probe      Probe
-		secretHash string
-		lastSeen   sql.NullTime
+		probe        Probe
+		secretHash   string
+		registeredAt sql.NullTime
+		lastSeen     sql.NullTime
 	)
 	err := s.db.QueryRow(`
-		SELECT probe_id, version, status, registered_at, last_seen_at, secret_hash
+		SELECT probe_id, version, registered_at, last_seen_at, secret_hash
 		FROM probes
-		WHERE probe_id = $1
+		WHERE probe_id = $1 AND revoked_at IS NULL
 	`, probeID).Scan(
 		&probe.ProbeID,
 		&probe.Version,
-		&probe.Status,
-		&probe.RegisteredAt,
+		&registeredAt,
 		&lastSeen,
 		&secretHash,
 	)
@@ -102,11 +183,12 @@ func (s *Store) AuthenticateProbe(probeID, secret string) (*Probe, error) {
 	if err != nil {
 		return nil, err
 	}
-	if probe.Status != "active" {
-		return nil, nil
-	}
 	if subtle.ConstantTimeCompare([]byte(secretHash), []byte(hashProbeSecret(secret))) != 1 {
 		return nil, nil
+	}
+	if registeredAt.Valid {
+		t := registeredAt.Time
+		probe.RegisteredAt = &t
 	}
 	if lastSeen.Valid {
 		t := lastSeen.Time
@@ -117,11 +199,14 @@ func (s *Store) AuthenticateProbe(probeID, secret string) (*Probe, error) {
 
 // RegisterProbe records a successful authenticated startup for a probe.
 func (s *Store) RegisterProbe(probeID, version string) error {
+	now := time.Now().UTC()
 	_, err := s.db.Exec(`
 		UPDATE probes
-		SET version = $1, last_seen_at = $2
-		WHERE probe_id = $3 AND status = 'active'
-	`, version, time.Now().UTC(), probeID)
+		SET version = $1,
+		    registered_at = COALESCE(registered_at, $2),
+		    last_seen_at = $2
+		WHERE probe_id = $3 AND revoked_at IS NULL
+	`, version, now, probeID)
 	return err
 }
 
@@ -132,7 +217,7 @@ func updateProbeHeartbeatTx(tx *sql.Tx, probeID string, at time.Time) (time.Time
 	_, err := tx.Exec(`
 		UPDATE probes
 		SET last_seen_at = $1
-		WHERE probe_id = $2 AND status = 'active'
+		WHERE probe_id = $2 AND revoked_at IS NULL
 	`, heartbeatAt, probeID)
 	if err != nil {
 		return time.Time{}, err

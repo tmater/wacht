@@ -69,9 +69,9 @@ func TestPersistMonitoringWriteUpsertsCheckStateAndListsRecoverySnapshots(t *tes
 		t.Fatalf("PersistMonitoringWrite second: %v", err)
 	}
 
-	probes, err := s.ActiveProbeStates()
+	probes, err := s.RecoverableProbeStates()
 	if err != nil {
-		t.Fatalf("ActiveProbeStates: %v", err)
+		t.Fatalf("RecoverableProbeStates: %v", err)
 	}
 	if len(probes) != 2 {
 		t.Fatalf("active probes = %d, want 2", len(probes))

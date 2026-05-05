@@ -62,13 +62,13 @@ type MonitoringWrite struct {
 	IncidentNotification *NotificationRequest
 }
 
-// ActiveProbeStates returns all active probes plus their last-seen timestamps
-// for runtime recovery.
-func (s *Store) ActiveProbeStates() ([]PersistedProbeState, error) {
+// RecoverableProbeStates returns all non-revoked probes plus their last-seen
+// timestamps for runtime recovery.
+func (s *Store) RecoverableProbeStates() ([]PersistedProbeState, error) {
 	rows, err := s.db.Query(`
 		SELECT probe_id, last_seen_at
 		FROM probes
-		WHERE status = 'active'
+		WHERE revoked_at IS NULL
 		ORDER BY probe_id
 	`)
 	if err != nil {

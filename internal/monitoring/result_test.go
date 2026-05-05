@@ -76,18 +76,8 @@ func TestApplyResultRollsBackRuntimeWhenPersistFails(t *testing.T) {
 		t.Fatalf("apply result error = %v, want %v", err, persistErr)
 	}
 
-	exec, err := runtime.CheckSnapshot(checkID, "probe-a")
-	if err != nil {
-		t.Fatalf("CheckSnapshot() error = %v", err)
-	}
-	if exec.State != CheckStateMissing {
-		t.Fatalf("check state = %q, want %q", exec.State, CheckStateMissing)
-	}
-	if exec.StreakLen != 0 {
-		t.Fatalf("streak = %d, want 0", exec.StreakLen)
-	}
-	if !exec.LastResultAt.IsZero() {
-		t.Fatalf("last result at = %v, want zero", exec.LastResultAt)
+	if _, err := runtime.CheckSnapshot(checkID, "probe-a"); err != ErrUnknownCheckAssignment {
+		t.Fatalf("CheckSnapshot() error = %v, want %v", err, ErrUnknownCheckAssignment)
 	}
 
 	quorum, err := runtime.QuorumSnapshot(checkID)
@@ -342,15 +332,8 @@ func TestApplyResultBatchRollsBackRuntimeWhenBatchPersistFails(t *testing.T) {
 		t.Fatalf("ApplyResultBatch() error = %v, want %v", err, persistErr)
 	}
 
-	exec, err := runtime.CheckSnapshot(checkID, "probe-a")
-	if err != nil {
-		t.Fatalf("CheckSnapshot() error = %v", err)
-	}
-	if exec.State != CheckStateMissing {
-		t.Fatalf("check state = %q, want %q", exec.State, CheckStateMissing)
-	}
-	if exec.StreakLen != 0 {
-		t.Fatalf("streak = %d, want 0", exec.StreakLen)
+	if _, err := runtime.CheckSnapshot(checkID, "probe-a"); err != ErrUnknownCheckAssignment {
+		t.Fatalf("CheckSnapshot() error = %v, want %v", err, ErrUnknownCheckAssignment)
 	}
 
 	quorum, err := runtime.QuorumSnapshot(checkID)

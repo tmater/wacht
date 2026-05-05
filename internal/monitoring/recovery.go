@@ -11,7 +11,7 @@ import (
 // needed to bootstrap the monitoring runtime on server startup.
 type recoveryStore interface {
 	ListAllChecks() ([]checks.Check, error)
-	ActiveProbeStates() ([]store.PersistedProbeState, error)
+	RecoverableProbeStates() ([]store.PersistedProbeState, error)
 	PersistedCheckStates() ([]store.PersistedCheckState, error)
 	OpenIncidentCheckIDs() ([]string, error)
 }
@@ -24,7 +24,7 @@ func LoadRuntime(src recoveryStore) (*Runtime, error) {
 		return nil, fmt.Errorf("list checks: %w", err)
 	}
 
-	probes, err := src.ActiveProbeStates()
+	probes, err := src.RecoverableProbeStates()
 	if err != nil {
 		return nil, fmt.Errorf("list active probes: %w", err)
 	}
@@ -63,10 +63,11 @@ func LoadRuntime(src recoveryStore) (*Runtime, error) {
 		if !ok {
 			continue
 		}
-		check, ok := quorum.checks[state.ProbeID]
-		if !ok {
+		if _, ok := runtime.probes[state.ProbeID]; !ok {
 			continue
 		}
+		quorum.AddProbe(state.ProbeID)
+		check := quorum.checks[state.ProbeID]
 		check.state = persistedCheckExecState(state)
 	}
 

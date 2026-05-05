@@ -64,10 +64,6 @@ func buildAuthenticatedStatusResponse(runtime *monitoring.Runtime, st statusView
 		})
 	}
 
-	if len(views) == 0 {
-		return checks, nil, nil
-	}
-
 	probes := runtime.ProbeSnapshots()
 	items := make([]statusProbeDTO, 0, len(probes))
 	for _, probe := range probes {

@@ -4,6 +4,7 @@ import * as ui from './ui.js'
 import CheckForm from './CheckForm.jsx'
 import CheckRow from './CheckRow.jsx'
 import ProbeRow from './ProbeRow.jsx'
+import ProbeProvisioner from './ProbeProvisioner.jsx'
 import IncidentRow from './IncidentRow.jsx'
 
 async function loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError) {
@@ -30,7 +31,7 @@ async function loadDashboardData(onLogout, setStatuses, setProbes, setChecks, se
   }
 }
 
-export default function Dashboard({ onLogout, showProbes = true }) {
+export default function Dashboard({ onLogout, showProbes = true, isAdmin = false }) {
   const [checks, setChecks] = useState([])
   const [statuses, setStatuses] = useState([])
   const [probes, setProbes] = useState([])
@@ -150,14 +151,24 @@ export default function Dashboard({ onLogout, showProbes = true }) {
         </div>
 
         {/* Probes section */}
-        {showProbes && probes.length > 0 && (
+        {showProbes && (isAdmin || probes.length > 0) && (
           <div className={`mb-8 ${ui.card} p-4`}>
-            <h2 className={`mb-2 ${ui.sectionHeader}`}>Probes</h2>
-            <div className="divide-y divide-gray-700">
-              {probes.map(probe => (
-                <ProbeRow key={probe.probe_id} probe={probe} />
-              ))}
-            </div>
+            <h2 className={`mb-3 ${ui.sectionHeader}`}>Probes</h2>
+            {isAdmin && (
+              <ProbeProvisioner
+                onLogout={onLogout}
+                onCreated={() => loadDashboardData(onLogout, setStatuses, setProbes, setChecks, setIncidents, setLastUpdated, setError)}
+              />
+            )}
+            {probes.length === 0 ? (
+              <p className="text-sm text-gray-500">No probes yet.</p>
+            ) : (
+              <div className="divide-y divide-gray-700">
+                {probes.map(probe => (
+                  <ProbeRow key={probe.probe_id} probe={probe} />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
