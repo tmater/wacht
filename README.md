@@ -7,171 +7,109 @@
 
 Distributed uptime monitoring, built in the EU.
 
-Run HTTP, TCP, and DNS checks from multiple probe locations. Quorum-based alerting means you only get paged when a majority of probes agree something is actually down — no false alerts from a single flaky probe.
+Wacht runs HTTP, TCP, and DNS checks from multiple probes. Quorum-based
+alerting means you only get paged when enough probes agree that something is
+actually down.
 
-> **Status:** Early development. Self-hosting works but expect rough edges.
+It is intentionally narrow: uptime checks, probe agreement, incident state,
+webhook alerts, and a simple status page. It is not a metrics stack or a
+general observability platform.
+
+> **Status:** Early development. Self-hosting works, but expect rough edges.
+
+Docs preview: <https://tmater.github.io/wacht/>. The docs are work in
+progress while the first release is prepared.
+
+## Features
+
+- HTTP, TCP, and DNS checks
+- Distributed probe execution
+- Quorum-based incident open and recovery logic
+- Webhook alerts with durable retry
+- Admin-created reusable probe credentials
+- Password login, signup approval, and session logout
+- One anonymous read-only public status page per user
+- Docker Compose self-host setup
+
+## Stack
+
+The default Compose setup starts:
+
+- Postgres for users, checks, incidents, sessions, and current probe state
+- `wacht-server` for the HTTP API, auth, monitoring state, and webhook jobs
+- three `wacht-probe` containers for local distributed checks
+- `wacht-web`, a React UI served through nginx
+
+The web container is the normal browser entrypoint on port `3000`. It serves
+the UI and proxies API requests to the server inside the Compose network.
 
 ## Quickstart
 
-**Requirements:** Docker, Docker Compose, Git.
+Requirements for local development: Docker, Docker Compose, and Git.
 
 ```sh
 git clone https://github.com/tmater/wacht.git
 cd wacht
 ```
 
-Edit `config/server.yaml` — configure the seed user and checks. The sample
-file also statically provisions the bundled local probes:
+Edit `config/server.yaml` and the bundled probe configs before first boot:
 
-```yaml
-probes:
-  - id: probe-1
-    secret: replace-with-a-strong-secret-1
-  - id: probe-2
-    secret: replace-with-a-strong-secret-2
-  - id: probe-3
-    secret: replace-with-a-strong-secret-3
-seed_user:
-  email: admin@wacht.local
-  password: changeme
-checks:
-  - name: my-site
-    type: http
-    target: https://example.com
-    webhook: https://hooks.example.com/your-webhook-url
-  - name: my-db
-    type: tcp
-    target: db.example.com:5432
-```
+- replace the sample probe secrets in `config/server.yaml`
+- use the matching secret in each `config/probe-*.yaml`
+- set the first `seed_user` email and password
+- add or remove initial checks as needed
 
-The code default is to block private and internal targets. The shipped
-self-host sample configs set `allow_private_targets: true`, because
-monitoring Docker, VPN, and RFC1918 services is a common self-hosted use
-case. For hosted or managed-probe deployments, keep that setting disabled on
-both the server and the matching probe config.
-
-Edit `config/probe-1.yaml`, `config/probe-2.yaml`, `config/probe-3.yaml` — each bundled probe must use the matching secret provisioned in `config/server.yaml`:
-
-```yaml
-secret: replace-with-a-strong-secret-1
-server: http://server:8080
-probe_id: probe-1
-heartbeat_interval: 30s
-```
-
-Start everything:
+Start the source-based development stack:
 
 ```sh
-docker compose up -d
+docker compose up -d --build
 ```
 
-The dashboard is available at `http://<your-host>:3000`.
+Open `http://localhost:3000`, sign in with the `seed_user` credentials, and
+change the password immediately.
 
-**First login:** open `http://localhost:3000`, sign in with the `seed_user` credentials (`admin@wacht.local` / `changeme`), and change the password immediately. The seed user is only created on first boot when no users exist yet.
+## Check Types
 
-## Adding probes
+| Type | Target format | Example |
+| --- | --- | --- |
+| `http` | URL | `https://example.com` |
+| `tcp` | `host:port` | `db.example.com:5432` |
+| `dns` | hostname | `example.com` |
 
-The dashboard can create probe credentials without editing `server.yaml`.
-Sign in as an admin, create a probe from the Probes section, then paste the
-generated reusable config into the new probe's config file:
+Checks default to a 30 second interval. The dashboard can create and edit
+checks after the first login.
 
-```yaml
-server: https://wacht.example.com
-probe_id: probe-api-1
-secret: generated-secret
-heartbeat_interval: 30s
-```
+## Self-Host Notes
 
-The probe reuses this secret across restarts. The server stores only a hash, so
-the raw secret can only be displayed when the credential is created.
-Static `server.yaml` provisioning remains supported for compose/dev setups.
+- The sample configs enable `allow_private_targets: true` so local probes can
+  monitor Docker, VPN, LAN, and other RFC1918 targets.
+- Disable private targets on both the server and probes if probes should only
+  reach public destinations.
+- Probe secrets are stored as hashes by the server. Generated probe secrets are
+  only shown once.
+- Do not expose Postgres publicly.
+- `docker compose down -v` removes the database volume.
 
-## Check types
+## Development
 
-| Type   | Target format | Example                | Notes                                         |
-|--------|---------------|------------------------|-----------------------------------------------|
-| `http` | URL           | `https://example.com`  | Checks for a 2xx response                     |
-| `tcp`  | `host:port`   | `db.example.com:5432`  | Checks that a TCP connection can be opened    |
-| `dns`  | hostname      | `example.com`          | Checks that the hostname resolves to at least one address |
-
-Private, loopback, and link-local targets are blocked unless
-`allow_private_targets: true` is enabled on both the server and the probe.
-
-## How alerting works
-
-A webhook fires when a **strict majority of probes** each report a check as down for **2 consecutive failures**. Recovery requires a non-down majority with **2 consecutive healthy results** from the probes that observed recovery. It fires once on transition (up → down and down → up), deduplicated via an incidents table.
-
-Minimum recommended probe count is 3 — quorum works with 2 but leaves no room for a probe going offline.
-
-Checks run every **30 seconds** per probe.
-
-`/status` marks a probe offline after **90 seconds** without heartbeats by
-default. Override that with `probe_offline_after` in `server.yaml` if you want
-a shorter or longer UI timeout.
-
-Webhook payload:
-
-```json
-{
-  "check_id": "550e8400-e29b-41d4-a716-446655440000",
-  "check_name": "my-site",
-  "target": "https://example.com",
-  "status": "down",
-  "probes_down": 2,
-  "probes_total": 3
-}
-```
-
-Recovery notifications use the same payload with `status` set to `up`.
-
-Webhook URLs must be public HTTP(S) endpoints; loopback, private, and
-link-local destinations are rejected. Alert delivery is persisted in the
-database and retried with backoff in the background so result ingestion is
-not blocked by slow destinations. Delivery is timed out after 5 seconds.
-If an outage resolves before its `down` alert can be delivered, that stale
-opening notification is superseded and the recovery notification becomes the
-current delivery target instead. Delivery state is visible in incident
-history.
-
-## Status pages
-
-`GET /status` returns the current state of all checks for the authenticated user.
-Requests must include a valid session token.
+Run Go tests:
 
 ```sh
-# Log in and capture the session token:
-TOKEN=$(curl -s -X POST http://<your-host>:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@wacht.local","password":"changeme"}' | jq -r .token)
-
-# Fetch current status:
-curl -H "Authorization: Bearer $TOKEN" http://<your-host>:3000/status
+make test
 ```
 
-Each user also gets one anonymous read-only public page at `/public/{slug}`.
-The dashboard exposes that share URL via the Account page, and the backing JSON
-endpoint is `GET /api/public/status/{slug}`.
+Run black-box smoke tests against the packaged stack:
 
-The public page intentionally exposes only check IDs and status state. It does
-not include raw targets, webhook URLs, probe details, or incident history.
+```sh
+make smoke
+```
 
-## Browser tests
-
-Run the browser suite against a disposable packaged stack:
+Run browser tests against the packaged nginx, server, and Postgres path:
 
 ```sh
 make browser
 ```
 
-That boots the normal nginx + server + Postgres path with a dedicated seed
-config from `config/server.browser.yaml`, waits for `http://127.0.0.1:13000`,
-runs the Playwright specs in `wacht-web/tests/`, then tears the stack down.
-
-Override the default browser stack settings if needed:
-
-```sh
-BROWSER_WEB_PORT=14000 BROWSER_PROJECT=my-wacht-browser make browser
-```
 ## License
 
 [AGPL-3.0](LICENSE)

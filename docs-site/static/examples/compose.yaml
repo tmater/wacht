@@ -1,0 +1,150 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: wacht
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: wacht
+    volumes:
+      - wacht-data:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wacht"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    image: ghcr.io/tmater/wacht-server:0.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        {
+          echo "allow_private_targets: true"
+          if [ -n "$${PROBE_1_SECRET}$${PROBE_2_SECRET}$${PROBE_3_SECRET}" ]; then
+            echo "probes:"
+            if [ -n "$${PROBE_1_SECRET}" ]; then
+              echo "  - id: probe-1"
+              echo "    secret: $${PROBE_1_SECRET}"
+            fi
+            if [ -n "$${PROBE_2_SECRET}" ]; then
+              echo "  - id: probe-2"
+              echo "    secret: $${PROBE_2_SECRET}"
+            fi
+            if [ -n "$${PROBE_3_SECRET}" ]; then
+              echo "  - id: probe-3"
+              echo "    secret: $${PROBE_3_SECRET}"
+            fi
+          else
+            echo "probes: []"
+          fi
+          echo ""
+          echo "seed_user:"
+          echo "  email: $${SEED_USER_EMAIL}"
+          echo "  password: $${SEED_USER_PASSWORD}"
+          echo ""
+          echo "checks: []"
+        } > /tmp/server.yaml
+        exec /usr/local/bin/wacht-server \
+          --config=/tmp/server.yaml \
+          --dsn=postgres://wacht:$${POSTGRES_PASSWORD}@postgres/wacht?sslmode=disable
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      SEED_USER_EMAIL: ${SEED_USER_EMAIL:?set SEED_USER_EMAIL}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:?set SEED_USER_PASSWORD}
+      PROBE_1_SECRET: ${PROBE_1_SECRET:-}
+      PROBE_2_SECRET: ${PROBE_2_SECRET:-}
+      PROBE_3_SECRET: ${PROBE_3_SECRET:-}
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  wacht-web:
+    image: ghcr.io/tmater/wacht-web:0.1
+    ports:
+      - "${WACHT_WEB_PORT:-127.0.0.1:3000}:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  probe-1:
+    image: ghcr.io/tmater/wacht-probe:0.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -z "$${PROBE_SECRET}" ]; then
+          echo "PROBE_1_SECRET is required" >&2
+          exit 1
+        fi
+        {
+          echo "allow_private_targets: true"
+          echo "server: $${PROBE_SERVER}"
+          echo "probe_id: probe-1"
+          echo "secret: $${PROBE_SECRET}"
+          echo "heartbeat_interval: 30s"
+        } > /tmp/probe.yaml
+        exec /usr/local/bin/wacht-probe --config=/tmp/probe.yaml
+    environment:
+      PROBE_SECRET: ${PROBE_1_SECRET:-}
+      PROBE_SERVER: ${PROBE_SERVER:-http://server:8080}
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  probe-2:
+    image: ghcr.io/tmater/wacht-probe:0.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -z "$${PROBE_SECRET}" ]; then
+          echo "PROBE_2_SECRET is required" >&2
+          exit 1
+        fi
+        {
+          echo "allow_private_targets: true"
+          echo "server: $${PROBE_SERVER}"
+          echo "probe_id: probe-2"
+          echo "secret: $${PROBE_SECRET}"
+          echo "heartbeat_interval: 30s"
+        } > /tmp/probe.yaml
+        exec /usr/local/bin/wacht-probe --config=/tmp/probe.yaml
+    environment:
+      PROBE_SECRET: ${PROBE_2_SECRET:-}
+      PROBE_SERVER: ${PROBE_SERVER:-http://server:8080}
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  probe-3:
+    image: ghcr.io/tmater/wacht-probe:0.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -z "$${PROBE_SECRET}" ]; then
+          echo "PROBE_3_SECRET is required" >&2
+          exit 1
+        fi
+        {
+          echo "allow_private_targets: true"
+          echo "server: $${PROBE_SERVER}"
+          echo "probe_id: probe-3"
+          echo "secret: $${PROBE_SECRET}"
+          echo "heartbeat_interval: 30s"
+        } > /tmp/probe.yaml
+        exec /usr/local/bin/wacht-probe --config=/tmp/probe.yaml
+    environment:
+      PROBE_SECRET: ${PROBE_3_SECRET:-}
+      PROBE_SERVER: ${PROBE_SERVER:-http://server:8080}
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  wacht-data:
