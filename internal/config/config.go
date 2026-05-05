@@ -11,7 +11,6 @@ import (
 )
 
 const (
-	DefaultRetentionDays            = 30
 	DefaultAuthRateLimitRequests    = 10
 	DefaultAuthRateLimitWindow      = time.Minute
 	DefaultProbeOfflineAfter        = 90 * time.Second
@@ -28,7 +27,6 @@ type ServerConfig struct {
 	Probes              []ProbeAuth    `yaml:"probes"`
 	Checks              []checks.Check `yaml:"checks"`
 	SeedUser            SeedUser       `yaml:"seed_user"`
-	RetentionDays       int            `yaml:"retention_days"`        // 0 → default 30
 	AllowPrivateTargets bool           `yaml:"allow_private_targets"` // false by default
 	AuthRateLimit       RateLimit      `yaml:"auth_rate_limit"`
 	TrustedProxies      []string       `yaml:"trusted_proxies"`
