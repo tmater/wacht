@@ -7,10 +7,6 @@ on:
         description: Mutable GHCR tag to publish for deployment rehearsal.
         required: true
         default: private-test
-      platforms:
-        description: Target platform list.
-        required: true
-        default: linux/amd64
 
 env:
   REGISTRY: ghcr.io
@@ -49,7 +45,6 @@ jobs:
         with:
           context: .
           push: true
-          platforms: ${{ inputs.platforms }}
           build-args: BINARY=${{ matrix.binary }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.binary }}:${{ inputs.tag }}
@@ -86,7 +81,6 @@ jobs:
         with:
           context: ./wacht-web
           push: true
-          platforms: ${{ inputs.platforms }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/wacht-web:${{ inputs.tag }}
             ${{ env.REGISTRY }}/${{ env.OWNER }}/wacht-web:${{ steps.vars.outputs.sha }}
