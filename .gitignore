@@ -5,6 +5,10 @@ local/
 CLAUDE.md
 
 # Runtime artifacts
+.env
+.env.*
+!.env.example
+secrets/
 *.db
 *.db-wal
 *.db-shm

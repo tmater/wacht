@@ -5,11 +5,21 @@ slug: /config-reference
 # Config Reference
 
 Wacht has one server config and one config per probe. The example Compose file
-renders these configs inside the containers from `.env`. If you run the
-binaries directly or provide your own Compose file, use the same shapes below.
+renders these configs inside the containers from `.env` and mounts database
+credentials from `secrets/`. If you run the binaries directly or provide your
+own Compose file, use the same shapes below.
 
 Durations should be written as Go-style duration strings such as `30s`, `1m`,
 or `2h`.
+
+## Runtime Secrets
+
+The server needs a Postgres DSN at startup. Resolution order:
+
+1. `WACHT_DATABASE_DSN`
+2. `WACHT_DATABASE_DSN_FILE`
+
+The Compose examples use `WACHT_DATABASE_DSN_FILE=/run/secrets/wacht_database_dsn`.
 
 ## Server Config
 

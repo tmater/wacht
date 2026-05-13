@@ -59,6 +59,15 @@ Edit `config/server.yaml` and the bundled probe configs before first boot:
 - set the first `seed_user` email and password
 - add or remove initial checks as needed
 
+Create local database secret files for the Compose stack:
+
+```sh
+mkdir -p secrets
+printf 'wacht\n' > secrets/wacht_postgres_password
+printf 'postgres://wacht:wacht@postgres/wacht?sslmode=disable\n' > secrets/wacht_database_dsn
+chmod 600 secrets/*
+```
+
 Start the source-based development stack:
 
 ```sh
@@ -87,6 +96,8 @@ checks after the first login.
   reach public destinations.
 - Probe secrets are stored as hashes by the server. Generated probe secrets are
   only shown once.
+- Database credentials are mounted from the local `secrets/` directory by
+  default. Do not commit or share that directory.
 - Do not expose Postgres publicly.
 - `docker compose down -v` removes the database volume.
 
