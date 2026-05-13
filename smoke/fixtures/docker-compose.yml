@@ -20,7 +20,9 @@ services:
       context: ../..
       args:
         BINARY: wacht-server
-    command: ["--config=/etc/wacht/server.yaml", "--dsn=postgres://wacht:wacht@postgres/wacht?sslmode=disable"]
+    command: ["--config=/etc/wacht/server.yaml"]
+    environment:
+      WACHT_DATABASE_DSN: postgres://wacht:wacht@postgres/wacht?sslmode=disable
     volumes:
       - ./server.yaml:/etc/wacht/server.yaml:ro
     ports:

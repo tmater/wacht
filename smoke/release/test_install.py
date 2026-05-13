@@ -18,6 +18,7 @@ ROOT_COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 CONFIG_DIR = REPO_ROOT / "config"
 SEED_EMAIL = "release-admin@wacht.local"
 SEED_PASSWORD = "release-password"
+POSTGRES_PASSWORD = "release-postgres-password"
 
 
 # Prove the documented self-host install path works with the real root
@@ -30,7 +31,9 @@ def test_release_install_bootstrap_path():
     failed = True
 
     with tempfile.TemporaryDirectory(prefix="wacht-release-smoke-") as temp_dir:
-        config_dir = prepare_release_configs(Path(temp_dir))
+        temp_path = Path(temp_dir)
+        config_dir = prepare_release_configs(temp_path)
+        secret_dir = prepare_release_secrets(temp_path)
         stack = ComposeStack(
             ROOT_COMPOSE_FILE.resolve(),
             REPO_ROOT,
@@ -40,6 +43,8 @@ def test_release_install_bootstrap_path():
                 "PROBE_1_CONFIG_PATH": str((config_dir / "probe-1.yaml").resolve()),
                 "PROBE_2_CONFIG_PATH": str((config_dir / "probe-2.yaml").resolve()),
                 "PROBE_3_CONFIG_PATH": str((config_dir / "probe-3.yaml").resolve()),
+                "WACHT_POSTGRES_PASSWORD_SECRET_FILE": str((secret_dir / "wacht_postgres_password").resolve()),
+                "WACHT_DATABASE_DSN_SECRET_FILE": str((secret_dir / "wacht_database_dsn").resolve()),
                 "WACHT_WEB_PORT": str(web_port),
             },
         )
@@ -144,6 +149,21 @@ def prepare_release_configs(temp_dir: Path) -> Path:
         (config_dir / f"probe-{probe_id}.yaml").write_text(probe_text, encoding="utf-8")
 
     return config_dir
+
+
+def prepare_release_secrets(temp_dir: Path) -> Path:
+    secret_dir = temp_dir / "secrets"
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    password_file = secret_dir / "wacht_postgres_password"
+    dsn_file = secret_dir / "wacht_database_dsn"
+    password_file.write_text(f"{POSTGRES_PASSWORD}\n", encoding="utf-8")
+    dsn_file.write_text(
+        f"postgres://wacht:{POSTGRES_PASSWORD}@postgres/wacht?sslmode=disable\n",
+        encoding="utf-8",
+    )
+    password_file.chmod(0o600)
+    dsn_file.chmod(0o600)
+    return secret_dir
 
 
 def reserve_tcp_port() -> int:
