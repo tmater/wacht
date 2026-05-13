@@ -3,8 +3,10 @@ services:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: wacht
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/wacht_postgres_password
       POSTGRES_DB: wacht
+    secrets:
+      - wacht_postgres_password
     volumes:
       - wacht-data:/var/lib/postgresql
     restart: unless-stopped
@@ -46,16 +48,16 @@ services:
           echo ""
           echo "checks: []"
         } > /tmp/server.yaml
-        exec /usr/local/bin/wacht-server \
-          --config=/tmp/server.yaml \
-          --dsn=postgres://wacht:$${POSTGRES_PASSWORD}@postgres/wacht?sslmode=disable
+        exec /usr/local/bin/wacht-server --config=/tmp/server.yaml
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      WACHT_DATABASE_DSN_FILE: /run/secrets/wacht_database_dsn
       SEED_USER_EMAIL: ${SEED_USER_EMAIL:?set SEED_USER_EMAIL}
       SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:?set SEED_USER_PASSWORD}
       PROBE_1_SECRET: ${PROBE_1_SECRET:-}
       PROBE_2_SECRET: ${PROBE_2_SECRET:-}
       PROBE_3_SECRET: ${PROBE_3_SECRET:-}
+    secrets:
+      - wacht_database_dsn
     expose:
       - "8080"
     depends_on:
@@ -148,3 +150,9 @@ services:
 
 volumes:
   wacht-data:
+
+secrets:
+  wacht_postgres_password:
+    file: ./secrets/wacht_postgres_password
+  wacht_database_dsn:
+    file: ./secrets/wacht_database_dsn

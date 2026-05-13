@@ -3,8 +3,10 @@ services:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: wacht
-      POSTGRES_PASSWORD: wacht
+      POSTGRES_PASSWORD_FILE: /run/secrets/wacht_postgres_password
       POSTGRES_DB: wacht
+    secrets:
+      - wacht_postgres_password
     volumes:
       - wacht-data:/var/lib/postgresql
     restart: unless-stopped
@@ -19,7 +21,11 @@ services:
       context: .
       args:
         BINARY: wacht-server
-    command: ["--config=/etc/wacht/server.yaml", "--dsn=postgres://wacht:wacht@postgres/wacht?sslmode=disable"]
+    command: ["--config=/etc/wacht/server.yaml"]
+    environment:
+      WACHT_DATABASE_DSN_FILE: /run/secrets/wacht_database_dsn
+    secrets:
+      - wacht_database_dsn
     volumes:
       - ${SERVER_CONFIG_PATH:-./config/server.yaml}:/etc/wacht/server.yaml:ro
     expose:
@@ -76,3 +82,9 @@ services:
 
 volumes:
   wacht-data:
+
+secrets:
+  wacht_postgres_password:
+    file: ${WACHT_POSTGRES_PASSWORD_SECRET_FILE:-./secrets/wacht_postgres_password}
+  wacht_database_dsn:
+    file: ${WACHT_DATABASE_DSN_SECRET_FILE:-./secrets/wacht_database_dsn}

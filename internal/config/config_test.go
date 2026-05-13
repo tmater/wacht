@@ -8,6 +8,49 @@ import (
 	"time"
 )
 
+func TestResolveDatabaseDSN_PrefersEnvironmentOverFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "database-dsn")
+	if err := os.WriteFile(path, []byte("postgres://file\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv(EnvDatabaseDSN, "postgres://env")
+	t.Setenv(EnvDatabaseDSNFile, path)
+
+	dsn, err := ResolveDatabaseDSN()
+	if err != nil {
+		t.Fatalf("ResolveDatabaseDSN: %v", err)
+	}
+	if dsn != "postgres://env" {
+		t.Fatalf("DSN = %q, want env value", dsn)
+	}
+}
+
+func TestResolveDatabaseDSN_ReadsSecretFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "database-dsn")
+	if err := os.WriteFile(path, []byte("postgres://file\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv(EnvDatabaseDSN, "")
+	t.Setenv(EnvDatabaseDSNFile, path)
+
+	dsn, err := ResolveDatabaseDSN()
+	if err != nil {
+		t.Fatalf("ResolveDatabaseDSN: %v", err)
+	}
+	if dsn != "postgres://file" {
+		t.Fatalf("DSN = %q, want file value", dsn)
+	}
+}
+
+func TestResolveDatabaseDSN_RequiresSource(t *testing.T) {
+	t.Setenv(EnvDatabaseDSN, "")
+	t.Setenv(EnvDatabaseDSNFile, "")
+
+	if _, err := ResolveDatabaseDSN(); err == nil {
+		t.Fatal("ResolveDatabaseDSN() error = nil, want missing DSN error")
+	}
+}
+
 func TestLoadServer_ParsesAllowPrivateTargets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.yaml")
 	data := []byte("allow_private_targets: true\nprobes:\n  - id: probe-1\n    secret: s3cr3t\n")
