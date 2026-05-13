@@ -41,9 +41,14 @@ PROBE_1_SECRET="$(openssl rand -hex 32)"
 PROBE_2_SECRET="$(openssl rand -hex 32)"
 PROBE_3_SECRET="$(openssl rand -hex 32)"
 
+# Write database secrets consumed by compose.yaml.
+mkdir -p secrets
+printf '%s\n' "${POSTGRES_PASSWORD}" > secrets/wacht_postgres_password
+printf 'postgres://wacht:%s@postgres/wacht?sslmode=disable\n' \
+  "${POSTGRES_PASSWORD}" > secrets/wacht_database_dsn
+
 # Write the values consumed by compose.yaml.
 cat > .env <<EOF
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 SEED_USER_EMAIL=${SEED_USER_EMAIL}
 SEED_USER_PASSWORD=${SEED_USER_PASSWORD}
 PROBE_1_SECRET=${PROBE_1_SECRET}
@@ -63,14 +68,14 @@ Admin password: ${SEED_USER_PASSWORD}
 EOF
 
 # Restrict files containing secrets.
-chmod 600 .env credentials.txt
+chmod 600 .env credentials.txt secrets/*
 
 # Start Wacht.
 docker compose up -d
 ```
 
-The seed user is only created on first boot when no users exist yet. `.env`
-and `credentials.txt` contain secrets; do not commit or share them.
+The seed user is only created on first boot when no users exist yet. `.env`,
+`credentials.txt`, and `secrets/` contain secrets; do not commit or share them.
 
 ## Private Targets
 

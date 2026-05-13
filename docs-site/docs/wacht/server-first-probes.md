@@ -38,9 +38,14 @@ POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 SEED_USER_EMAIL="you@example.com"
 SEED_USER_PASSWORD="$(openssl rand -hex 18)"
 
+# Write database secrets consumed by compose.yaml.
+mkdir -p secrets
+printf '%s\n' "${POSTGRES_PASSWORD}" > secrets/wacht_postgres_password
+printf 'postgres://wacht:%s@postgres/wacht?sslmode=disable\n' \
+  "${POSTGRES_PASSWORD}" > secrets/wacht_database_dsn
+
 # Write the values consumed by compose.yaml.
 cat > .env <<EOF
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 SEED_USER_EMAIL=${SEED_USER_EMAIL}
 SEED_USER_PASSWORD=${SEED_USER_PASSWORD}
 WACHT_WEB_PORT=127.0.0.1:3000
@@ -57,7 +62,7 @@ Admin password: ${SEED_USER_PASSWORD}
 EOF
 
 # Restrict files containing secrets.
-chmod 600 .env credentials.txt
+chmod 600 .env credentials.txt secrets/*
 
 # Start only the server-side services.
 docker compose up -d postgres server wacht-web
@@ -69,8 +74,8 @@ Open:
 http://localhost:3000
 ```
 
-Sign in with the credentials in `credentials.txt`. `.env` and
-`credentials.txt` contain secrets; do not commit or share them.
+Sign in with the credentials in `credentials.txt`. `.env`, `credentials.txt`,
+and `secrets/` contain secrets; do not commit or share them.
 
 ## Create Probe Credentials
 

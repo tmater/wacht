@@ -20,7 +20,6 @@ import (
 func main() {
 	logger := logx.Configure("wacht-server")
 	configPath := flag.String("config", "server.yaml", "path to server config file")
-	dsn := flag.String("dsn", "", "Postgres DSN (e.g. postgres://user:pass@host/db)")
 	flag.Parse()
 
 	logger.Info("server starting", "config_path", *configPath)
@@ -35,11 +34,12 @@ func main() {
 		fatal("load config failed", "config_path", *configPath, "err", err)
 	}
 
-	if *dsn == "" {
-		fatal("missing required flag", "flag", "dsn")
+	dbDSN, err := config.ResolveDatabaseDSN()
+	if err != nil {
+		fatal("load database DSN failed", "err", err)
 	}
 
-	db, err := store.New(*dsn)
+	db, err := store.New(dbDSN)
 	if err != nil {
 		fatal("open database failed", "err", err)
 	}
